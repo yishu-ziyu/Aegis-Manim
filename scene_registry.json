@@ -1,0 +1,98 @@
+[
+  {
+    "id": "1",
+    "title": "基础: 图形定位 (Placement)",
+    "description": "演示 Mobject 的相对位置关系 (UP/DOWN/LEFT/RIGHT)",
+    "file_path": "scenes/basic_geometry.py",
+    "class_name": "Placement",
+    "keywords": ["geometry", "layout", "position", "basics"]
+  },
+  {
+    "id": "2",
+    "title": "数学: 动态二次函数 (Quadratic)",
+    "description": "演示参数 a 对抛物线开口的影响",
+    "file_path": "scenes/math_science.py",
+    "class_name": "QuadraticScene",
+    "keywords": ["math", "function", "parabola", "algebra"]
+  },
+  {
+    "id": "3",
+    "title": "算法: 神经网络可视化 (Neural Network)",
+    "description": "演示全连接层的数据流向动画",
+    "file_path": "scenes/math_science.py",
+    "class_name": "NeuralNetworkScene",
+    "keywords": ["ai", "machine learning", "network", "graph"]
+  },
+  {
+    "id": "4",
+    "title": "经济: 供需曲线 (Supply & Demand)",
+    "description": "经典的动态供需平衡演示",
+    "file_path": "scenes/economics_static.py",
+    "class_name": "SupplyDemandScene",
+    "keywords": ["economics", "micro", "supply", "demand", "equilibrium"]
+  },
+  {
+    "id": "5",
+    "title": "经济: 生产可能性边界 (PPF)",
+    "description": "资源权衡与效率分析 (Trade-offs)",
+    "file_path": "scenes/economics_advanced.py",
+    "class_name": "PPFScene",
+    "keywords": ["economics", "macro", "tradeoff", "production"]
+  },
+  {
+    "id": "6",
+    "title": "经济: 消费者选择 (Consumer Choice)",
+    "description": "无差异曲线与预算约束的切点",
+    "file_path": "scenes/economics_advanced.py",
+    "class_name": "UtilityMaximizationScene",
+    "keywords": ["economics", "micro", "utility", "consumer", "budget"]
+  },
+  {
+    "id": "7",
+    "title": "经济: 拉弗曲线 (Laffer Curve)",
+    "description": "税率与税收的倒U型关系",
+    "file_path": "scenes/economics_advanced.py",
+    "class_name": "LafferCurveScene",
+    "keywords": ["economics", "tax", "revenue", "policy"]
+  },
+  {
+    "id": "8",
+    "title": "综合: AI 经济学微电影 (Story)",
+    "description": "结合科技与经济的多章节完整叙事视频",
+    "file_path": "scenes/stories.py",
+    "class_name": "AI_Economics_Story",
+    "keywords": ["story", "narrative", "full video"]
+  },
+  {
+    "id": "9",
+    "title": "动态微观: 极值搜寻 (Micro Optimization)",
+    "description": "展示预算约束下的梯度对齐与寻优过程",
+    "file_path": "scenes/economics_dynamic.py",
+    "class_name": "MicroOptimization",
+    "keywords": ["economics", "micro", "optimization", "gradient", "dynamic"]
+  },
+  {
+    "id": "10",
+    "title": "动态宏观: 鞍径稳定性 (Macro Saddle Path)",
+    "description": "展示相图中的流场与唯一收敛路径",
+    "file_path": "scenes/economics_dynamic.py",
+    "class_name": "MacroSaddlePath",
+    "keywords": ["economics", "macro", "dynamic", "stability", "vector field"]
+  },
+  {
+    "id": "11",
+    "title": "动态福利: 剩余分析 (Surplus Dynamics)",
+    "description": "需求移动时 CS/PS 面积的实时变形",
+    "file_path": "scenes/economics_dynamic.py",
+    "class_name": "SurplusDynamics",
+    "keywords": ["economics", "welfare", "surplus", "consumer", "producer"]
+  },
+  {
+    "id": "12",
+    "title": "政策干预: 税收与无谓损失 (Tax & DWL)",
+    "description": "展示税收楔子与 DWL 三角形的动态变化",
+    "file_path": "scenes/economics_dynamic.py",
+    "class_name": "TaxWelfareScene",
+    "keywords": ["economics", "tax", "dwl", "welfare", "policy"]
+  }
+]
