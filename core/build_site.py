@@ -137,20 +137,22 @@ def build():
     cards_html = ""
     print(f"Found {len(videos)} videos.")
     
-    for video_path in videos:
-        filename = os.path.basename(video_path)
-        dest_path = os.path.join(DIST_DIR, "videos", filename)
+    for i, video_path in enumerate(videos):
+        original_filename = os.path.basename(video_path)
+        # Use safe ASCII filename for the file system and URL
+        safe_filename = f"scene_{i:03d}.mp4"
+        dest_path = os.path.join(DIST_DIR, "videos", safe_filename)
         
-        # Copy file
+        # Copy file to safe name
         shutil.copy2(video_path, dest_path)
-        print(f"Copied: {filename}")
+        print(f"Copied: {original_filename} -> {safe_filename}")
         
-        # Generate Card
-        clean_name = os.path.splitext(filename)[0].replace("_", " ")
+        # Generate Card (Use original name for display)
+        clean_name = os.path.splitext(original_filename)[0].replace("_", " ")
         size = get_file_size(video_path)
         
         cards_html += CARD_TEMPLATE.format(
-            filename=filename,
+            filename=safe_filename,
             clean_name=clean_name,
             size=size
         )
