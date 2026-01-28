@@ -1,0 +1,38 @@
+name: Deploy to PinMe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install Build Tool Dependencies
+        # We only need python standard lib for the build script, but if we extended it later...
+        run: |
+          echo "No extra python deps needed for build_site.py yet"
+
+      - name: Build Static Site
+        run: |
+          python core/build_site.py
+
+      - name: Deploy to PinMe
+        # Using npx to run pinme without global install
+        # --yes flag might be needed if it asks for confirmation (though docs say zero config)
+        # We try strict command first.
+        run: |
+          npx pinme upload dist

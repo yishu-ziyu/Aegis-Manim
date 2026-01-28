@@ -134,3 +134,4 @@ dist/
 
 # Ignore the built dependencies
 third_party/*
+dist/
