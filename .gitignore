@@ -135,3 +135,6 @@ dist/
 # Ignore the built dependencies
 third_party/*
 dist/
+generated/
+.aegis_web.pid
+logs/bug_trace.jsonl

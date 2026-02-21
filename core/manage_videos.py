@@ -60,7 +60,7 @@ def publish_video(scene_name, rename=None):
     except Exception as e:
         print(f"❌ Failed to publish video: {e}")
 
-def clean_media(dry_run=False):
+def clean_media(dry_run=False, force=False):
     if not os.path.exists(MEDIA_DIR):
         print("Media directory already empty or does not exist.")
         return
@@ -80,7 +80,11 @@ def clean_media(dry_run=False):
         print("[Dry Run] No files were deleted.")
         return
 
-    confirm = input("Are you sure you want to delete ALL temporary render files? (y/n): ")
+    if force:
+        confirm = "y"
+    else:
+        confirm = input("Are you sure you want to delete ALL temporary render files? (y/n): ")
+
     if confirm.lower() == 'y':
         try:
             shutil.rmtree(MEDIA_DIR)
@@ -126,7 +130,7 @@ def main():
     if args.command == "publish":
         publish_video(args.scene_name, args.rename)
     elif args.command == "clean":
-        clean_media()
+        clean_media(force=args.force)
     elif args.command == "list":
         list_warehouse()
     else:

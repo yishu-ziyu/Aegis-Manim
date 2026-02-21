@@ -4,7 +4,7 @@
     "title": "基础: 图形定位 (Placement)",
     "description": "演示 Mobject 的相对位置关系 (UP/DOWN/LEFT/RIGHT)",
     "file_path": "scenes/basic_geometry.py",
-    "class_name": "Placement",
+    "class_name": "MobjectPlacement",
     "keywords": ["geometry", "layout", "position", "basics"]
   },
   {
@@ -36,7 +36,7 @@
     "title": "经济: 生产可能性边界 (PPF)",
     "description": "资源权衡与效率分析 (Trade-offs)",
     "file_path": "scenes/economics_advanced.py",
-    "class_name": "PPFScene",
+    "class_name": "ProductionPossibilityFrontier",
     "keywords": ["economics", "macro", "tradeoff", "production"]
   },
   {
@@ -44,7 +44,7 @@
     "title": "经济: 消费者选择 (Consumer Choice)",
     "description": "无差异曲线与预算约束的切点",
     "file_path": "scenes/economics_advanced.py",
-    "class_name": "UtilityMaximizationScene",
+    "class_name": "UtilityMaximization",
     "keywords": ["economics", "micro", "utility", "consumer", "budget"]
   },
   {
@@ -52,7 +52,7 @@
     "title": "经济: 拉弗曲线 (Laffer Curve)",
     "description": "税率与税收的倒U型关系",
     "file_path": "scenes/economics_advanced.py",
-    "class_name": "LafferCurveScene",
+    "class_name": "LafferCurve",
     "keywords": ["economics", "tax", "revenue", "policy"]
   },
   {

@@ -1,0 +1,1219 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+import threading
+from datetime import datetime
+from glob import glob
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
+
+from manim_agent import (
+    DEFAULT_MODEL,
+    DEFAULT_ZHIPU_ENDPOINT,
+    PROMPT_PATH,
+    PROJECT_ROOT,
+    apply_runtime_compatibility_fixes,
+    extract_python_only,
+    generate_code_with_zhipu,
+    is_placeholder_api_key,
+    normalize_zhipu_endpoint,
+    read_file,
+)
+
+SYSTEM_PROMPT = read_file(PROMPT_PATH)
+GENERATED_DIR = PROJECT_ROOT / "generated"
+RUNTIME_LOG_DIR = PROJECT_ROOT / "logs"
+RUNTIME_LOG_PATH = RUNTIME_LOG_DIR / "web_runtime.log"
+BUG_LOG_PATH = RUNTIME_LOG_DIR / "bug_trace.jsonl"
+APP_VERSION = "web_app_v20260215_4"
+VIDEO_CACHE: dict[str, Path] = {}
+VIDEO_CACHE_LOCK = threading.Lock()
+
+
+def ensure_generated_dir() -> None:
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_runtime_log_dir() -> None:
+    RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def append_runtime_log(event: str, detail: str) -> None:
+    ensure_runtime_log_dir()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    safe_detail = detail.replace("\n", " ").strip()
+    line = f"[{timestamp}] {event} | {safe_detail}\n"
+    with RUNTIME_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def build_request_id() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+
+
+def safe_short_text(value: str, max_len: int = 300) -> str:
+    cleaned = value.replace("\n", " ").strip()
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 3] + "..."
+
+
+def prompt_fingerprint(prompt: str) -> str:
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def append_bug_log(
+    *,
+    request_id: str,
+    stage: str,
+    severity: str,
+    message: str,
+    detail: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> None:
+    ensure_runtime_log_dir()
+    entry: dict[str, Any] = {
+        "time": datetime.now().isoformat(timespec="seconds"),
+        "requestId": request_id,
+        "stage": stage,
+        "severity": severity,
+        "message": safe_short_text(message, 200),
+    }
+    if detail:
+        entry["detail"] = safe_short_text(detail, 3000)
+    if context:
+        entry["context"] = context
+    with BUG_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def read_recent_bug_entries(limit: int, request_id: str | None = None) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    if not BUG_LOG_PATH.exists():
+        return []
+
+    lines = BUG_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for raw in reversed(lines):
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            item = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            if request_id and item.get("requestId") != request_id:
+                continue
+            records.append(item)
+        if len(records) >= limit:
+            break
+    return records
+
+
+def safe_scene_name(raw_name: str) -> str:
+    candidate = re.sub(r"[^A-Za-z0-9_]", "", raw_name.strip())
+    if not candidate:
+        return "GeneratedScene"
+    if not re.match(r"[A-Za-z_]", candidate[0]):
+        candidate = f"Scene_{candidate}"
+    return candidate
+
+
+def detect_scene_name(code: str, fallback: str) -> str:
+    match = re.search(r"class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*Scene\s*\)", code)
+    if match:
+        return match.group(1)
+    return fallback
+
+
+def render_scene(scene_file: Path, scene_name: str) -> None:
+    cmd = [
+        str(PROJECT_ROOT / ".venv" / "bin" / "manim"),
+        "-ql",
+        "--media_dir",
+        "media",
+        str(scene_file),
+        scene_name,
+    ]
+    result = subprocess.run(
+        cmd,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        detail = stderr or stdout or "Unknown render error."
+        if len(detail) > 2500:
+            detail = detail[-2500:]
+        raise RuntimeError(detail)
+
+
+def find_latest_video(scene_file: Path, scene_name: str) -> Path | None:
+    candidates: list[Path] = []
+    file_stem = scene_file.stem
+
+    first_pattern = PROJECT_ROOT / "media" / "videos" / file_stem / "**" / f"{scene_name}.mp4"
+    for p in glob(str(first_pattern), recursive=True):
+        if "partial_movie_files" in p:
+            continue
+        candidates.append(Path(p))
+
+    if not candidates:
+        second_pattern = PROJECT_ROOT / "media" / "videos" / "**" / f"{scene_name}.mp4"
+        for p in glob(str(second_pattern), recursive=True):
+            if "partial_movie_files" in p:
+                continue
+            candidates.append(Path(p))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def register_video(path: Path) -> str:
+    video_id = uuid4().hex
+    with VIDEO_CACHE_LOCK:
+        VIDEO_CACHE[video_id] = path
+    return video_id
+
+
+def json_error(
+    message: str,
+    status: int = 400,
+    detail: str | None = None,
+    request_id: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    payload: dict[str, Any] = {"ok": False, "error": message}
+    if detail:
+        payload["detail"] = detail
+    if request_id:
+        payload["requestId"] = request_id
+    return status, payload
+
+
+def make_index_html() -> str:
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aegis Studio Web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bungee:wght@400&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {{
+      --paper: #f7f0e4;
+      --paper-2: #fff8ed;
+      --ink: #21190f;
+      --ink-soft: #594937;
+      --accent: #d14d23;
+      --accent-2: #1f8876;
+      --accent-3: #0a3557;
+      --danger: #8e1d13;
+      --ok: #145c4f;
+      --code: #0f1f31;
+      --line: rgba(25, 16, 8, 0.25);
+      --radius-lg: 26px;
+      --radius-md: 16px;
+      --shadow-xl: 0 28px 55px rgba(71, 33, 10, 0.2);
+      --speed: 280ms;
+    }}
+
+    * {{
+      box-sizing: border-box;
+    }}
+
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Noto Serif SC", serif;
+      background:
+        radial-gradient(circle at 12% 7%, rgba(209, 77, 35, 0.22), transparent 35%),
+        radial-gradient(circle at 90% 10%, rgba(31, 136, 118, 0.2), transparent 40%),
+        linear-gradient(145deg, #e9dbc4 0%, #f5ecdd 45%, #ead8bd 100%);
+      position: relative;
+      overflow-x: hidden;
+    }}
+
+    body::before {{
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.38;
+      background-image:
+        repeating-linear-gradient(0deg, rgba(34, 20, 10, 0.08) 0 1px, transparent 1px 3px),
+        repeating-linear-gradient(90deg, rgba(34, 20, 10, 0.05) 0 1px, transparent 1px 4px);
+      mix-blend-mode: multiply;
+    }}
+
+    .shell {{
+      width: min(1220px, 93vw);
+      margin: 34px auto 40px;
+      display: grid;
+      gap: 22px;
+      grid-template-columns: 1.1fr 0.9fr;
+      animation: shell-in 520ms cubic-bezier(.2,.9,.2,1) both;
+      position: relative;
+      z-index: 2;
+    }}
+
+    .panel {{
+      border-radius: var(--radius-lg);
+      border: 2px solid rgba(33, 25, 15, 0.27);
+      box-shadow: var(--shadow-xl);
+      overflow: hidden;
+      background: linear-gradient(180deg, var(--paper-2), var(--paper));
+      position: relative;
+    }}
+
+    .panel::after {{
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: var(--radius-lg);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.52);
+    }}
+
+    .hero {{
+      padding: 26px 28px 20px;
+      border-bottom: 2px solid var(--line);
+      background:
+        linear-gradient(118deg, rgba(31, 136, 118, 0.18), rgba(209, 77, 35, 0.13)),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.08));
+      position: relative;
+    }}
+
+    .hero::before {{
+      content: "LOCAL · USER-KEY · RENDER";
+      position: absolute;
+      top: 12px;
+      right: -42px;
+      transform: rotate(12deg);
+      font-family: "Bungee", sans-serif;
+      font-size: 0.72rem;
+      letter-spacing: 1.2px;
+      color: rgba(33, 25, 15, 0.58);
+      background: rgba(255, 255, 255, 0.6);
+      padding: 6px 16px;
+      border: 1px solid rgba(33, 25, 15, 0.2);
+      border-radius: 999px;
+    }}
+
+    .hero h1 {{
+      margin: 0 0 8px;
+      font-family: "Bungee", "Noto Serif SC", serif;
+      font-size: clamp(1.6rem, 3vw, 2.35rem);
+      line-height: 1.05;
+      letter-spacing: 0.5px;
+      color: #101722;
+      text-transform: uppercase;
+    }}
+
+    .hero p {{
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 1.02rem;
+      line-height: 1.4;
+      max-width: 38ch;
+    }}
+
+    .hero small {{
+      display: inline-flex;
+      margin-top: 10px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.78rem;
+      padding: 4px 8px;
+      border-radius: 6px;
+      color: #173452;
+      background: rgba(10, 53, 87, 0.09);
+      border: 1px dashed rgba(10, 53, 87, 0.34);
+    }}
+
+    .form-wrap {{
+      padding: 22px 26px 26px;
+      display: grid;
+      gap: 15px;
+    }}
+
+    .field {{
+      display: grid;
+      gap: 8px;
+      animation: field-in var(--speed) ease-out both;
+    }}
+
+    .field:nth-child(1) {{ animation-delay: 30ms; }}
+    .field:nth-child(2) {{ animation-delay: 70ms; }}
+    .field:nth-child(3) {{ animation-delay: 110ms; }}
+    .field:nth-child(4) {{ animation-delay: 150ms; }}
+    .field:nth-child(5) {{ animation-delay: 190ms; }}
+
+    label {{
+      font-size: 0.88rem;
+      font-family: "JetBrains Mono", monospace;
+      color: #3f2f22;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }}
+
+    .help {{
+      margin-top: -2px;
+      color: #6d5a46;
+      font-size: 0.82rem;
+    }}
+
+    input,
+    textarea {{
+      width: 100%;
+      border: 1.5px solid rgba(46, 30, 14, 0.24);
+      border-radius: var(--radius-md);
+      font: inherit;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.7));
+      color: #1d1710;
+      padding: 12px 14px;
+      transition: all var(--speed);
+      outline: none;
+    }}
+
+    textarea {{
+      min-height: 142px;
+      resize: vertical;
+      line-height: 1.55;
+    }}
+
+    input:focus,
+    textarea:focus {{
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(31, 136, 118, 0.2);
+      transform: translateY(-1px);
+    }}
+
+    .row {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }}
+
+    .key-row {{
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }}
+
+    .tiny-btn,
+    .btn,
+    .ghost-btn {{
+      font-family: "JetBrains Mono", monospace;
+      font-weight: 600;
+      border-radius: 12px;
+      cursor: pointer;
+      border: none;
+      transition: transform var(--speed), filter var(--speed), opacity var(--speed), box-shadow var(--speed);
+    }}
+
+    .tiny-btn {{
+      padding: 0 14px;
+      color: #f8ede0;
+      background: linear-gradient(140deg, #1f8876, #115247);
+      min-width: 62px;
+    }}
+
+    .tiny-btn:hover {{
+      filter: brightness(1.07);
+      transform: translateY(-1px);
+    }}
+
+    .btn {{
+      margin-top: 4px;
+      padding: 14px 16px;
+      color: #fff8ed;
+      background: linear-gradient(130deg, #c0451f, #d7702d 56%, #0f3557 130%);
+      letter-spacing: 0.35px;
+      box-shadow: 0 10px 22px rgba(139, 60, 24, 0.28);
+      text-transform: uppercase;
+      font-size: 0.9rem;
+    }}
+
+    .btn:hover {{
+      transform: translateY(-2px) scale(1.01);
+      filter: saturate(1.05);
+    }}
+
+    .btn[disabled] {{
+      opacity: 0.62;
+      cursor: wait;
+      transform: none;
+      box-shadow: none;
+    }}
+
+    .check-row {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #4b3a2d;
+      font-size: 0.9rem;
+    }}
+
+    .check-row input {{
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent-2);
+      padding: 0;
+    }}
+
+    .status-box {{
+      padding: 12px 14px;
+      border-radius: 13px;
+      border: 1.5px solid rgba(33, 25, 15, 0.2);
+      background: rgba(255, 255, 255, 0.58);
+      color: #3f3024;
+      min-height: 50px;
+      display: flex;
+      align-items: center;
+      line-height: 1.45;
+    }}
+
+    .status-box.error {{
+      border-color: rgba(142, 29, 19, 0.4);
+      background: rgba(142, 29, 19, 0.12);
+      color: #581a14;
+    }}
+
+    .status-box.success {{
+      border-color: rgba(20, 92, 79, 0.42);
+      background: rgba(20, 92, 79, 0.13);
+      color: #113f37;
+    }}
+
+    .result-head {{
+      padding: 26px 28px 20px;
+      border-bottom: 2px solid var(--line);
+      background:
+        linear-gradient(130deg, rgba(10, 53, 87, 0.16), rgba(31, 136, 118, 0.16));
+    }}
+
+    .result-head h2 {{
+      margin: 0 0 8px;
+      font-family: "Bungee", "Noto Serif SC", serif;
+      font-size: clamp(1.4rem, 2.6vw, 2.1rem);
+      letter-spacing: 0.45px;
+      color: #101722;
+      text-transform: uppercase;
+    }}
+
+    .result-head p {{
+      margin: 0;
+      color: #4f4133;
+      font-size: 1rem;
+    }}
+
+    .result-wrap {{
+      padding: 22px 26px 26px;
+      display: grid;
+      gap: 14px;
+    }}
+
+    .tag-wrap {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+
+    .tag {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(33, 25, 15, 0.25);
+      padding: 6px 11px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.76rem;
+      color: #3d2f25;
+      background: rgba(255, 255, 255, 0.55);
+    }}
+
+    .warning-box {{
+      display: none;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px dashed rgba(209, 77, 35, 0.52);
+      color: #6d2b17;
+      background: rgba(209, 77, 35, 0.08);
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }}
+
+    .warning-box.visible {{
+      display: block;
+      animation: field-in 240ms ease-out;
+    }}
+
+    .code-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }}
+
+    .code-header span {{
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.76rem;
+      color: #4f4032;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }}
+
+    .ghost-btn {{
+      padding: 8px 12px;
+      border: 1px solid rgba(10, 53, 87, 0.25);
+      background: rgba(10, 53, 87, 0.06);
+      color: #123a5f;
+      font-size: 0.78rem;
+    }}
+
+    .ghost-btn:hover {{
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }}
+
+    pre {{
+      margin: 0;
+      padding: 14px;
+      border-radius: 14px;
+      background:
+        linear-gradient(180deg, #111f2f, #0d1928);
+      border: 1px solid rgba(173, 208, 239, 0.18);
+      color: #daf0ff;
+      font: 13px/1.65 "JetBrains Mono", monospace;
+      max-height: 360px;
+      overflow: auto;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }}
+
+    .video-card {{
+      display: none;
+      border-radius: 16px;
+      border: 1px solid rgba(33, 25, 15, 0.25);
+      background: rgba(8, 16, 26, 0.9);
+      padding: 10px;
+    }}
+
+    .video-card.visible {{
+      display: block;
+      animation: panel-up 260ms ease-out;
+    }}
+
+    video {{
+      width: 100%;
+      border-radius: 12px;
+      max-height: 420px;
+      background: black;
+    }}
+
+    .foot {{
+      margin-top: 2px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.74rem;
+      color: #6d5a48;
+      text-align: right;
+    }}
+
+    .foot b {{
+      color: #214b71;
+    }}
+
+    @media (max-width: 1020px) {{
+      .shell {{
+        grid-template-columns: 1fr;
+        width: min(720px, 94vw);
+      }}
+      .hero::before {{
+        display: none;
+      }}
+    }}
+
+    @media (max-width: 720px) {{
+      .row {{
+        grid-template-columns: 1fr;
+      }}
+      .shell {{
+        margin: 18px auto 24px;
+      }}
+      .hero,
+      .form-wrap,
+      .result-head,
+      .result-wrap {{
+        padding-left: 16px;
+        padding-right: 16px;
+      }}
+    }}
+
+    @keyframes shell-in {{
+      from {{ opacity: 0; transform: translateY(16px); }}
+      to {{ opacity: 1; transform: translateY(0); }}
+    }}
+
+    @keyframes field-in {{
+      from {{ opacity: 0; transform: translateY(8px); }}
+      to {{ opacity: 1; transform: translateY(0); }}
+    }}
+
+    @keyframes panel-up {{
+      from {{ opacity: 0; transform: translateY(6px); }}
+      to {{ opacity: 1; transform: translateY(0); }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="panel">
+      <header class="hero">
+        <h1>Aegis Studio Web</h1>
+        <p>用你的 Key + 自然语言问题，把抽象知识直接变成动态可视化视频。</p>
+        <small>Secure by design: API Key 仅用于本次请求，不落盘到仓库。</small>
+      </header>
+
+      <form id="generate-form" class="form-wrap">
+        <div class="field">
+          <label for="apiKey">智谱 API Key</label>
+          <div class="key-row">
+            <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" required />
+            <button id="toggleKey" class="tiny-btn" type="button">显示</button>
+          </div>
+          <div class="help">如果报 401，请先确认 Key 未过期且有可用额度。</div>
+        </div>
+
+        <div class="field">
+          <label for="prompt">你要讲清楚的问题</label>
+          <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。" required></textarea>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="model">模型</label>
+            <input id="model" name="model" value="{DEFAULT_MODEL}" />
+          </div>
+          <div class="field">
+            <label for="sceneName">场景类名</label>
+            <input id="sceneName" name="sceneName" value="GeneratedScene" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="temperature">Temperature (0-1)</label>
+            <input id="temperature" name="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
+          </div>
+          <div class="field">
+            <label for="endpoint">API Endpoint</label>
+            <input id="endpoint" name="endpoint" value="{DEFAULT_ZHIPU_ENDPOINT}" />
+          </div>
+        </div>
+
+        <label class="check-row" for="noRender">
+          <input id="noRender" name="noRender" type="checkbox" />
+          只生成代码，不渲染视频（调试模式）
+        </label>
+
+        <button id="submitBtn" class="btn" type="submit">Generate & Render</button>
+        <div id="statusBox" class="status-box">等待输入...</div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <header class="result-head">
+        <h2>结果面板</h2>
+        <p>代码、修复提示、渲染视频统一展示。</p>
+      </header>
+
+      <div class="result-wrap">
+        <div class="tag-wrap">
+          <span id="sceneTag" class="tag">Scene: -</span>
+          <span id="fileTag" class="tag">File: -</span>
+          <span id="requestTag" class="tag">Req: -</span>
+          <span class="tag">Version: {APP_VERSION}</span>
+        </div>
+
+        <div id="warningBox" class="warning-box"></div>
+
+        <div class="code-header">
+          <span>Generated Python</span>
+          <button id="copyCodeBtn" class="ghost-btn" type="button">复制代码</button>
+        </div>
+
+        <pre id="codeOutput"># 生成的 Manim 代码会显示在这里</pre>
+
+        <div id="videoCard" class="video-card">
+          <video id="videoPlayer" controls preload="metadata"></video>
+        </div>
+
+        <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("generate-form");
+    const submitBtn = document.getElementById("submitBtn");
+    const statusBox = document.getElementById("statusBox");
+    const codeOutput = document.getElementById("codeOutput");
+    const sceneTag = document.getElementById("sceneTag");
+    const fileTag = document.getElementById("fileTag");
+    const requestTag = document.getElementById("requestTag");
+    const videoCard = document.getElementById("videoCard");
+    const videoPlayer = document.getElementById("videoPlayer");
+    const toggleKey = document.getElementById("toggleKey");
+    const apiKeyInput = document.getElementById("apiKey");
+    const warningBox = document.getElementById("warningBox");
+    const copyCodeBtn = document.getElementById("copyCodeBtn");
+
+    function setStatus(message, type = "") {{
+      statusBox.className = "status-box" + (type ? " " + type : "");
+      statusBox.textContent = message;
+    }}
+
+    function setWarnings(warnings) {{
+      if (Array.isArray(warnings) && warnings.length) {{
+        warningBox.textContent = "自动兼容修复: " + warnings.join(" ; ");
+        warningBox.classList.add("visible");
+      }} else {{
+        warningBox.textContent = "";
+        warningBox.classList.remove("visible");
+      }}
+    }}
+
+    toggleKey.addEventListener("click", () => {{
+      apiKeyInput.type = apiKeyInput.type === "password" ? "text" : "password";
+      toggleKey.textContent = apiKeyInput.type === "password" ? "显示" : "隐藏";
+    }});
+
+    copyCodeBtn.addEventListener("click", async () => {{
+      try {{
+        await navigator.clipboard.writeText(codeOutput.textContent || "");
+        copyCodeBtn.textContent = "已复制";
+        setTimeout(() => (copyCodeBtn.textContent = "复制代码"), 1200);
+      }} catch (_e) {{
+        copyCodeBtn.textContent = "复制失败";
+        setTimeout(() => (copyCodeBtn.textContent = "复制代码"), 1200);
+      }}
+    }});
+
+    form.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      submitBtn.disabled = true;
+      setStatus("请求已发送，正在生成代码...", "");
+      setWarnings([]);
+      requestTag.textContent = "Req: -";
+      videoCard.classList.remove("visible");
+      videoPlayer.removeAttribute("src");
+      videoPlayer.load();
+
+      const payload = {{
+        apiKey: apiKeyInput.value.trim(),
+        prompt: document.getElementById("prompt").value.trim(),
+        model: document.getElementById("model").value.trim() || "{DEFAULT_MODEL}",
+        endpoint: document.getElementById("endpoint").value.trim() || "{DEFAULT_ZHIPU_ENDPOINT}",
+        sceneName: document.getElementById("sceneName").value.trim() || "GeneratedScene",
+        temperature: Number(document.getElementById("temperature").value || 0.2),
+        noRender: document.getElementById("noRender").checked
+      }};
+
+      try {{
+        let requestId = "-";
+        const response = await fetch("/api/generate", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify(payload)
+        }});
+        const data = await response.json();
+        requestId = data.requestId || "-";
+        requestTag.textContent = "Req: " + requestId;
+        if (!response.ok || !data.ok) {{
+          const detail = data.detail ? " | " + data.detail : "";
+          const reqText = requestId !== "-" ? " | 诊断ID: " + requestId : "";
+          throw new Error((data.error || "请求失败") + detail + reqText);
+        }}
+
+        codeOutput.textContent = data.code || "# 未返回代码";
+        sceneTag.textContent = "Scene: " + (data.sceneName || "-");
+        fileTag.textContent = "File: " + (data.codeFile || "-");
+        setWarnings(data.warnings || []);
+
+        if (data.videoId) {{
+          videoPlayer.src = "/api/video/" + data.videoId;
+          videoCard.classList.add("visible");
+        }}
+
+        const warningText = Array.isArray(data.warnings) && data.warnings.length
+          ? " | 已自动做兼容修复"
+          : "";
+        const reqText = requestId !== "-" ? " | 诊断ID: " + requestId : "";
+        setStatus((data.message || "处理完成") + warningText + reqText, "success");
+      }} catch (err) {{
+        setStatus(err && err.message ? err.message : "请求异常", "error");
+      }} finally {{
+        submitBtn.disabled = false;
+      }}
+    }});
+  </script>
+</body>
+</html>
+"""
+
+
+class AegisWebHandler(BaseHTTPRequestHandler):
+    server_version = "AegisWeb/0.1"
+
+    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, html: str) -> None:
+        body = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json_body(self) -> dict[str, Any]:
+        raw_len = self.headers.get("Content-Length", "0")
+        try:
+            body_len = int(raw_len)
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length.") from exc
+        if body_len <= 0:
+            raise ValueError("Empty request body.")
+        raw = self.rfile.read(body_len)
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("Body must be valid JSON.") from exc
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        route = parsed.path
+
+        if route == "/":
+            self._send_html(make_index_html())
+            return
+
+        if route == "/api/health":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "time": datetime.now().isoformat(timespec="seconds"),
+                    "version": APP_VERSION,
+                },
+            )
+            return
+
+        if route == "/api/bugs/recent":
+            query = parse_qs(parsed.query)
+            limit_raw = query.get("limit", ["20"])[0]
+            request_id = query.get("requestId", [""])[0].strip()
+            try:
+                limit = int(limit_raw)
+            except ValueError:
+                limit = 20
+            limit = max(1, min(200, limit))
+            items = read_recent_bug_entries(limit, request_id=request_id or None)
+            self._send_json(HTTPStatus.OK, {"ok": True, "count": len(items), "items": items})
+            return
+
+        if route.startswith("/api/video/"):
+            video_id = route.rsplit("/", 1)[-1]
+            with VIDEO_CACHE_LOCK:
+                video_path = VIDEO_CACHE.get(video_id)
+            if not video_path or not video_path.exists():
+                self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Video not found."})
+                return
+
+            content = video_path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(content)
+            return
+
+        self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != "/api/generate":
+            self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+            return
+
+        request_id = build_request_id()
+        try:
+            payload = self._read_json_body()
+        except ValueError as exc:
+            append_bug_log(
+                request_id=request_id,
+                stage="request",
+                severity="error",
+                message="Invalid request payload",
+                detail=str(exc),
+            )
+            status, err = json_error(
+                str(exc),
+                status=HTTPStatus.BAD_REQUEST,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        prompt = str(payload.get("prompt", "")).strip()
+        api_key = str(payload.get("apiKey", "")).strip()
+        model = str(payload.get("model", "")).strip() or DEFAULT_MODEL
+        endpoint = normalize_zhipu_endpoint(
+            str(payload.get("endpoint", "")).strip() or DEFAULT_ZHIPU_ENDPOINT
+        )
+        scene_name = safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
+        no_render = bool(payload.get("noRender", False))
+
+        try:
+            temperature = float(payload.get("temperature", 0.2))
+        except (TypeError, ValueError):
+            temperature = 0.2
+        temperature = max(0.0, min(1.0, temperature))
+
+        request_context = {
+            "model": model,
+            "endpoint": endpoint,
+            "sceneNameInput": scene_name,
+            "temperature": temperature,
+            "noRender": no_render,
+            "promptLen": len(prompt),
+            "promptHash": prompt_fingerprint(prompt) if prompt else None,
+        }
+
+        if len(prompt) < 6:
+            detail = "Please provide a clearer learning question."
+            append_bug_log(
+                request_id=request_id,
+                stage="validation",
+                severity="warn",
+                message="Prompt is too short",
+                detail=detail,
+                context=request_context,
+            )
+            status, err = json_error(
+                "Prompt is too short.",
+                status=HTTPStatus.BAD_REQUEST,
+                detail=detail,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        if not api_key:
+            detail = "Please paste your own Zhipu API key in the form."
+            append_bug_log(
+                request_id=request_id,
+                stage="validation",
+                severity="warn",
+                message="Missing API key",
+                detail=detail,
+                context=request_context,
+            )
+            status, err = json_error(
+                "Missing API key.",
+                status=HTTPStatus.BAD_REQUEST,
+                detail=detail,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        if is_placeholder_api_key(api_key):
+            detail = "Please use a real key generated in your own account."
+            append_bug_log(
+                request_id=request_id,
+                stage="validation",
+                severity="warn",
+                message="Placeholder API key detected",
+                detail=detail,
+                context=request_context,
+            )
+            status, err = json_error(
+                "Placeholder API key detected.",
+                status=HTTPStatus.BAD_REQUEST,
+                detail=detail,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        notes: list[str] = []
+        try:
+            append_runtime_log(
+                "MODEL_REQUEST_START",
+                f"request_id={request_id} model={model} endpoint={endpoint}",
+            )
+            raw_code = generate_code_with_zhipu(
+                api_key=api_key,
+                endpoint=endpoint,
+                model=model,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=prompt,
+                temperature=temperature,
+            )
+            code = extract_python_only(raw_code)
+            code, notes = apply_runtime_compatibility_fixes(code)
+            if notes:
+                append_runtime_log(
+                    "COMPATIBILITY_FIX",
+                    f"request_id={request_id} {'; '.join(notes)}",
+                )
+            append_runtime_log(
+                "MODEL_REQUEST_OK",
+                f"request_id={request_id} model={model} chars={len(code)}",
+            )
+        except Exception as exc:
+            detail = str(exc)
+            append_runtime_log(
+                "MODEL_REQUEST_FAIL",
+                f"request_id={request_id} model={model} endpoint={endpoint} error={detail}",
+            )
+            append_bug_log(
+                request_id=request_id,
+                stage="model",
+                severity="error",
+                message="Model request failed",
+                detail=detail,
+                context=request_context,
+            )
+            status, err = json_error(
+                "Model request failed.",
+                status=HTTPStatus.BAD_GATEWAY,
+                detail=detail,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        scene_name = detect_scene_name(code, scene_name)
+
+        ensure_generated_dir()
+        filename = f"scene_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}.py"
+        scene_file = GENERATED_DIR / filename
+        scene_file.write_text(code.strip() + "\n", encoding="utf-8")
+
+        response: dict[str, Any] = {
+            "ok": True,
+            "requestId": request_id,
+            "sceneName": scene_name,
+            "code": code,
+            "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
+        }
+        if notes:
+            response["warnings"] = notes
+
+        if no_render:
+            response["message"] = "Code generated successfully. Render skipped."
+            append_runtime_log(
+                "GENERATE_SKIP_RENDER",
+                f"request_id={request_id} file={scene_file.name} scene={scene_name}",
+            )
+            self._send_json(HTTPStatus.OK, response)
+            return
+
+        try:
+            render_scene(scene_file, scene_name)
+            video_path = find_latest_video(scene_file, scene_name)
+            if video_path is None:
+                raise RuntimeError("Render completed but output video was not found.")
+            response["videoId"] = register_video(video_path)
+            response["message"] = "Code generated and video rendered successfully."
+            append_runtime_log(
+                "RENDER_OK",
+                f"request_id={request_id} file={scene_file.name} scene={scene_name} video={video_path}",
+            )
+            self._send_json(HTTPStatus.OK, response)
+        except Exception as exc:
+            detail = str(exc)
+            append_runtime_log(
+                "RENDER_FAIL",
+                f"request_id={request_id} file={scene_file.name} scene={scene_name} error={detail}",
+            )
+            append_bug_log(
+                request_id=request_id,
+                stage="render",
+                severity="error",
+                message="Render failed",
+                detail=detail,
+                context={
+                    **request_context,
+                    "sceneNameDetected": scene_name,
+                    "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
+                    "warnings": notes,
+                },
+            )
+            status, err = json_error(
+                "Render failed.",
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=detail,
+                request_id=request_id,
+            )
+            err["code"] = code
+            err["codeFile"] = str(scene_file.relative_to(PROJECT_ROOT))
+            self._send_json(status, err)
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        # Keep server logs concise and avoid accidentally printing user payloads.
+        msg = fmt % args
+        print(f"[web] {self.address_string()} - {msg}")
+        append_runtime_log("HTTP", msg)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Aegis web server")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host")
+    parser.add_argument("--port", type=int, default=8000, help="Bind port")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    ensure_generated_dir()
+    ensure_runtime_log_dir()
+    server = ThreadingHTTPServer((args.host, args.port), AegisWebHandler)
+    print(f"Aegis Web running at http://{args.host}:{args.port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
