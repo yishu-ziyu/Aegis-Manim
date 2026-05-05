@@ -21,3 +21,14 @@ Implemented a prompt-level Manim knowledge layer loaded by both CLI and Web gene
 ## Review
 
 Added a minimal Vercel gateway for `manim.yishuziyu.cn`: FastAPI entrypoint, shared response builders, minimal dependency install, and gateway verification. `vercel build --yes` now completes locally; full Manim rendering remains intentionally offloaded to a future VPS/Render/Fly backend.
+
+# Vercel Generate-Code UI Task
+
+- [x] Replace the placeholder-only gateway page with a usable generation form.
+- [x] Enable `/api/generate` to call remote LLM providers and return Manim code.
+- [x] Hide local-only providers from the cloud UI.
+- [x] Verify with gateway checks, compile checks, and `vercel build --yes`.
+
+## Review
+
+The subdomain can now do useful work: Vercel generates Manim code through remote providers while still making video rendering an explicit external-backend boundary.

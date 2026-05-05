@@ -9,9 +9,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.index import (  # noqa: E402
     APP_VERSION,
-    build_generate_unavailable_payload,
     build_health_payload,
     build_index_html,
+    generate_manim_code_for_gateway,
+    public_provider_config,
 )
 
 
@@ -22,15 +23,32 @@ def main() -> int:
     assert health["renderBackend"] == "external-required"
     assert health["version"] == APP_VERSION
 
-    generate = build_generate_unavailable_payload()
-    assert generate["ok"] is False
-    assert "not available" in str(generate["error"])
-    assert "VPS, Render, or Fly.io" in str(generate["detail"])
-
     html = build_index_html()
     assert "Aegis-Manim" in html
     assert "/api/health" in html
-    assert "External service required" in html
+    assert "Generate Manim Code" in html
+    assert "Render Video" in html
+    assert "provider-config" in html
+
+    providers = public_provider_config()["providers"]
+    assert "codex-cli" not in providers
+    assert "codex-local-proxy" not in providers
+
+    status, missing_prompt = generate_manim_code_for_gateway({"prompt": ""})
+    assert status == 400
+    assert missing_prompt["ok"] is False
+
+    status, disabled_provider = generate_manim_code_for_gateway(
+        {"prompt": "解释消费者剩余", "provider": "codex-cli"},
+    )
+    assert status == 400
+    assert disabled_provider["ok"] is False
+
+    status, missing_key = generate_manim_code_for_gateway(
+        {"prompt": "解释消费者剩余", "provider": "zhipu"},
+    )
+    assert status == 400
+    assert missing_key["ok"] is False
 
     if find_spec("fastapi"):
         from app import app

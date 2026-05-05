@@ -154,15 +154,15 @@ http://127.0.0.1:8000
 
 ## Vercel 公开入口
 
-Vercel 部署当前作为公开入口和健康检查网关，适合绑定 `manim.yishuziyu.cn`：
+Vercel 部署当前作为公开入口、健康检查网关和“只生成代码”界面，适合绑定 `manim.yishuziyu.cn`：
 
 - `/`：项目入口页。
 - `/api/health`：Vercel Function 健康检查。
-- `/api/generate`：返回渲染后端未部署提示。
+- `/api/generate`：调用远程 Provider 生成 Manim 代码，不在 Vercel 渲染视频。
 
 Vercel 入口由根目录 `app.py` 的 FastAPI 应用提供，安装依赖由 `vercel.json` 固定为 `python -m pip install -r requirements.txt`，避免部署时安装完整 Manim 运行时。
 
-完整视频生成仍建议运行本地/VPS/Render/Fly 后端，因为 Manim 需要 `ffmpeg`、系统图形/字体依赖、本地媒体目录和更长执行时间。Vercel 不负责长期运行 `core/web_app.py`，也不承载完整渲染链路。
+完整视频渲染仍建议运行本地/VPS/Render/Fly 后端，因为 Manim 需要 `ffmpeg`、系统图形/字体依赖、本地媒体目录和更长执行时间。Vercel 不负责长期运行 `core/web_app.py`，也不承载完整渲染链路。本机专用 Provider（`codex-cli`、`codex-local-proxy`）不会出现在云端界面中。
 
 验证 Vercel 网关：
 

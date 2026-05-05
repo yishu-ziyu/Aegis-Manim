@@ -140,3 +140,10 @@
 - 方案原因: Aegis-Manim 的完整 Web 服务是长运行 Python 进程，并依赖 Manim、ffmpeg、本地媒体目录和较长执行时间；Vercel 更适合作为公网入口/健康检查/轻量 API，不适合直接承载视频渲染后端。
 - 下次识别与避免: 遇到 Vercel 构建失败时，先检查是否存在 `api/` Function 入口、`vercel.json` 路由和最小依赖文件；绑定子域名前必须先确认 Vercel 项目部署成功，再回 DNS 添加 CNAME。
 - 结果与经验: Vercel 网关验证已通过：`./.venv/bin/python scripts/verify_vercel_gateway.py` 输出 `Vercel gateway verification passed.`；`py_compile` 通过；本地 `vercel build --yes` 已用于捕捉并修正 `api/**/*.py` Function 配置不匹配问题。后续可将 `manim.yishuziyu.cn` 指向 Vercel 网关，再为真实渲染后端单独部署 VPS/Render/Fly。
+
+## 2026-05-06 00:18:00 | Vercel 网关从占位页升级为代码生成界面
+- 问题现象: `manim.yishuziyu.cn` 已能打开，但页面只有部署说明和健康检查，没有可操作功能。
+- 解决方案: 将 Vercel 首页升级为轻量 Aegis Studio：提供问题输入、Provider 选择、模型、API Key、Base URL 和 Temperature 表单；`/api/generate` 在 Vercel 上调用远程 OpenAI-Compatible / Anthropic-Compatible Provider 生成 Manim 代码，并复用本地 `prompts/manim_knowledge_pack.md`、代码清洗和兼容修复逻辑；云端隐藏 `codex-cli` 与 `codex-local-proxy` 等本机专用 Provider。
+- 方案原因: Vercel 不能承担完整视频渲染，但可以承担“公网入口 + 代码生成”的第一阶段产品能力。这样子域名不只是占位页，同时不误导用户以为视频渲染已部署。
+- 下次识别与避免: 凡是拆分部署，都要明确区分可用能力和待接后端能力；云端界面不能展示只能在本机使用的 Provider。
+- 结果与经验: 验证通过：`./.venv/bin/python scripts/verify_vercel_gateway.py`、`py_compile`、`vercel build --yes`。现在 Vercel 版可生成 Manim 代码，视频渲染仍等待独立后端。

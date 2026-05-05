@@ -4,9 +4,9 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from api.index import (
-    build_generate_unavailable_payload,
     build_health_payload,
     build_index_html,
+    generate_manim_code_for_gateway,
 )
 
 app = FastAPI(title="Aegis-Manim Vercel Gateway")
@@ -23,11 +23,9 @@ def health() -> dict[str, object]:
 
 
 @app.post("/api/generate")
-def generate_unavailable() -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=build_generate_unavailable_payload(),
-    )
+def generate(payload: dict[str, object]) -> JSONResponse:
+    status, content = generate_manim_code_for_gateway(payload)
+    return JSONResponse(status_code=status, content=content)
 
 
 @app.get("/{path:path}")
