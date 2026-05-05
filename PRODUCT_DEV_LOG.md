@@ -126,3 +126,10 @@
 - 方案原因: 这是生成策略层面的视觉质量问题，渲染器不会自动知道哪些旧文字已经过期。把文字生命周期写入 prompt 和知识包，比事后从任意 Python 代码中猜测删除对象更稳定。
 - 下次识别与避免: 若视频出现遮挡，先检查生成代码中同一区域是否连续 `Write(Text(...))` 但缺少 `FadeOut`、`ReplacementTransform` 或成组 `FadeOut(section_group)`；后续新增模板时必须把临时说明文字保存为变量或 `VGroup`。
 - 结果与经验: 新 prompt 会要求旧文字段在合适时机退出界面，保留坐标轴、前沿曲线等持久视觉锚点，同时清理过期解释文本，降低教学视频的信息遮挡。
+
+## 2026-05-05 17:16:46 | 大模型接入方法论沉淀
+- 问题现象: 当前已经完成智谱、OpenAI-Compatible、MiniMax、本地 8317 代理与 Codex CLI 登录态等多条模型接入路径，但经验分散在代码、README 和排障日志中，后续新增 Provider 容易重复踩 Key、Endpoint、代理进程、输出解析和 Manim 知识不足的问题。
+- 解决方案: 新增 `docs/aegis_llm_integration_methodology.md`，把 Aegis 的 ProviderPreset 抽象、三类认证通道、OpenAI-Compatible 适配边界、requestId 可观测性、Manim 知识层、生成代码后处理、失败诊断清单和新 Provider 接入模板整理为项目方法论；同时补充 LiteLLM、LangChain、Vercel AI Gateway、Ollama、Continue、OpenAI Structured Outputs 与 Key 安全实践作为外部参考。README 的 Provider 章节增加该方法论文档入口，并在 `/Users/mahaoxuan/Desktop/AI产品经理/大模型接入方法论与Aegis开发日志.md` 保留跨项目沉淀版。
+- 方案原因: 模型接入的核心风险不是单次 API 调通，而是长期可维护性：Provider 可替换、认证不混乱、错误可诊断、输出可解析、领域知识可迭代。把方法论固化到仓库文档，能让后续接入本地模型、聚合网关或新厂商时按同一清单推进。
+- 下次识别与避免: 新增 Provider 前先按方法论文档中的模板补齐 preset、认证来源、endpoint 规范化、no-render 验证、最小 render 验证和日志证据；遇到 `connection refused`、`401/403`、`404`、渲染失败时按诊断清单定位，不要直接归因于 prompt 或 Key。
+- 结果与经验: 项目库现在有一份可演进的大模型接入方法论，既记录本机 Codex/8317/Manim 经验，也吸收开源工具的 provider abstraction、fallback、local OpenAI-compatible、structured output 和 key safety 思路。

@@ -198,6 +198,8 @@ curl "http://127.0.0.1:8000/api/bugs/recent?requestId=<你的ID>&limit=20"
 
 Web 端只会把 API Key 用在当前 `/api/generate` 请求中；不会写入 `.env`、日志或仓库。诊断日志只记录 Provider、模型、Endpoint 和 requestId。
 
+模型接入的设计原则、Provider 选型矩阵、失败诊断清单与开源方案参考见：[Aegis 大模型接入方法论](docs/aegis_llm_integration_methodology.md)。
+
 ## 常见问题
 
 - `curl: (7) Failed to connect 127.0.0.1:8000`

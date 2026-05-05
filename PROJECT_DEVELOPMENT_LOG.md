@@ -1,6 +1,6 @@
 # Aegis-Manim 项目开发日志（总览）
 
-最后更新：2026-05-05 14:18:07 CST  
+最后更新：2026-05-05 17:16:46 CST
 文件位置：`/Users/mahaoxuan/Desktop/AI产品经理/实验探索/vibe/manim-main/PROJECT_DEVELOPMENT_LOG.md`
 
 ## 1. 文档目的
@@ -97,6 +97,13 @@
 - `core/manim_agent.py` 新增 `load_system_prompt()`，统一拼接基础 prompt 与 Manim 知识包。
 - Web 与 CLI 两条生成链路共用同一份增强 prompt，降低模型生成过期 API、LaTeX 依赖代码、不可渲染布局的概率。
 
+### 阶段 M：大模型接入方法论沉淀（2026-05-05）
+
+- 新增 `docs/aegis_llm_integration_methodology.md`。
+- 将本项目已验证的 ProviderPreset、OpenAI-Compatible 适配、本地 Codex CLI 登录态、旧 8317 本地代理、Key 安全、requestId 可观测性、Manim 知识层和生成代码后处理沉淀为统一方法论。
+- 补充 LiteLLM、LangChain、Vercel AI Gateway、Ollama、Continue、OpenAI Structured Outputs 等开源/官方方案中的可借鉴模式。
+- README Provider 章节增加方法论文档入口。
+
 ## 4. 关键问题复盘（高影响）
 
 ### 问题 1：模型调用失败但前端提示过于笼统
@@ -141,6 +148,13 @@
 - 方案：新增 `codex-cli` 本机登录态 provider；新增 Manim 语法知识包并注入生成链路；保留运行时兼容修复和 requestId 诊断链路。
 - 预防：本机开发优先使用 `codex-cli`；升级 Manim 或引入新社区方案时同步更新 `prompts/manim_knowledge_pack.md` 并跑生成/渲染冒烟。
 
+### 问题 7：模型接入经验分散，新增 Provider 易重复踩坑
+
+- 现象：Provider、Key、Base URL、本地代理、Codex CLI、输出解析和 Manim 语法经验分散在代码与流水日志中。
+- 根因：缺少一份从架构原则到接入模板的 durable 方法论文档。
+- 方案：建立 `docs/aegis_llm_integration_methodology.md`，把项目经验和开源方案统一沉淀。
+- 预防：后续新增 Provider 或本地模型服务时，先按方法论文档补齐 preset、认证、endpoint、验证和日志记录。
+
 ## 5. 当前状态（截至 2026-05-05）
 
 - CLI 与 Web 两条核心链路可用。
@@ -149,16 +163,18 @@
 - 已具备多 Provider 适配层，可切换智谱、OpenAI-Compatible、MiniMax、旧本地代理与本地 Codex CLI 登录态。
 - `codex-cli` 真实链路已验证：Web 请求生成并渲染成功，requestId `20260505-141202-0070da25`。
 - 已具备 Manim 语法知识包，生成前注入本地 ManimCE 0.19.2 与官方/社区稳定写法约束。
+- 已具备大模型接入方法论文档，覆盖 Provider 抽象、认证边界、OpenAI-Compatible、本地模型/代理、结构化输出和失败诊断。
 - 文档已更新到可开源协作状态。
 - `v0.1.0` 已发布。
 
 ## 6. 下一阶段优先级
 
 1. 将 Manim 知识包升级为可检索资料层：官方文档、精选社区样例、失败案例和修复策略分层管理。
-2. 增加按 requestId 的“一键导出诊断包”。
-3. 增加 Web 端“最近失败记录”可视化面板。
-4. 补充数学/经济学常见讲解模板库。
-5. 增加关键 API 的轻量冒烟测试，并覆盖 `codex-cli` no-render 路径。
+2. 增加 Provider health-check：区分 CLI 登录态、HTTP 本地代理、远程 API Key、OpenAI/Anthropic-compatible endpoint。
+3. 增加按 requestId 的“一键导出诊断包”。
+4. 增加 Web 端“最近失败记录”可视化面板。
+5. 补充数学/经济学常见讲解模板库。
+6. 增加关键 API 的轻量冒烟测试，并覆盖 `codex-cli` no-render 路径。
 
 ## 7. 日志维护规范
 
@@ -178,6 +194,7 @@
 ## 8. 关联文件
 
 - `README.md`
+- `docs/aegis_llm_integration_methodology.md`
 - `core/web_app.py`
 - `core/manim_agent.py`
 - `core/llm_providers.py`
