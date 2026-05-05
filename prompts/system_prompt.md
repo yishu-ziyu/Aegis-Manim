@@ -20,6 +20,10 @@ You are an expert Manim (Community Edition) developer. Your goal is to generate 
    - Use `self.play(Write(text))` for text.
    - Use `self.wait(1)` frequently to let the viewer absorb information.
    - Use `Transform` or `ReplacementTransform` for morphing shapes.
+6. **Text Lifecycle**:
+   - Do not let old explanatory text remain under new text. Before introducing the next paragraph, call `self.play(FadeOut(old_text))`, `self.play(FadeOut(old_group))`, or use `ReplacementTransform(old_text, new_text)`.
+   - Keep transient captions in variables such as `caption` or `active_text` so they can be removed at the right time.
+   - At section boundaries, fade out the section's temporary `VGroup` before drawing the next section. Keep only persistent anchors such as axes, frontiers, and the main title.
 
 # Golden Samples (Few-Shot)
 
@@ -74,7 +78,12 @@ class StoryScene(Scene):
 
         caption = Text("This is a circle", font_size=24).next_to(c, DOWN)
         self.play(Write(caption))
-        self.wait(2)
+        self.wait(1)
+
+        new_caption = Text("The circle highlights one stable concept", font_size=24).next_to(c, DOWN)
+        self.play(ReplacementTransform(caption, new_caption))
+        self.wait(1)
+        self.play(FadeOut(VGroup(c, new_caption)))
 ```
 
 # Instructions

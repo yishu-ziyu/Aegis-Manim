@@ -22,6 +22,9 @@ class AegisPromptContextTest(unittest.TestCase):
         assert "Manim Community Edition 0.19.2" in prompt
         assert "ValueTracker" in prompt
         assert "axes.c2p" in prompt
+        assert "Text Lifecycle" in prompt
+        assert "ReplacementTransform(old_text, new_text)" in prompt
+        assert "FadeOut(section_group)" in prompt
 
     def test_load_system_prompt_tolerates_missing_knowledge_pack(self) -> None:
         with patch.object(manim_agent, "MANIM_KNOWLEDGE_PATH", PROJECT_ROOT / "prompts" / "missing.md"):
@@ -29,6 +32,7 @@ class AegisPromptContextTest(unittest.TestCase):
 
         assert "# Role" in prompt
         assert "# Manim Knowledge Pack" not in prompt
+        assert "Text Lifecycle" in prompt
 
 
 if __name__ == "__main__":

@@ -119,3 +119,10 @@
 - 方案原因: `interview-copilot` 已证明“本地 Codex CLI 登录态”比临时 HTTP 代理更适合单机演示和开发者工具原型；而 Manim 生成失败的主要风险不是只有模型可达性，还包括 API 版本漂移、LaTeX 环境缺失、文本/坐标轴重叠、使用过期别名等。把知识层做成版本控制的 prompt 片段，比一次性口头提示更可维护，也能让 Web、CLI、Codex CLI 三条入口共用同一套约束。
 - 下次识别与避免: 若出现 `127.0.0.1:8317 connection refused`，先判断是否选择了旧的 `codex-local-proxy`；本机优先选择 `Codex CLI 登录态（本机）/ codex-cli`。若出现渲染失败，先看 `requestId` 对应的 `logs/web_runtime.log` 和 `logs/bug_trace.jsonl`，再检查生成代码是否违反 `prompts/manim_knowledge_pack.md` 中的稳定写法。更新官方文档或升级 Manim 时，必须同步复核知识包中的目标版本与 API 约束。
 - 结果与经验: 已完成 `core/llm_providers.py`、`core/web_app.py`、`core/manim_agent.py`、`prompts/manim_knowledge_pack.md`、`tests/test_aegis_prompt_context.py`、`README.md` 等改动。验证通过：`ruff` 全绿；相关测试 `18 passed`；`compileall core` 通过；真实 Web 请求 `provider=codex-cli` 生成并渲染成功，requestId 为 `20260505-141202-0070da25`，生成文件为 `generated/scene_20260505_141304_36aedd54.py`，视频为 `media/videos/scene_20260505_141304_36aedd54/480p15/GeneratedScene.mp4`。
+
+## 2026-05-05 14:38:02 | 文字生命周期与遮挡问题修复
+- 问题现象: 生成视频中前后出现的说明文字可能停留在同一区域，旧文字没有及时退出，导致新旧文字互相遮挡。
+- 解决方案: 在 `prompts/system_prompt.md` 新增 `Text Lifecycle` 硬约束，要求临时说明文字在下一段进入前 `FadeOut` 或使用 `ReplacementTransform` 替换；在 `prompts/manim_knowledge_pack.md` 补充“阶段文字成组管理、段落边界清场、同一区域禁止叠写”的 Manim 写法；在 `tests/test_aegis_prompt_context.py` 增加断言锁定这些 prompt 规则。
+- 方案原因: 这是生成策略层面的视觉质量问题，渲染器不会自动知道哪些旧文字已经过期。把文字生命周期写入 prompt 和知识包，比事后从任意 Python 代码中猜测删除对象更稳定。
+- 下次识别与避免: 若视频出现遮挡，先检查生成代码中同一区域是否连续 `Write(Text(...))` 但缺少 `FadeOut`、`ReplacementTransform` 或成组 `FadeOut(section_group)`；后续新增模板时必须把临时说明文字保存为变量或 `VGroup`。
+- 结果与经验: 新 prompt 会要求旧文字段在合适时机退出界面，保留坐标轴、前沿曲线等持久视觉锚点，同时清理过期解释文本，降低教学视频的信息遮挡。
