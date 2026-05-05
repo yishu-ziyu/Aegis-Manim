@@ -1,6 +1,7 @@
-import os
+from __future__ import annotations
+
 import json
-import sys
+import os
 
 REGISTRY_PATH = "scene_registry.json"
 
@@ -8,11 +9,11 @@ def load_registry():
     if not os.path.exists(REGISTRY_PATH):
         # Fallback if running from core/ maybe? No, assuming running from root
         if os.path.exists(f"../{REGISTRY_PATH}"):
-            return json.load(open(f"../{REGISTRY_PATH}", "r", encoding="utf-8"))
+            return json.load(open(f"../{REGISTRY_PATH}", encoding="utf-8"))
         print(f"Error: Registry file '{REGISTRY_PATH}' not found.")
         return []
-    
-    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+
+    with open(REGISTRY_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 def clear_screen():
@@ -34,18 +35,18 @@ def main():
             print(f"[{item['id']}] {item['title']}")
             print(f"    - {item['description']}")
             print("-" * 30)
-            
+
         print("[Q] 退出 (Quit)")
         print("==================================================")
-        
+
         choice = input("\n请输入选项 (ID): ").strip().upper()
-        
+
         if choice == 'Q':
             print("感谢使用 Aegis，再见！")
             break
-            
+
         selected = next((item for item in registry if item['id'] == choice), None)
-        
+
         if selected:
             print(f"\n正在准备生成: {selected['title']}...")
             # Command: .venv/bin/manim -ql [file_path] [class_name]

@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import argparse
 import ast
-import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from urllib import error, request
+
+from llm_providers import (
+    DEFAULT_MODEL,
+    DEFAULT_PROVIDER,
+    DEFAULT_ZHIPU_ENDPOINT,
+    generate_code_with_provider,
+    normalize_chat_completions_endpoint,
+    resolve_provider,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = PROJECT_ROOT / "prompts" / "system_prompt.md"
-DEFAULT_ZHIPU_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-DEFAULT_MODEL = "glm-5"
-LATEX_AVAILABLE = bool(shutil.which("latex")) and bool(shutil.which("dvisvgm"))
+MANIM_KNOWLEDGE_PATH = PROJECT_ROOT / "prompts" / "manim_knowledge_pack.md"
 PLACEHOLDER_KEYS = {
     "your_api_key_here",
     "your-api-key-here",
@@ -24,9 +29,42 @@ PLACEHOLDER_KEYS = {
 }
 
 
+def detect_latex_available() -> bool:
+    if not shutil.which("latex") or not shutil.which("dvisvgm"):
+        return False
+
+    kpsewhich = shutil.which("kpsewhich")
+    if not kpsewhich:
+        return False
+
+    try:
+        result = subprocess.run(
+            [kpsewhich, "standalone.cls"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+LATEX_AVAILABLE = detect_latex_available()
+
+
 def read_file(path: Path) -> str:
     with path.open("r", encoding="utf-8") as f:
         return f.read()
+
+
+def load_system_prompt() -> str:
+    prompt = read_file(PROMPT_PATH).strip()
+    if MANIM_KNOWLEDGE_PATH.exists():
+        knowledge = read_file(MANIM_KNOWLEDGE_PATH).strip()
+        if knowledge:
+            return f"{prompt}\n\n{knowledge}\n"
+    return f"{prompt}\n"
 
 
 def load_dotenv(path: Path) -> None:
@@ -55,10 +93,27 @@ def generate_simulation_prompt(system_prompt: str, user_input: str) -> str:
 """
 
 
-def resolve_api_key(cli_api_key: str | None) -> str | None:
+def resolve_api_key(cli_api_key: str | None, provider_id: str | None = None) -> str | None:
     if cli_api_key and cli_api_key.strip():
         return cli_api_key.strip()
-    for env_name in ("BIGMODEL_API_KEY", "ZHIPUAI_API_KEY", "ZHIPU_API_KEY"):
+
+    provider = resolve_provider(provider_id)
+    env_names_by_provider = {
+        "zhipu": ("BIGMODEL_API_KEY", "ZHIPUAI_API_KEY", "ZHIPU_API_KEY"),
+        "openai": ("OPENAI_API_KEY",),
+        "codex-local-proxy": ("CODEX_API_KEY", "OPENAI_API_KEY"),
+        "minimax-token-global": ("MINIMAX_API_KEY",),
+        "minimax-token-cn": ("MINIMAX_API_KEY",),
+        "minimax-coding-global": ("MINIMAX_API_KEY",),
+        "minimax-coding-cn": ("MINIMAX_API_KEY",),
+        "minimax-openai-cn": ("MINIMAX_API_KEY",),
+    }
+    env_names = (
+        *env_names_by_provider.get(provider.id, ()),
+        "LLM_API_KEY",
+        "API_KEY",
+    )
+    for env_name in env_names:
         value = os.getenv(env_name)
         if value and value.strip():
             return value.strip()
@@ -66,24 +121,7 @@ def resolve_api_key(cli_api_key: str | None) -> str | None:
 
 
 def normalize_zhipu_endpoint(endpoint: str | None) -> str:
-    if endpoint is None:
-        return DEFAULT_ZHIPU_ENDPOINT
-
-    cleaned = endpoint.strip()
-    if not cleaned:
-        return DEFAULT_ZHIPU_ENDPOINT
-
-    cleaned = cleaned.rstrip("/")
-    lower = cleaned.lower()
-
-    if lower.endswith("/chat/completions"):
-        return cleaned
-    if lower == "https://open.bigmodel.cn/api":
-        return DEFAULT_ZHIPU_ENDPOINT
-    if lower.endswith("/paas/v4"):
-        return f"{cleaned}/chat/completions"
-
-    return cleaned
+    return normalize_chat_completions_endpoint(endpoint)
 
 
 def is_placeholder_api_key(value: str) -> bool:
@@ -143,33 +181,95 @@ def extract_python_only(code: str) -> str:
 
 
 def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
-    """
-    Apply compatibility patches for environments without LaTeX.
-    """
+    """Apply compatibility patches for generated Manim code."""
     patched = code
     notes: list[str] = []
 
-    if LATEX_AVAILABLE:
-        return patched, notes
+    def convert_line_config_to_kwargs(match: re.Match[str]) -> str:
+        plot_call = match.group(0)
 
-    candidate = re.sub(r"\bMathTex\s*\(", "Text(", patched)
+        def convert_config(config_match: re.Match[str]) -> str:
+            kwargs = []
+            for entry in config_match.group(1).split(","):
+                if ":" not in entry:
+                    return config_match.group(0)
+                key, value = entry.split(":", 1)
+                key = key.strip().strip("\"'")
+                value = value.strip()
+                if not key.startswith("stroke_"):
+                    return config_match.group(0)
+                kwargs.append(f"{key}={value}")
+            return ", ".join(kwargs)
+
+        return re.sub(r"line_config\s*=\s*\{([^{}\n]*)\}", convert_config, plot_call)
+
+    if not LATEX_AVAILABLE:
+        candidate = re.sub(r"\bMathTex\s*\(", "Text(", patched)
+        if candidate != patched:
+            notes.append("Replaced MathTex(...) with Text(...) because LaTeX is unavailable.")
+            patched = candidate
+
+        candidate = re.sub(r"(?<!\w)Tex\s*\(", "Text(", patched)
+        if candidate != patched:
+            notes.append("Replaced Tex(...) with Text(...) because LaTeX is unavailable.")
+            patched = candidate
+
+        candidate = re.sub(r"include_numbers\s*=\s*True", "include_numbers=False", patched)
+        if candidate != patched:
+            notes.append("Forced include_numbers=False to avoid LaTeX-dependent axis labels.")
+            patched = candidate
+
+        candidate = re.sub(r"([\"'])include_numbers\1\s*:\s*True", r"\1include_numbers\1: False", patched)
+        if candidate != patched:
+            notes.append("Forced axis_config include_numbers=False for LaTeX-free rendering.")
+            patched = candidate
+
+        brace_lines = []
+        changed_brace_label = False
+        for line in patched.splitlines():
+            stripped = line.rstrip()
+            trailing = line[len(stripped) :]
+            if "BraceLabel(" in stripped and "label_constructor" not in stripped and stripped.endswith(")"):
+                stripped = f"{stripped[:-1]}, label_constructor=Text)"
+                changed_brace_label = True
+            brace_lines.append(f"{stripped}{trailing}")
+        if changed_brace_label:
+            notes.append("Forced BraceLabel to use Text labels because LaTeX is unavailable.")
+            patched = "\n".join(brace_lines)
+
+        candidate = re.sub(
+            r"(?m)^([ \t]*)[A-Za-z_][A-Za-z0-9_]*\.add_coordinates\([^)]*\)[ \t]*(?:#.*)?$",
+            r"\1# Removed numeric axis labels because they require LaTeX.",
+            patched,
+        )
+        if candidate != patched:
+            notes.append("Removed add_coordinates() because numeric axis labels require LaTeX.")
+            patched = candidate
+
+    candidate = re.sub(r"\.get_h_line\s*\(", ".get_horizontal_line(", patched)
+    candidate = re.sub(r"\.get_v_line\s*\(", ".get_vertical_line(", candidate)
     if candidate != patched:
-        notes.append("Replaced MathTex(...) with Text(...) because LaTeX is unavailable.")
+        notes.append("Replaced Axes get_h_line/get_v_line with current Manim line helpers.")
         patched = candidate
 
-    candidate = re.sub(r"(?<!\w)Tex\s*\(", "Text(", patched)
+    candidate = re.sub(r"\.getHorizontalLine\s*\(", ".get_horizontal_line(", patched)
+    candidate = re.sub(r"\.getVerticalLine\s*\(", ".get_vertical_line(", candidate)
     if candidate != patched:
-        notes.append("Replaced Tex(...) with Text(...) because LaTeX is unavailable.")
+        notes.append("Replaced Axes camelCase line helpers with current Manim snake_case helpers.")
         patched = candidate
 
-    candidate = re.sub(r"include_numbers\s*=\s*True", "include_numbers=False", patched)
+    candidate = re.sub(r"axes\.plot\([\s\S]*?\)", convert_line_config_to_kwargs, patched)
     if candidate != patched:
-        notes.append("Forced include_numbers=False to avoid LaTeX-dependent axis labels.")
+        notes.append("Converted axes.plot line_config={...} to supported stroke keyword arguments.")
         patched = candidate
 
-    candidate = re.sub(r"([\"'])include_numbers\1\s*:\s*True", r"\1include_numbers\1: False", patched)
+    candidate = re.sub(
+        r"(?m)^([ \t]*)[A-Za-z_][A-Za-z0-9_]*\.set_style\([ \t]*stroke_dash[ \t]*=[ \t]*\[[^\]]*\][ \t]*\)[ \t]*(?:#.*)?$",
+        r"\1# Removed unsupported dashed-line style.",
+        patched,
+    )
     if candidate != patched:
-        notes.append("Forced axis_config include_numbers=False for LaTeX-free rendering.")
+        notes.append("Removed unsupported VMobject.set_style(stroke_dash=...) call.")
         patched = candidate
 
     direction_aliases = {
@@ -223,45 +323,48 @@ def generate_code_with_zhipu(
     user_prompt: str,
     temperature: float,
 ) -> str:
-    endpoint = normalize_zhipu_endpoint(endpoint)
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": temperature,
-    }
-
-    req = request.Request(
-        endpoint,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
+    code, _provider, _resolved_endpoint = generate_code_with_provider(
+        provider_id="zhipu",
+        api_key=api_key,
+        base_url=None,
+        endpoint=endpoint,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=temperature,
     )
+    return code
 
-    try:
-        with request.urlopen(req, timeout=120) as resp:
-            body = resp.read().decode("utf-8")
-    except error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Zhipu API HTTP {exc.code}: {detail}") from exc
-    except error.URLError as exc:
-        raise RuntimeError(f"Cannot reach Zhipu API: {exc}") from exc
 
-    parsed = json.loads(body)
-    if isinstance(parsed, dict) and "error" in parsed:
-        raise RuntimeError(f"Zhipu API error: {parsed['error']}")
-    return extract_assistant_text(parsed)
+def generate_code_with_llm(
+    *,
+    provider_id: str,
+    api_key: str,
+    base_url: str | None,
+    endpoint: str | None,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+) -> tuple[str, str, str]:
+    code, provider, resolved_endpoint = generate_code_with_provider(
+        provider_id=provider_id,
+        api_key=api_key,
+        base_url=base_url,
+        endpoint=endpoint,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=temperature,
+    )
+    return code, provider.name, resolved_endpoint
 
 
 def run_manim(file_path: str, scene_name: str) -> None:
     cmd = [
-        ".venv/bin/manim",
+        sys.executable,
+        "-m",
+        "manim",
         "-ql",
         "--media_dir",
         "media",
@@ -286,18 +389,31 @@ def main() -> int:
     )
     parser.add_argument(
         "--api-key",
-        help="Zhipu API key (or set BIGMODEL_API_KEY / ZHIPUAI_API_KEY / ZHIPU_API_KEY)",
+        help=(
+            "Provider API key. Env fallback: BIGMODEL_API_KEY, OPENAI_API_KEY, "
+            "MINIMAX_API_KEY, LLM_API_KEY depending on --provider."
+        ),
     )
     parser.add_argument("--llm_key", help="Backward-compatible alias for --api-key")
+    parser.add_argument(
+        "--provider",
+        default=os.getenv("AEGIS_LLM_PROVIDER", DEFAULT_PROVIDER),
+        help="LLM provider id, e.g. zhipu, openai, minimax-token-cn, custom-openai.",
+    )
     parser.add_argument(
         "--model",
         default=os.getenv("BIGMODEL_MODEL", DEFAULT_MODEL),
         help=f"Model name (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
+        "--base-url",
+        default=os.getenv("AEGIS_LLM_BASE_URL", ""),
+        help="Provider base URL, e.g. https://api.openai.com/v1 or a local compatible proxy.",
+    )
+    parser.add_argument(
         "--endpoint",
         default=os.getenv("BIGMODEL_ENDPOINT", DEFAULT_ZHIPU_ENDPOINT),
-        help="Chat completions endpoint (default: /paas/v4/chat/completions)",
+        help="Backward-compatible OpenAI-compatible chat completions endpoint.",
     )
     parser.add_argument(
         "--temperature",
@@ -322,7 +438,7 @@ def main() -> int:
     )
 
     args = parser.parse_args()
-    system_prompt = read_file(PROMPT_PATH)
+    system_prompt = load_system_prompt()
 
     if args.simulate:
         full_prompt = generate_simulation_prompt(system_prompt, args.prompt)
@@ -345,27 +461,32 @@ def main() -> int:
                 break
         code = "\n".join(lines)
     else:
-        api_key = resolve_api_key(args.api_key or args.llm_key)
-        if not api_key:
+        provider = resolve_provider(args.provider)
+        api_key = resolve_api_key(args.api_key or args.llm_key, provider.id)
+        if provider.requires_api_key and not api_key:
             print(
-                "Missing API key. Set BIGMODEL_API_KEY (or ZHIPUAI_API_KEY / ZHIPU_API_KEY), "
+                f"Missing API key for {provider.name}. Set provider env key "
+                "(BIGMODEL_API_KEY / OPENAI_API_KEY / MINIMAX_API_KEY / LLM_API_KEY) "
                 "or pass --api-key.",
             )
             return 1
-        if is_placeholder_api_key(api_key):
+        if api_key and is_placeholder_api_key(api_key):
             print(
                 "Detected placeholder API key. Please edit your local .env and set a real key.",
             )
             return 1
         try:
-            code = generate_code_with_zhipu(
-                api_key=api_key,
-                endpoint=normalize_zhipu_endpoint(args.endpoint),
+            code, provider_name, resolved_endpoint = generate_code_with_llm(
+                provider_id=provider.id,
+                api_key=api_key or "",
+                base_url=args.base_url or None,
+                endpoint=args.endpoint if provider.id == "zhipu" else None,
                 model=args.model,
                 system_prompt=system_prompt,
                 user_prompt=args.prompt,
                 temperature=args.temperature,
             )
+            print(f"Provider: {provider_name} ({resolved_endpoint})")
         except Exception as exc:  # pragma: no cover - network errors are environment-specific.
             print(f"Failed to generate code from model: {exc}")
             return 1

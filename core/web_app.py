@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 import threading
 from datetime import datetime
 from glob import glob
@@ -15,25 +16,25 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+from llm_providers import DEFAULT_PROVIDER, provider_presets_for_ui, resolve_provider
 from manim_agent import (
     DEFAULT_MODEL,
     DEFAULT_ZHIPU_ENDPOINT,
-    PROMPT_PATH,
     PROJECT_ROOT,
     apply_runtime_compatibility_fixes,
     extract_python_only,
-    generate_code_with_zhipu,
+    generate_code_with_llm,
     is_placeholder_api_key,
-    normalize_zhipu_endpoint,
-    read_file,
+    load_system_prompt,
 )
 
-SYSTEM_PROMPT = read_file(PROMPT_PATH)
+SYSTEM_PROMPT = load_system_prompt()
 GENERATED_DIR = PROJECT_ROOT / "generated"
 RUNTIME_LOG_DIR = PROJECT_ROOT / "logs"
 RUNTIME_LOG_PATH = RUNTIME_LOG_DIR / "web_runtime.log"
 BUG_LOG_PATH = RUNTIME_LOG_DIR / "bug_trace.jsonl"
-APP_VERSION = "web_app_v20260215_4"
+APP_VERSION = "web_app_v20260429_1"
+MAX_RENDER_ATTEMPTS = 3
 VIDEO_CACHE: dict[str, Path] = {}
 VIDEO_CACHE_LOCK = threading.Lock()
 
@@ -142,7 +143,9 @@ def detect_scene_name(code: str, fallback: str) -> str:
 
 def render_scene(scene_file: Path, scene_name: str) -> None:
     cmd = [
-        str(PROJECT_ROOT / ".venv" / "bin" / "manim"),
+        sys.executable,
+        "-m",
+        "manim",
         "-ql",
         "--media_dir",
         "media",
@@ -208,6 +211,7 @@ def json_error(
 
 
 def make_index_html() -> str:
+    provider_config_json = json.dumps(provider_presets_for_ui(), ensure_ascii=False)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -382,6 +386,7 @@ def make_index_html() -> str:
     }}
 
     input,
+    select,
     textarea {{
       width: 100%;
       border: 1.5px solid rgba(46, 30, 14, 0.24);
@@ -402,6 +407,7 @@ def make_index_html() -> str:
     }}
 
     input:focus,
+    select:focus,
     textarea:focus {{
       border-color: var(--accent-2);
       box-shadow: 0 0 0 3px rgba(31, 136, 118, 0.2);
@@ -418,6 +424,37 @@ def make_index_html() -> str:
       display: grid;
       grid-template-columns: 1fr auto;
       gap: 10px;
+    }}
+
+    .provider-meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      color: #5f4d3a;
+      font-size: 0.82rem;
+      line-height: 1.4;
+    }}
+
+    .provider-pill {{
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px dashed rgba(10, 53, 87, 0.25);
+      padding: 4px 8px;
+      background: rgba(255, 255, 255, 0.46);
+      font-family: "JetBrains Mono", monospace;
+      color: #173452;
+    }}
+
+    .provider-doc {{
+      color: #0a527f;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(10, 82, 127, 0.35);
+    }}
+
+    .provider-doc.hidden {{
+      display: none;
     }}
 
     .tiny-btn,
@@ -695,12 +732,23 @@ def make_index_html() -> str:
 
       <form id="generate-form" class="form-wrap">
         <div class="field">
-          <label for="apiKey">智谱 API Key</label>
+          <label for="provider">模型服务</label>
+          <select id="provider" name="provider"></select>
+          <div class="provider-meta">
+            <span id="providerRegion" class="provider-pill">-</span>
+            <span id="providerProtocol" class="provider-pill">-</span>
+            <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
+          </div>
+          <div id="providerHelp" class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。</div>
+        </div>
+
+        <div id="apiKeyField" class="field">
+          <label id="apiKeyLabel" for="apiKey">API Key</label>
           <div class="key-row">
-            <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" required />
+            <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" />
             <button id="toggleKey" class="tiny-btn" type="button">显示</button>
           </div>
-          <div class="help">如果报 401，请先确认 Key 未过期且有可用额度。</div>
+          <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
         </div>
 
         <div class="field">
@@ -724,9 +772,10 @@ def make_index_html() -> str:
             <label for="temperature">Temperature (0-1)</label>
             <input id="temperature" name="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
           </div>
-          <div class="field">
-            <label for="endpoint">API Endpoint</label>
-            <input id="endpoint" name="endpoint" value="{DEFAULT_ZHIPU_ENDPOINT}" />
+          <div id="baseUrlField" class="field">
+            <label for="baseUrl">Base URL</label>
+            <input id="baseUrl" name="baseUrl" value="{DEFAULT_ZHIPU_ENDPOINT}" />
+            <div class="help">填根地址即可；如果粘贴 /chat/completions 或 /messages，后端会自动规范化。</div>
           </div>
         </div>
 
@@ -773,6 +822,9 @@ def make_index_html() -> str:
   </main>
 
   <script>
+    const PROVIDER_CONFIG = {provider_config_json};
+    const PROVIDERS = PROVIDER_CONFIG.providers || {{}};
+    const REGION_LABELS = PROVIDER_CONFIG.regionLabels || {{}};
     const form = document.getElementById("generate-form");
     const submitBtn = document.getElementById("submitBtn");
     const statusBox = document.getElementById("statusBox");
@@ -784,8 +836,89 @@ def make_index_html() -> str:
     const videoPlayer = document.getElementById("videoPlayer");
     const toggleKey = document.getElementById("toggleKey");
     const apiKeyInput = document.getElementById("apiKey");
+    const apiKeyField = document.getElementById("apiKeyField");
     const warningBox = document.getElementById("warningBox");
     const copyCodeBtn = document.getElementById("copyCodeBtn");
+    const providerSelect = document.getElementById("provider");
+    const providerRegion = document.getElementById("providerRegion");
+    const providerProtocol = document.getElementById("providerProtocol");
+    const providerDoc = document.getElementById("providerDoc");
+    const providerHelp = document.getElementById("providerHelp");
+    const apiKeyLabel = document.getElementById("apiKeyLabel");
+    const apiKeyHelp = document.getElementById("apiKeyHelp");
+    const modelInput = document.getElementById("model");
+    const baseUrlInput = document.getElementById("baseUrl");
+    const baseUrlField = document.getElementById("baseUrlField");
+
+    function groupProviderIds() {{
+      const groups = {{}};
+      Object.entries(PROVIDERS).forEach(([id, preset]) => {{
+        const region = preset.region || "custom";
+        if (!groups[region]) groups[region] = [];
+        groups[region].push(id);
+      }});
+      return groups;
+    }}
+
+    function renderProviderOptions() {{
+      providerSelect.replaceChildren();
+      const groups = groupProviderIds();
+      ["global", "cn", "coding", "local", "custom"].forEach((region) => {{
+        const ids = groups[region] || [];
+        if (!ids.length) return;
+        const optgroup = document.createElement("optgroup");
+        optgroup.label = REGION_LABELS[region] || region;
+        ids.forEach((id) => {{
+          const option = document.createElement("option");
+          option.value = id;
+          option.textContent = PROVIDERS[id].name || id;
+          optgroup.appendChild(option);
+        }});
+        providerSelect.appendChild(optgroup);
+      }});
+      providerSelect.value = localStorage.getItem("aegis.provider") || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
+      if (!PROVIDERS[providerSelect.value]) {{
+        providerSelect.value = PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
+      }}
+    }}
+
+    function activePreset() {{
+      return PROVIDERS[providerSelect.value] || PROVIDERS[PROVIDER_CONFIG.defaultProvider] || {{}};
+    }}
+
+    function updateProviderUI(keepModel = false) {{
+      const preset = activePreset();
+      providerRegion.textContent = REGION_LABELS[preset.region] || preset.region || "Provider";
+      providerProtocol.textContent = preset.apiType || "-";
+      providerDoc.href = preset.doc || "#";
+      providerDoc.classList.toggle("hidden", !preset.doc);
+      providerHelp.textContent = `${{preset.name || providerSelect.value}} · ${{preset.apiType || "compatible"}} · 模型 ID 可手动改写。`;
+      apiKeyLabel.textContent = `${{preset.name || "Provider"}} API Key`;
+      apiKeyInput.placeholder = preset.apiKeyPlaceholder || "API Key...";
+      apiKeyInput.required = Boolean(preset.requiresApiKey);
+      const usesCodexCli = preset.apiType === "codex-cli";
+      apiKeyField.style.display = usesCodexCli ? "none" : "";
+      baseUrlField.style.display = usesCodexCli ? "none" : "";
+      apiKeyHelp.textContent = preset.requiresApiKey
+        ? "Key 仅用于本次请求，不落盘；如果报 401，请确认 Key 未过期且有可用额度。"
+        : usesCodexCli
+          ? "使用本机 codex login 登录态，不需要在页面粘贴 API Key。"
+          : "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。";
+
+      const savedBaseUrl = localStorage.getItem(`aegis.baseUrl.${{providerSelect.value}}`);
+      baseUrlInput.value = usesCodexCli ? "" : savedBaseUrl || preset.baseURL || "";
+      baseUrlInput.placeholder = preset.baseURL || "https://api.example.com/v1";
+
+      const savedModel = localStorage.getItem(`aegis.model.${{providerSelect.value}}`);
+      if (!keepModel || !modelInput.value.trim()) {{
+        modelInput.value = savedModel || preset.defaultModel || "";
+      }}
+    }}
+
+    providerSelect.addEventListener("change", () => {{
+      localStorage.setItem("aegis.provider", providerSelect.value);
+      updateProviderUI(false);
+    }});
 
     function setStatus(message, type = "") {{
       statusBox.className = "status-box" + (type ? " " + type : "");
@@ -829,14 +962,18 @@ def make_index_html() -> str:
       videoPlayer.load();
 
       const payload = {{
+        provider: providerSelect.value,
         apiKey: apiKeyInput.value.trim(),
         prompt: document.getElementById("prompt").value.trim(),
-        model: document.getElementById("model").value.trim() || "{DEFAULT_MODEL}",
-        endpoint: document.getElementById("endpoint").value.trim() || "{DEFAULT_ZHIPU_ENDPOINT}",
+        model: modelInput.value.trim() || activePreset().defaultModel || "{DEFAULT_MODEL}",
+        baseUrl: baseUrlInput.value.trim(),
+        endpoint: baseUrlInput.value.trim(),
         sceneName: document.getElementById("sceneName").value.trim() || "GeneratedScene",
         temperature: Number(document.getElementById("temperature").value || 0.2),
         noRender: document.getElementById("noRender").checked
       }};
+      localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
+      localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
 
       try {{
         let requestId = "-";
@@ -857,6 +994,9 @@ def make_index_html() -> str:
         codeOutput.textContent = data.code || "# 未返回代码";
         sceneTag.textContent = "Scene: " + (data.sceneName || "-");
         fileTag.textContent = "File: " + (data.codeFile || "-");
+        if (data.providerName) {{
+          sceneTag.textContent += " · " + data.providerName;
+        }}
         setWarnings(data.warnings || []);
 
         if (data.videoId) {{
@@ -875,6 +1015,9 @@ def make_index_html() -> str:
         submitBtn.disabled = false;
       }}
     }});
+
+    renderProviderOptions();
+    updateProviderUI(false);
   </script>
 </body>
 </html>
@@ -890,7 +1033,10 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            append_runtime_log("CLIENT_DISCONNECT", f"json_response status={status} error={exc}")
 
     def _send_html(self, html: str) -> None:
         body = html.encode("utf-8")
@@ -990,11 +1136,12 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             return
 
         prompt = str(payload.get("prompt", "")).strip()
+        provider_id = str(payload.get("provider", DEFAULT_PROVIDER)).strip() or DEFAULT_PROVIDER
+        provider = resolve_provider(provider_id)
         api_key = str(payload.get("apiKey", "")).strip()
-        model = str(payload.get("model", "")).strip() or DEFAULT_MODEL
-        endpoint = normalize_zhipu_endpoint(
-            str(payload.get("endpoint", "")).strip() or DEFAULT_ZHIPU_ENDPOINT
-        )
+        model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
+        base_url = str(payload.get("baseUrl", "")).strip()
+        endpoint = str(payload.get("endpoint", "")).strip()
         scene_name = safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
         no_render = bool(payload.get("noRender", False))
 
@@ -1005,8 +1152,12 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         temperature = max(0.0, min(1.0, temperature))
 
         request_context = {
+            "provider": provider.id,
+            "providerName": provider.name,
+            "apiType": provider.api_type,
             "model": model,
-            "endpoint": endpoint,
+            "baseUrl": base_url or provider.base_url,
+            "endpoint": endpoint or provider.base_url,
             "sceneNameInput": scene_name,
             "temperature": temperature,
             "noRender": no_render,
@@ -1033,8 +1184,8 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             self._send_json(status, err)
             return
 
-        if not api_key:
-            detail = "Please paste your own Zhipu API key in the form."
+        if provider.requires_api_key and not api_key:
+            detail = f"Please paste your own {provider.name} API key in the form."
             append_bug_log(
                 request_id=request_id,
                 stage="validation",
@@ -1071,120 +1222,186 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             self._send_json(status, err)
             return
 
-        notes: list[str] = []
-        try:
-            append_runtime_log(
-                "MODEL_REQUEST_START",
-                f"request_id={request_id} model={model} endpoint={endpoint}",
-            )
-            raw_code = generate_code_with_zhipu(
-                api_key=api_key,
-                endpoint=endpoint,
-                model=model,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=prompt,
-                temperature=temperature,
-            )
-            code = extract_python_only(raw_code)
-            code, notes = apply_runtime_compatibility_fixes(code)
-            if notes:
-                append_runtime_log(
-                    "COMPATIBILITY_FIX",
-                    f"request_id={request_id} {'; '.join(notes)}",
-                )
-            append_runtime_log(
-                "MODEL_REQUEST_OK",
-                f"request_id={request_id} model={model} chars={len(code)}",
-            )
-        except Exception as exc:
-            detail = str(exc)
-            append_runtime_log(
-                "MODEL_REQUEST_FAIL",
-                f"request_id={request_id} model={model} endpoint={endpoint} error={detail}",
-            )
-            append_bug_log(
-                request_id=request_id,
-                stage="model",
-                severity="error",
-                message="Model request failed",
-                detail=detail,
-                context=request_context,
-            )
-            status, err = json_error(
-                "Model request failed.",
-                status=HTTPStatus.BAD_GATEWAY,
-                detail=detail,
-                request_id=request_id,
-            )
-            self._send_json(status, err)
-            return
-
-        scene_name = detect_scene_name(code, scene_name)
-
         ensure_generated_dir()
-        filename = f"scene_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}.py"
-        scene_file = GENERATED_DIR / filename
-        scene_file.write_text(code.strip() + "\n", encoding="utf-8")
+        resolved_endpoint = endpoint or provider.base_url
+        provider_name = provider.name
+        max_attempts = 1 if no_render else MAX_RENDER_ATTEMPTS
+        retry_feedback = ""
+        last_code = ""
+        last_scene_file: Path | None = None
+        last_scene_name = scene_name
+        last_notes: list[str] = []
 
-        response: dict[str, Any] = {
-            "ok": True,
-            "requestId": request_id,
-            "sceneName": scene_name,
-            "code": code,
-            "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
-        }
-        if notes:
-            response["warnings"] = notes
+        for attempt in range(1, max_attempts + 1):
+            effective_prompt = prompt
+            if retry_feedback:
+                effective_prompt = (
+                    f"{prompt}\n\n"
+                    "# Previous render failed\n"
+                    "Regenerate the complete Manim scene. Avoid LaTeX-dependent classes and hidden LaTeX helpers. "
+                    "Use Text instead of Tex/MathTex and set BraceLabel(label_constructor=Text) when using labels. "
+                    "Avoid unsupported Manim APIs from the error below.\n"
+                    f"{retry_feedback[-1800:]}"
+                )
 
-        if no_render:
-            response["message"] = "Code generated successfully. Render skipped."
-            append_runtime_log(
-                "GENERATE_SKIP_RENDER",
-                f"request_id={request_id} file={scene_file.name} scene={scene_name}",
-            )
-            self._send_json(HTTPStatus.OK, response)
-            return
+            try:
+                append_runtime_log(
+                    "MODEL_REQUEST_START",
+                    (
+                        f"request_id={request_id} attempt={attempt}/{max_attempts} "
+                        f"provider={provider.id} model={model} endpoint={resolved_endpoint}"
+                    ),
+                )
+                raw_code, provider_name, resolved_endpoint = generate_code_with_llm(
+                    provider_id=provider.id,
+                    api_key=api_key,
+                    base_url=base_url or None,
+                    endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
+                    model=model,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=effective_prompt,
+                    temperature=temperature,
+                )
+                request_context["endpoint"] = resolved_endpoint
+                code = extract_python_only(raw_code)
+                code, notes = apply_runtime_compatibility_fixes(code)
+                if notes:
+                    append_runtime_log(
+                        "COMPATIBILITY_FIX",
+                        f"request_id={request_id} attempt={attempt}/{max_attempts} {'; '.join(notes)}",
+                    )
+                append_runtime_log(
+                    "MODEL_REQUEST_OK",
+                    (
+                        f"request_id={request_id} attempt={attempt}/{max_attempts} "
+                        f"provider={provider.id} model={model} chars={len(code)}"
+                    ),
+                )
+            except Exception as exc:
+                detail = str(exc)
+                append_runtime_log(
+                    "MODEL_REQUEST_FAIL",
+                    (
+                        f"request_id={request_id} attempt={attempt}/{max_attempts} "
+                        f"provider={provider.id} model={model} endpoint={resolved_endpoint} error={detail}"
+                    ),
+                )
+                append_bug_log(
+                    request_id=request_id,
+                    stage="model",
+                    severity="error",
+                    message="Model request failed",
+                    detail=detail,
+                    context={**request_context, "attempt": attempt, "maxAttempts": max_attempts},
+                )
+                status, err = json_error(
+                    "Model request failed.",
+                    status=HTTPStatus.BAD_GATEWAY,
+                    detail=detail,
+                    request_id=request_id,
+                )
+                self._send_json(status, err)
+                return
 
-        try:
-            render_scene(scene_file, scene_name)
-            video_path = find_latest_video(scene_file, scene_name)
-            if video_path is None:
-                raise RuntimeError("Render completed but output video was not found.")
-            response["videoId"] = register_video(video_path)
-            response["message"] = "Code generated and video rendered successfully."
-            append_runtime_log(
-                "RENDER_OK",
-                f"request_id={request_id} file={scene_file.name} scene={scene_name} video={video_path}",
-            )
-            self._send_json(HTTPStatus.OK, response)
-        except Exception as exc:
-            detail = str(exc)
-            append_runtime_log(
-                "RENDER_FAIL",
-                f"request_id={request_id} file={scene_file.name} scene={scene_name} error={detail}",
-            )
-            append_bug_log(
-                request_id=request_id,
-                stage="render",
-                severity="error",
-                message="Render failed",
-                detail=detail,
-                context={
-                    **request_context,
-                    "sceneNameDetected": scene_name,
-                    "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
-                    "warnings": notes,
-                },
-            )
-            status, err = json_error(
-                "Render failed.",
-                status=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=detail,
-                request_id=request_id,
-            )
-            err["code"] = code
-            err["codeFile"] = str(scene_file.relative_to(PROJECT_ROOT))
-            self._send_json(status, err)
+            detected_scene_name = detect_scene_name(code, scene_name)
+            filename = f"scene_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}.py"
+            scene_file = GENERATED_DIR / filename
+            scene_file.write_text(code.strip() + "\n", encoding="utf-8")
+            last_code = code
+            last_scene_file = scene_file
+            last_scene_name = detected_scene_name
+            last_notes = notes
+
+            response: dict[str, Any] = {
+                "ok": True,
+                "requestId": request_id,
+                "provider": provider.id,
+                "providerName": provider_name,
+                "endpoint": resolved_endpoint,
+                "sceneName": detected_scene_name,
+                "code": code,
+                "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
+                "attempt": attempt,
+                "maxAttempts": max_attempts,
+            }
+            if notes:
+                response["warnings"] = notes
+
+            if no_render:
+                response["message"] = "Code generated successfully. Render skipped."
+                append_runtime_log(
+                    "GENERATE_SKIP_RENDER",
+                    f"request_id={request_id} file={scene_file.name} scene={detected_scene_name}",
+                )
+                self._send_json(HTTPStatus.OK, response)
+                return
+
+            try:
+                render_scene(scene_file, detected_scene_name)
+                video_path = find_latest_video(scene_file, detected_scene_name)
+                if video_path is None:
+                    raise RuntimeError("Render completed but output video was not found.")
+                response["videoId"] = register_video(video_path)
+                response["message"] = "Code generated and video rendered successfully."
+                if attempt > 1:
+                    response["message"] += f" Auto-retry succeeded on attempt {attempt}."
+                append_runtime_log(
+                    "RENDER_OK",
+                    (
+                        f"request_id={request_id} attempt={attempt}/{max_attempts} "
+                        f"file={scene_file.name} scene={detected_scene_name} video={video_path}"
+                    ),
+                )
+                self._send_json(HTTPStatus.OK, response)
+                return
+            except Exception as exc:
+                detail = str(exc)
+                append_runtime_log(
+                    "RENDER_FAIL",
+                    (
+                        f"request_id={request_id} attempt={attempt}/{max_attempts} "
+                        f"file={scene_file.name} scene={detected_scene_name} error={detail}"
+                    ),
+                )
+                append_bug_log(
+                    request_id=request_id,
+                    stage="render",
+                    severity="error",
+                    message="Render failed",
+                    detail=detail,
+                    context={
+                        **request_context,
+                        "attempt": attempt,
+                        "maxAttempts": max_attempts,
+                        "sceneNameDetected": detected_scene_name,
+                        "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
+                        "warnings": notes,
+                    },
+                )
+                if attempt < max_attempts:
+                    retry_feedback = detail
+                    append_runtime_log(
+                        "RENDER_RETRY",
+                        f"request_id={request_id} next_attempt={attempt + 1}/{max_attempts}",
+                    )
+                    continue
+
+                status, err = json_error(
+                    f"Render failed after {max_attempts} attempts.",
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    detail=detail,
+                    request_id=request_id,
+                )
+                err["attempt"] = attempt
+                err["maxAttempts"] = max_attempts
+                err["code"] = last_code
+                if last_scene_file is not None:
+                    err["codeFile"] = str(last_scene_file.relative_to(PROJECT_ROOT))
+                err["sceneName"] = last_scene_name
+                if last_notes:
+                    err["warnings"] = last_notes
+                self._send_json(status, err)
+                return
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Keep server logs concise and avoid accidentally printing user payloads.

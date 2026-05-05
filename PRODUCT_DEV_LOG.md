@@ -105,3 +105,17 @@
 - 方案原因: 文档应优先服务可执行落地和排障效率，减少新用户阅读成本与误操作。
 - 下次识别与避免: 后续每次功能变更后同步更新 README 的对应章节（命令、接口、日志、FAQ），并在发版前做一轮可执行性校验。
 - 结果与经验: README 与当前项目实现保持一致，使用和排障路径更清晰，适合对外开源展示。
+
+## 2026-02-28 08:43:00 | 项目开发日志总览文档建立
+- 问题现象: 当前仅有流水式日志，缺少一份适合对外协作阅读的阶段总览文档。
+- 解决方案: 新增 PROJECT_DEVELOPMENT_LOG.md，按目标-里程碑-问题复盘-当前状态-下一步计划组织内容。
+- 方案原因: 将细粒度记录和阶段总结分层管理，可兼顾开发追踪与对外沟通效率。
+- 下次识别与避免: 后续每次里程碑变更同步更新总览日志，每次排障细节继续写入 PRODUCT_DEV_LOG.md。
+- 结果与经验: 项目现在具备‘流水日志 + 总览日志’双轨记录体系，便于团队协作和开源展示。
+
+## 2026-05-05 14:18:07 | 本地 Codex CLI 接入与 Manim 语法知识层建设
+- 问题现象: Web 端选择 `Codex / 本地 OpenAI-Compatible 代理` 时请求 `http://127.0.0.1:8317/api/provider/antigravity/v1` 失败，页面显示 `Model request failed ... Connection refused`。进一步判断后发现 8317 是旧本地代理路径，当前机器没有对应服务监听；即使模型通道打通，生成质量仍取决于模型是否熟悉 Manim 官方语法、本地版本差异和社区成熟写法。
+- 解决方案: 参考 `interview-copilot` 的实现，将本机 `codex login` 登录态作为独立 provider 接入 Aegis：新增 `codex-cli` provider，后端通过 `codex -a never exec --ephemeral --ignore-rules --sandbox read-only --output-last-message ...` 调用本地 Codex CLI，不再依赖 8317 HTTP 代理，也不需要页面填写 API Key 或 Base URL。随后新增 `prompts/manim_knowledge_pack.md`，把本地 ManimCE `0.19.2`、`docs/source`、官方文档/示例和高信号测试样例中的稳定语法整理为可维护知识包，并通过 `load_system_prompt()` 注入 CLI 与 Web 两条生成链路。
+- 方案原因: `interview-copilot` 已证明“本地 Codex CLI 登录态”比临时 HTTP 代理更适合单机演示和开发者工具原型；而 Manim 生成失败的主要风险不是只有模型可达性，还包括 API 版本漂移、LaTeX 环境缺失、文本/坐标轴重叠、使用过期别名等。把知识层做成版本控制的 prompt 片段，比一次性口头提示更可维护，也能让 Web、CLI、Codex CLI 三条入口共用同一套约束。
+- 下次识别与避免: 若出现 `127.0.0.1:8317 connection refused`，先判断是否选择了旧的 `codex-local-proxy`；本机优先选择 `Codex CLI 登录态（本机）/ codex-cli`。若出现渲染失败，先看 `requestId` 对应的 `logs/web_runtime.log` 和 `logs/bug_trace.jsonl`，再检查生成代码是否违反 `prompts/manim_knowledge_pack.md` 中的稳定写法。更新官方文档或升级 Manim 时，必须同步复核知识包中的目标版本与 API 约束。
+- 结果与经验: 已完成 `core/llm_providers.py`、`core/web_app.py`、`core/manim_agent.py`、`prompts/manim_knowledge_pack.md`、`tests/test_aegis_prompt_context.py`、`README.md` 等改动。验证通过：`ruff` 全绿；相关测试 `18 passed`；`compileall core` 通过；真实 Web 请求 `provider=codex-cli` 生成并渲染成功，requestId 为 `20260505-141202-0070da25`，生成文件为 `generated/scene_20260505_141304_36aedd54.py`，视频为 `media/videos/scene_20260505_141304_36aedd54/480p15/GeneratedScene.mp4`。
