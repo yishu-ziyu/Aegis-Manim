@@ -133,3 +133,10 @@
 - 方案原因: 模型接入的核心风险不是单次 API 调通，而是长期可维护性：Provider 可替换、认证不混乱、错误可诊断、输出可解析、领域知识可迭代。把方法论固化到仓库文档，能让后续接入本地模型、聚合网关或新厂商时按同一清单推进。
 - 下次识别与避免: 新增 Provider 前先按方法论文档中的模板补齐 preset、认证来源、endpoint 规范化、no-render 验证、最小 render 验证和日志证据；遇到 `connection refused`、`401/403`、`404`、渲染失败时按诊断清单定位，不要直接归因于 prompt 或 Key。
 - 结果与经验: 项目库现在有一份可演进的大模型接入方法论，既记录本机 Codex/8317/Manim 经验，也吸收开源工具的 provider abstraction、fallback、local OpenAI-compatible、structured output 和 key safety 思路。
+
+## 2026-05-05 23:47:00 | Vercel 子域名部署入口适配
+- 问题现象: Vercel 导入 `yishu-ziyu/Aegis-Manim` 后快速失败；用户正在阿里云 DNS 中准备添加 `manim.yishuziyu.cn`，但 DNS 只能指向已经可用的部署入口，不能替代应用部署。
+- 解决方案: 新增 `api/index.py` 的基础响应构造与裸 Function 入口；新增根目录 `app.py` 作为 Vercel Python 预设可识别的 FastAPI 网关，提供入口页、`/api/health` 和 `/api/generate` 的明确降级提示；新增 `vercel.json` 固定安装命令到最小 `requirements.txt`，避免 Vercel 入口安装完整 Manim 运行时；新增 `scripts/verify_vercel_gateway.py` 做轻量验证；README 增加 Vercel 公开入口说明。
+- 方案原因: Aegis-Manim 的完整 Web 服务是长运行 Python 进程，并依赖 Manim、ffmpeg、本地媒体目录和较长执行时间；Vercel 更适合作为公网入口/健康检查/轻量 API，不适合直接承载视频渲染后端。
+- 下次识别与避免: 遇到 Vercel 构建失败时，先检查是否存在 `api/` Function 入口、`vercel.json` 路由和最小依赖文件；绑定子域名前必须先确认 Vercel 项目部署成功，再回 DNS 添加 CNAME。
+- 结果与经验: Vercel 网关验证已通过：`./.venv/bin/python scripts/verify_vercel_gateway.py` 输出 `Vercel gateway verification passed.`；`py_compile` 通过；本地 `vercel build --yes` 已用于捕捉并修正 `api/**/*.py` Function 配置不匹配问题。后续可将 `manim.yishuziyu.cn` 指向 Vercel 网关，再为真实渲染后端单独部署 VPS/Render/Fly。

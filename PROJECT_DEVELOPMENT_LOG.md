@@ -155,6 +155,13 @@
 - 方案：建立 `docs/aegis_llm_integration_methodology.md`，把项目经验和开源方案统一沉淀。
 - 预防：后续新增 Provider 或本地模型服务时，先按方法论文档补齐 preset、认证、endpoint、验证和日志记录。
 
+### 问题 8：Vercel 子域名绑定前应用未部署成功
+
+- 现象：准备添加 `manim.yishuziyu.cn` DNS 记录时，Vercel 导入项目失败。
+- 根因：当前 Aegis Web 是长运行 Python 服务，Vercel Python 运行时需要 `api/` Function 入口；完整 Manim 渲染还依赖 ffmpeg、媒体目录和较长执行时间。
+- 方案：新增 FastAPI 形式的 Vercel 网关层，只承载入口页、`/api/health` 和渲染后端未部署提示；完整渲染后端继续规划 VPS/Render/Fly。
+- 预防：先让平台部署成功，再配置 DNS；不要把 DNS 解析当作部署本身。
+
 ## 5. 当前状态（截至 2026-05-05）
 
 - CLI 与 Web 两条核心链路可用。
@@ -164,6 +171,7 @@
 - `codex-cli` 真实链路已验证：Web 请求生成并渲染成功，requestId `20260505-141202-0070da25`。
 - 已具备 Manim 语法知识包，生成前注入本地 ManimCE 0.19.2 与官方/社区稳定写法约束。
 - 已具备大模型接入方法论文档，覆盖 Provider 抽象、认证边界、OpenAI-Compatible、本地模型/代理、结构化输出和失败诊断。
+- 已具备 Vercel 公开入口网关，可用于 `manim.yishuziyu.cn` 的第一阶段子域名展示；完整 Manim 渲染后端仍需独立部署。
 - 文档已更新到可开源协作状态。
 - `v0.1.0` 已发布。
 
@@ -175,6 +183,7 @@
 4. 增加 Web 端“最近失败记录”可视化面板。
 5. 补充数学/经济学常见讲解模板库。
 6. 增加关键 API 的轻量冒烟测试，并覆盖 `codex-cli` no-render 路径。
+7. 为真实视频渲染后端选择 VPS/Render/Fly 路线，并把 Vercel 网关接到该后端。
 
 ## 7. 日志维护规范
 
@@ -202,6 +211,10 @@
 - `core/bug_report.py`
 - `core/dev_log.py`
 - `scripts/web_server.sh`
+- `scripts/verify_vercel_gateway.py`
+- `app.py`
+- `api/index.py`
+- `vercel.json`
 - `PRODUCT_DEV_LOG.md`
 - `logs/web_runtime.log`
 - `logs/bug_trace.jsonl`
