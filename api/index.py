@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-APP_VERSION = "vercel_gateway_v20260505_1"
+APP_VERSION = "vercel_gateway_v20260506_1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_PATH = PROJECT_ROOT / "core"
 if str(CORE_PATH) not in sys.path:
