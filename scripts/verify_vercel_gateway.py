@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from importlib.util import find_spec
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -68,10 +67,9 @@ def main() -> int:
     assert status == 400
     assert missing_key["ok"] is False
 
-    if find_spec("fastapi"):
-        from app import app
+    from app import app
 
-        assert app.title == "Aegis-Manim Vercel Gateway"
+    assert callable(app)
 
     print("Vercel gateway verification passed.")
     return 0

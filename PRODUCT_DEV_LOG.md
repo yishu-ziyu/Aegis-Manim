@@ -168,3 +168,10 @@
 - 方案原因: 公开 Vercel 页面应只连接公网模型服务；本地代理属于下载项目后的本机能力，不能通过云端服务器访问。把限制放在 Vercel gateway 层可以保护线上入口，同时不破坏本地开发体验。
 - 下次识别与避免: 凡是让用户填写 URL 并由服务端请求的功能，都必须区分云端/本地边界；上线前至少测试 `127.0.0.1`、私网 IP、HTTP、合法 HTTPS 四类端点。
 - 结果与经验: 云端会在模型请求发出前阻止本机/内网模型端点；本地 Codex 能力继续通过 `cloudUnavailable` 标记展示并阻止云端提交。
+
+## 2026-05-06 21:55:00 | Vercel Runtime 去 FastAPI 原生依赖
+- 问题现象: `manim.yishuziyu.cn` 指向最新 deployment 后，`/api/health` 与 `/api/generate` 返回 `FUNCTION_INVOCATION_FAILED`。Vercel runtime 日志显示 `app.py` 导入 FastAPI 时缺少 `pydantic_core._pydantic_core` 原生模块。
+- 解决方案: 将根目录 `app.py` 改为零第三方依赖的 ASGI callable，直接复用 `api/index.py` 的 HTML、health 与 generate 逻辑；清空 Vercel `requirements.txt`，避免在轻量网关里安装 FastAPI/Pydantic 原生扩展；验证脚本改为检查 ASGI callable 可导入。
+- 方案原因: 当前 Vercel 层只需要公网入口和轻量 JSON/HTML 响应，FastAPI 对这个网关不是必要依赖。去掉原生依赖能降低 serverless runtime 不一致风险。
+- 下次识别与避免: Vercel 轻量入口优先使用标准库/纯 Python；如果必须引入带原生扩展的依赖，必须在生产域名上实际 curl 验证，而不是只看 build ready。
+- 结果与经验: 生产部署必须验证运行时请求；`vercel build` 成功不能证明 Python function import 成功。
