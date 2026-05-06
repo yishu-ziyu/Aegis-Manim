@@ -29,12 +29,13 @@ def main() -> int:
     assert "Generate Code" in html
     assert "Vercel 云端模式" in html
     assert "VERCEL · USER-KEY · CODE" in html
+    assert "Codex CLI 登录态（本机）（仅本地）" in html
     assert "云端无法访问你电脑上的 127.0.0.1 本地代理" in html
     assert "例如本地代理" not in html
 
     providers = public_provider_config()["providers"]
-    assert "codex-cli" not in providers
-    assert "codex-local-proxy" not in providers
+    assert providers["codex-cli"]["cloudUnavailable"] is True
+    assert providers["codex-local-proxy"]["cloudUnavailable"] is True
 
     status, missing_prompt = generate_manim_code_for_gateway({"prompt": ""})
     assert status == 400

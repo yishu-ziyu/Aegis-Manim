@@ -56,9 +56,18 @@ def build_generate_unavailable_payload() -> dict[str, object]:
 
 def public_provider_config() -> dict[str, object]:
     config = provider_presets_for_ui()
-    providers = dict(config.get("providers", {}))
+    providers = {
+        provider_id: dict(provider)
+        for provider_id, provider in dict(config.get("providers", {})).items()
+    }
     for provider_id in DISABLED_CLOUD_PROVIDERS:
-        providers.pop(provider_id, None)
+        provider = providers.get(provider_id)
+        if not provider:
+            continue
+        provider["name"] = f"{provider.get('name', provider_id)}（仅本地）"
+        provider["cloudUnavailable"] = True
+        provider["apiKeyPlaceholder"] = "仅本地 Aegis Web 可用"
+        provider["requiresApiKey"] = False
     return {**config, "providers": providers}
 
 
