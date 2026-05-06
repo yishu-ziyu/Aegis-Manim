@@ -147,6 +147,12 @@ def build_index_html() -> str:
         "Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。": (
             "Key 仅用于本次请求，不写入仓库；云端无法访问你电脑上的 127.0.0.1 本地代理。"
         ),
+        "使用本机 codex login 登录态，不需要在页面粘贴 API Key。": (
+            "本机登录态 Provider 仅在本地 Aegis Web 可用，Vercel 云端不会展示该选项。"
+        ),
+        "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。": (
+            "这个 Provider 可按网关要求选择是否填写 Key；云端只支持公网可访问服务。"
+        ),
         '<input id="noRender" name="noRender" type="checkbox" />': (
             '<input id="noRender" name="noRender" type="checkbox" checked disabled />'
         ),
