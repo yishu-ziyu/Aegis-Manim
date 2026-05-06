@@ -897,13 +897,19 @@ def make_index_html() -> str:
       apiKeyInput.placeholder = preset.apiKeyPlaceholder || "API Key...";
       apiKeyInput.required = Boolean(preset.requiresApiKey);
       const usesCodexCli = preset.apiType === "codex-cli";
+      const cloudUnavailable = Boolean(preset.cloudUnavailable);
       apiKeyField.style.display = usesCodexCli ? "none" : "";
       baseUrlField.style.display = usesCodexCli ? "none" : "";
-      apiKeyHelp.textContent = preset.requiresApiKey
-        ? "Key 仅用于本次请求，不落盘；如果报 401，请确认 Key 未过期且有可用额度。"
-        : usesCodexCli
-          ? "使用本机 codex login 登录态，不需要在页面粘贴 API Key。"
-          : "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。";
+      if (cloudUnavailable) {{
+        providerHelp.textContent = `${{preset.name || providerSelect.value}} · 仅本地可执行 · 下载项目后可用。`;
+        apiKeyHelp.textContent = "这个 Provider 是下载项目后在本地 Aegis Web 使用的选项；Vercel 云端只展示能力入口。";
+      }} else {{
+        apiKeyHelp.textContent = preset.requiresApiKey
+          ? "Key 仅用于本次请求，不落盘；如果报 401，请确认 Key 未过期且有可用额度。"
+          : usesCodexCli
+            ? "使用本机 codex login 登录态，不需要在页面粘贴 API Key。"
+            : "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。";
+      }}
 
       const savedBaseUrl = localStorage.getItem(`aegis.baseUrl.${{providerSelect.value}}`);
       baseUrlInput.value = usesCodexCli ? "" : savedBaseUrl || preset.baseURL || "";
@@ -953,6 +959,11 @@ def make_index_html() -> str:
 
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
+      const preset = activePreset();
+      if (preset.cloudUnavailable) {{
+        setStatus("这个 Provider 需要下载项目后在本地运行；Vercel 云端无法访问你的本机 Codex 或 127.0.0.1 服务。", "error");
+        return;
+      }}
       submitBtn.disabled = true;
       setStatus("请求已发送，正在生成代码...", "");
       setWarnings([]);

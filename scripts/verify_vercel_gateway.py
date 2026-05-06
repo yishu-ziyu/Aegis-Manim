@@ -30,6 +30,8 @@ def main() -> int:
     assert "Vercel 云端模式" in html
     assert "VERCEL · USER-KEY · CODE" in html
     assert "Codex CLI 登录态（本机）（仅本地）" in html
+    assert "下载项目后在本地 Aegis Web 使用的选项" in html
+    assert "Vercel 云端无法访问你的本机 Codex" in html
     assert "Vercel 云端只展示能力入口" in html
     assert "云端无法访问你电脑上的 127.0.0.1 本地代理" in html
     assert "例如本地代理" not in html
