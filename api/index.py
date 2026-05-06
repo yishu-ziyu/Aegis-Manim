@@ -26,6 +26,7 @@ from manim_agent import (  # noqa: E402
     generate_code_with_llm,
     load_system_prompt,
 )
+import web_app as local_web_app  # noqa: E402
 
 SYSTEM_PROMPT = load_system_prompt()
 DISABLED_CLOUD_PROVIDERS = {"codex-cli", "codex-local-proxy"}
@@ -86,6 +87,7 @@ def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, di
     model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
     base_url = str(payload.get("baseUrl", "")).strip()
     endpoint = str(payload.get("endpoint", "")).strip()
+    scene_name = local_web_app.safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
     temperature = clamp_temperature(payload.get("temperature", 0.2))
 
     try:
@@ -120,7 +122,11 @@ def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, di
         "model": model,
         "endpoint": used_endpoint,
         "code": patched_code,
+        "warnings": compatibility_notes,
         "compatibilityNotes": compatibility_notes,
+        "sceneName": scene_name,
+        "codeFile": "vercel-generated-code",
+        "requestId": datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-vercel"),
         "rendered": False,
         "renderBackend": "external-required",
         "message": "Vercel 已生成 Manim 代码；视频渲染需要后端服务承载。",
@@ -128,276 +134,29 @@ def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, di
 
 
 def build_index_html() -> str:
-    health = json.dumps(build_health_payload(), ensure_ascii=False)
-    provider_config = json.dumps(public_provider_config(), ensure_ascii=False)
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Aegis-Manim</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f6f7f9;
-      color: #17181c;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      padding: 32px 18px;
-    }}
-    main {{
-      width: min(1080px, 100%);
-      margin: 0 auto;
-      background: #ffffff;
-      border: 1px solid #e4e7ec;
-      border-radius: 8px;
-      padding: clamp(28px, 5vw, 56px);
-      box-shadow: 0 18px 48px rgba(24, 32, 56, 0.08);
-    }}
-    .eyebrow {{
-      margin: 0 0 16px;
-      color: #4761d8;
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: 0;
-      text-transform: uppercase;
-    }}
-    h1 {{
-      margin: 0;
-      max-width: 760px;
-      font-size: clamp(32px, 5vw, 56px);
-      line-height: 1.05;
-      letter-spacing: 0;
-    }}
-    p {{
-      max-width: 720px;
-      color: #555c68;
-      font-size: 17px;
-      line-height: 1.7;
-    }}
-    .status {{
-      display: grid;
-      gap: 12px;
-      margin-top: 32px;
-      padding: 18px;
-      border: 1px solid #e8ebf0;
-      border-radius: 8px;
-      background: #fafbfc;
-    }}
-    form {{
-      display: grid;
-      gap: 16px;
-      margin-top: 28px;
-    }}
-    label {{
-      display: grid;
-      gap: 8px;
-      color: #4d5562;
-      font-size: 14px;
-      font-weight: 700;
-    }}
-    textarea,
-    input,
-    select {{
-      width: 100%;
-      border: 1px solid #d9dee7;
-      border-radius: 8px;
-      padding: 12px 14px;
-      font: inherit;
-      color: #17181c;
-      background: #fff;
-    }}
-    textarea {{
-      min-height: 118px;
-      resize: vertical;
-      line-height: 1.6;
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-    }}
-    button {{
-      width: fit-content;
-      border: 0;
-      border-radius: 8px;
-      padding: 12px 18px;
-      color: #fff;
-      background: #17181c;
-      font: inherit;
-      font-weight: 800;
-      cursor: pointer;
-    }}
-    button:disabled {{
-      cursor: not-allowed;
-      opacity: 0.6;
-    }}
-    pre {{
-      overflow: auto;
-      max-height: 520px;
-      margin: 18px 0 0;
-      padding: 18px;
-      border-radius: 8px;
-      background: #111827;
-      color: #e5e7eb;
-      font-size: 13px;
-      line-height: 1.55;
-    }}
-    .message {{
-      min-height: 24px;
-      color: #4d5562;
-      font-size: 14px;
-      font-weight: 700;
-    }}
-    .error {{ color: #be123c; }}
-    .row {{
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      color: #30343b;
-      font-size: 15px;
-    }}
-    .row span:first-child {{ color: #697180; }}
-    code {{
-      padding: 2px 6px;
-      border-radius: 6px;
-      background: #eef1f6;
-      color: #20242b;
-      font-size: 14px;
-    }}
-    @media (max-width: 760px) {{
-      main {{ padding: 24px; }}
-      .grid {{ grid-template-columns: 1fr; }}
-      button {{ width: 100%; }}
-    }}
-  </style>
-</head>
-<body>
-  <main>
-    <p class="eyebrow">Aegis-Manim</p>
-    <h1>把抽象知识变成 Manim 动态可视化视频。</h1>
-    <p>
-      当前 Vercel 部署可直接生成 Manim 代码。完整的视频渲染需要独立后端承载，
-      因为 Manim 依赖 ffmpeg、本地媒体目录和更长的任务执行时间。
-    </p>
-    <section class="status" aria-label="Deployment status">
-      <div class="row"><span>Gateway</span><span>Vercel Python Function</span></div>
-      <div class="row"><span>Health</span><span><code>/api/health</code></span></div>
-      <div class="row"><span>Generate Code</span><span>Available</span></div>
-      <div class="row"><span>Render Video</span><span>External service required</span></div>
-    </section>
-    <form id="generateForm">
-      <label>
-        你要讲清楚的问题
-        <textarea id="prompt" required>可视化帕累托最优过程</textarea>
-      </label>
-      <div class="grid">
-        <label>
-          模型服务
-          <select id="provider"></select>
-        </label>
-        <label>
-          模型
-          <input id="model" autocomplete="off" />
-        </label>
-      </div>
-      <label>
-        API Key
-        <input id="apiKey" type="password" autocomplete="off" placeholder="仅用于本次请求，不写入仓库" />
-      </label>
-      <div class="grid">
-        <label>
-          Base URL
-          <input id="baseUrl" autocomplete="off" />
-        </label>
-        <label>
-          Temperature
-          <input id="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
-        </label>
-      </div>
-      <button id="submitBtn" type="submit">Generate Manim Code</button>
-      <div id="message" class="message"></div>
-    </form>
-    <pre id="codeOutput" hidden></pre>
-    <script id="health-payload" type="application/json">{health}</script>
-    <script id="provider-config" type="application/json">{provider_config}</script>
-    <script>
-      const config = JSON.parse(document.getElementById("provider-config").textContent);
-      const providerSelect = document.getElementById("provider");
-      const modelInput = document.getElementById("model");
-      const baseUrlInput = document.getElementById("baseUrl");
-      const apiKeyInput = document.getElementById("apiKey");
-      const messageEl = document.getElementById("message");
-      const outputEl = document.getElementById("codeOutput");
-      const submitBtn = document.getElementById("submitBtn");
-
-      function optionLabel(provider) {{
-        return provider.name + " · " + provider.apiType;
-      }}
-
-      Object.entries(config.providers).forEach(([id, provider]) => {{
-        const option = document.createElement("option");
-        option.value = id;
-        option.textContent = optionLabel(provider);
-        providerSelect.appendChild(option);
-      }});
-
-      function applyProviderDefaults() {{
-        const provider = config.providers[providerSelect.value];
-        modelInput.value = provider.defaultModel || "";
-        baseUrlInput.value = provider.baseURL || "";
-        apiKeyInput.placeholder = provider.apiKeyPlaceholder || "API Key...";
-      }}
-
-      providerSelect.value = config.defaultProvider in config.providers
-        ? config.defaultProvider
-        : Object.keys(config.providers)[0];
-      applyProviderDefaults();
-      providerSelect.addEventListener("change", applyProviderDefaults);
-
-      document.getElementById("generateForm").addEventListener("submit", async (event) => {{
-        event.preventDefault();
-        messageEl.className = "message";
-        messageEl.textContent = "Generating...";
-        outputEl.hidden = true;
-        outputEl.textContent = "";
-        submitBtn.disabled = true;
-
-        try {{
-          const response = await fetch("/api/generate", {{
-            method: "POST",
-            headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify({{
-              prompt: document.getElementById("prompt").value,
-              provider: providerSelect.value,
-              apiKey: apiKeyInput.value,
-              model: modelInput.value,
-              baseUrl: baseUrlInput.value,
-              temperature: document.getElementById("temperature").value
-            }})
-          }});
-          const data = await response.json();
-          if (!response.ok || !data.ok) {{
-            throw new Error(data.detail || data.error || "Request failed.");
-          }}
-          messageEl.textContent = data.message || "Generated.";
-          outputEl.textContent = data.code;
-          outputEl.hidden = false;
-        }} catch (error) {{
-          messageEl.className = "message error";
-          messageEl.textContent = error.message || String(error);
-        }} finally {{
-          submitBtn.disabled = false;
-        }}
-      }});
-    </script>
-  </main>
-</body>
-</html>"""
+    local_web_app.provider_presets_for_ui = public_provider_config
+    html = local_web_app.make_index_html()
+    replacements = {
+        "LOCAL · USER-KEY · RENDER": "VERCEL · USER-KEY · CODE",
+        "用你的 Key + 自然语言问题，把抽象知识直接变成动态可视化视频。": (
+            "用你的 Key + 自然语言问题，先生成 Manim 代码；完整视频渲染由独立后端承载。"
+        ),
+        "支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。": (
+            "支持可从云端访问的 OpenAI-Compatible、智谱、MiniMax 等模型服务。"
+        ),
+        "Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。": (
+            "Key 仅用于本次请求，不写入仓库；云端无法访问你电脑上的 127.0.0.1 本地代理。"
+        ),
+        '<input id="noRender" name="noRender" type="checkbox" />': (
+            '<input id="noRender" name="noRender" type="checkbox" checked disabled />'
+        ),
+        "只生成代码，不渲染视频（调试模式）": "只生成代码，不渲染视频（Vercel 云端模式）",
+        "Generate & Render": "Generate Code",
+        "代码、修复提示、渲染视频统一展示。": "代码与兼容修复提示会在这里展示；视频渲染需要独立后端。",
+    }
+    for old, new in replacements.items():
+        html = html.replace(old, new)
+    return html
 
 
 class handler(BaseHTTPRequestHandler):

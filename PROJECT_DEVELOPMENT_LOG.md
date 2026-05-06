@@ -162,7 +162,14 @@
 - 方案：新增 FastAPI 形式的 Vercel 网关层，承载入口页、`/api/health` 和“只生成 Manim 代码”的轻量交互；完整视频渲染后端继续规划 VPS/Render/Fly。
 - 预防：先让平台部署成功，再配置 DNS；不要把 DNS 解析当作部署本身。
 
-## 5. 当前状态（截至 2026-05-05）
+### 问题 9：本地网址与子域名呈现内容不一致
+
+- 现象：本地打开的页面与 `manim.yishuziyu.cn` 显示内容不一致，容易误判为 Vercel 绑定了错误仓库。
+- 根因：当前本地 `127.0.0.1:8000` 被其他 `uvicorn` 服务占用，Aegis Web 实际未运行；同时 Vercel 曾维护一份独立 gateway 页面，和 `core/web_app.py` 的本地 Aegis Studio UI 漂移。
+- 方案：确认仓库仍是 `yishu-ziyu/Aegis-Manim`；本地 Aegis 改用 `127.0.0.1:8010` 验证；Vercel gateway 改为复用 `core/web_app.py` 生成页面，只替换云端模式文案、禁用本机渲染入口并继续隐藏本机专用 Provider。
+- 预防：比较页面前先确认本地端口对应进程；Vercel 首页后续不得再单独复制一份产品 UI，优先从本地 Web UI 生成。
+
+## 5. 当前状态（截至 2026-05-06）
 
 - CLI 与 Web 两条核心链路可用。
 - 用户自带 API Key 模式可用且不写入仓库。
@@ -171,7 +178,7 @@
 - `codex-cli` 真实链路已验证：Web 请求生成并渲染成功，requestId `20260505-141202-0070da25`。
 - 已具备 Manim 语法知识包，生成前注入本地 ManimCE 0.19.2 与官方/社区稳定写法约束。
 - 已具备大模型接入方法论文档，覆盖 Provider 抽象、认证边界、OpenAI-Compatible、本地模型/代理、结构化输出和失败诊断。
-- 已具备 Vercel 公开入口网关，可用于 `manim.yishuziyu.cn` 的第一阶段子域名展示和 Manim 代码生成；完整视频渲染后端仍需独立部署。
+- 已具备 Vercel 公开入口网关，可用于 `manim.yishuziyu.cn` 的第一阶段子域名展示和 Manim 代码生成；Vercel 页面现在复用本地 Aegis Studio UI，并用云端模式文案标记“只生成代码、渲染后端外置”；完整视频渲染后端仍需独立部署。
 - 文档已更新到可开源协作状态。
 - `v0.1.0` 已发布。
 

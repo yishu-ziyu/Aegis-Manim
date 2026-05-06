@@ -32,3 +32,16 @@ Added a minimal Vercel gateway for `manim.yishuziyu.cn`: FastAPI entrypoint, sha
 ## Review
 
 The subdomain can now do useful work: Vercel generates Manim code through remote providers while still making video rendering an explicit external-backend boundary.
+
+# Local/Subdomain UI Consistency Task
+
+- [x] Confirm the local checkout and GitHub remote.
+- [x] Identify why `127.0.0.1:8000` did not match Aegis.
+- [x] Start and verify the local Aegis Web app on an open port.
+- [x] Make the Vercel gateway reuse the local Aegis Studio UI.
+- [x] Keep Vercel-specific cloud/render limits visible in the page.
+- [x] Run gateway checks, compile checks, and Vercel build.
+
+## Review
+
+The repository was correct. The mismatch came from a non-Aegis service occupying local port 8000 plus a separate Vercel-only gateway page. Local Aegis is verified on `127.0.0.1:8010`; the Vercel page now derives from `core/web_app.py` and only swaps cloud-mode copy and render-backend boundaries.

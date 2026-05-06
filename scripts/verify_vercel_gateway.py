@@ -24,11 +24,12 @@ def main() -> int:
     assert health["version"] == APP_VERSION
 
     html = build_index_html()
-    assert "Aegis-Manim" in html
+    assert "Aegis Studio Web" in html
     assert "/api/health" in html
-    assert "Generate Manim Code" in html
-    assert "Render Video" in html
-    assert "provider-config" in html
+    assert "Generate Code" in html
+    assert "Vercel 云端模式" in html
+    assert "VERCEL · USER-KEY · CODE" in html
+    assert "云端无法访问你电脑上的 127.0.0.1 本地代理" in html
 
     providers = public_provider_config()["providers"]
     assert "codex-cli" not in providers

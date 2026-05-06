@@ -147,3 +147,10 @@
 - 方案原因: Vercel 不能承担完整视频渲染，但可以承担“公网入口 + 代码生成”的第一阶段产品能力。这样子域名不只是占位页，同时不误导用户以为视频渲染已部署。
 - 下次识别与避免: 凡是拆分部署，都要明确区分可用能力和待接后端能力；云端界面不能展示只能在本机使用的 Provider。
 - 结果与经验: 验证通过：`./.venv/bin/python scripts/verify_vercel_gateway.py`、`py_compile`、`vercel build --yes`。现在 Vercel 版可生成 Manim 代码，视频渲染仍等待独立后端。
+
+## 2026-05-06 14:05:13 | 本地与子域名页面不一致排查
+- 问题现象: 用户发现本地网址打开后的内容与 `manim.yishuziyu.cn` 不一致，怀疑是否导入了错误的 GitHub 仓库或本地项目目录。
+- 解决方案: 先用 `git remote -v` 和 `git status -sb` 确认当前目录仍是 `https://github.com/yishu-ziyu/Aegis-Manim.git` 的 `main` 分支；再检查端口监听，发现 `127.0.0.1:8000` 被另一个 `uvicorn curiocat.main:app` 进程占用，`./scripts/web_server.sh status` 显示 Aegis Web 未运行。随后将本地 Aegis Web 启动到 `http://127.0.0.1:8010` 验证，并把 Vercel `api/index.py` 改为复用 `core/web_app.py` 的 Aegis Studio HTML，只在 gateway 层替换云端模式文案、禁用本机渲染 checkbox、隐藏本机专用 Provider。
+- 方案原因: 这不是仓库错配，而是“本地访问的端口不是 Aegis + 线上使用独立 gateway 页面”共同造成的体验偏差。让 Vercel 入口复用本地 Web UI 可以减少产品表面漂移，同时保留 Vercel 无法直接渲染 Manim 视频的真实边界。
+- 下次识别与避免: 比较本地和线上前，先确认本地端口对应的进程：`lsof -nP -iTCP:8000 -sTCP:LISTEN` 与 `./scripts/web_server.sh status`；若 8000 被占用，用 `AEGIS_WEB_PORT=8010 ./scripts/web_server.sh start` 启动 Aegis。Vercel 首页后续应继续从 `core/web_app.py` 生成，避免再维护一份独立占位页。
+- 结果与经验: `http://127.0.0.1:8010/api/health` 返回 `web_app_v20260429_1`；`127.0.0.1:8000/api/health` 返回 `{"detail":"Not Found"}`，证明 8000 不是 Aegis；Vercel gateway 验证与 Python 编译检查已通过，线上页面将在下一次部署后采用同源 Aegis Studio UI。
