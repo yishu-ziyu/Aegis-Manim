@@ -50,6 +50,18 @@ def main() -> int:
     assert status == 400
     assert disabled_provider["ok"] is False
 
+    status, private_endpoint = generate_manim_code_for_gateway(
+        {
+            "prompt": "解释消费者剩余",
+            "provider": "openai-compatible",
+            "apiKey": "test-key",
+            "baseUrl": "http://127.0.0.1:8317/api/provider/antigravity/v1",
+        },
+    )
+    assert status == 400
+    assert private_endpoint["ok"] is False
+    assert "公网 HTTPS" in private_endpoint["error"]
+
     status, missing_key = generate_manim_code_for_gateway(
         {"prompt": "解释消费者剩余", "provider": "zhipu"},
     )

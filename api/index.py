@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import ipaddress
+import socket
 import sys
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -30,6 +32,10 @@ import web_app as local_web_app  # noqa: E402
 
 SYSTEM_PROMPT = load_system_prompt()
 DISABLED_CLOUD_PROVIDERS = {"codex-cli", "codex-local-proxy"}
+LOCAL_HOSTNAMES = {"localhost"}
+CLOUD_ENDPOINT_ERROR = (
+    "Vercel 云端只支持公网 HTTPS 模型端点；本机、内网和 http:// 地址请在本地 Aegis Web 使用。"
+)
 
 
 def build_health_payload() -> dict[str, object]:
@@ -79,6 +85,52 @@ def clamp_temperature(value: object) -> float:
     return max(0.0, min(1.0, temperature))
 
 
+def is_private_or_local_host(host: str) -> bool:
+    normalized = host.strip("[]").lower().rstrip(".")
+    if (
+        normalized in LOCAL_HOSTNAMES
+        or normalized.endswith(".localhost")
+        or normalized.endswith(".local")
+    ):
+        return True
+
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def validate_cloud_model_endpoint(raw_url: str, *, field_name: str) -> str | None:
+    cleaned = raw_url.strip()
+    if not cleaned:
+        return None
+
+    parsed = urlparse(cleaned)
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        return CLOUD_ENDPOINT_ERROR
+    if is_private_or_local_host(parsed.hostname):
+        return CLOUD_ENDPOINT_ERROR
+
+    try:
+        resolved = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return f"{field_name} 无法解析，请填写公网可访问的 HTTPS 模型端点。"
+
+    for result in resolved:
+        address = result[4][0]
+        if is_private_or_local_host(address):
+            return CLOUD_ENDPOINT_ERROR
+    return None
+
+
 def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt:
@@ -98,6 +150,11 @@ def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, di
     endpoint = str(payload.get("endpoint", "")).strip()
     scene_name = local_web_app.safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
     temperature = clamp_temperature(payload.get("temperature", 0.2))
+
+    for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
+        endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
+        if endpoint_error:
+            return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error}
 
     try:
         raw_code, used_provider, used_endpoint = generate_code_with_llm(

@@ -161,3 +161,10 @@
 - 方案原因: 公开网页同时承担“可立即使用的云端入口”和“项目能力地图”的职责。隐藏本地 Codex 会降低开源项目的可发现性；直接开放提交又会造成必然失败。保留选项但标明运行边界是更准确的产品表达。
 - 下次识别与避免: Provider 下拉不应只按当前部署环境过滤能力；本地、云端、外部后端能力都可以展示，但必须用文案和请求保护区分“可见能力”和“当前可执行能力”。
 - 结果与经验: 线上会展示 `Codex / 本地 OpenAI-Compatible 代理（仅本地）` 与 `Codex CLI 登录态（本机）（仅本地）`；本地运行时仍按原始 ProviderPreset 执行，不受 Vercel 的 `cloudUnavailable` 标记影响。
+
+## 2026-05-06 19:24:00 | Vercel 模型端点安全边界收紧
+- 问题现象: GitHub CodeQL 页面显示大量存量告警；进一步审查当前公开产品面后发现，Vercel `/api/generate` 会接受用户填写的 `baseUrl` / `endpoint` 并由云端服务端发起请求，若不限制可能被误用来访问本机、内网或明文 HTTP 端点。
+- 解决方案: 在 `api/index.py` 的 Vercel gateway 层增加云端端点校验：只允许公网可解析的 HTTPS 模型端点，拒绝 `localhost`、`.local`、私网/回环/link-local/reserved IP、以及解析到这些地址的域名；本地 Aegis Web 不受该限制，仍可用于本机 Codex 与本地 OpenAI-Compatible 代理。同步扩展 `scripts/verify_vercel_gateway.py`，锁定 `127.0.0.1:8317` 在云端被拒绝。
+- 方案原因: 公开 Vercel 页面应只连接公网模型服务；本地代理属于下载项目后的本机能力，不能通过云端服务器访问。把限制放在 Vercel gateway 层可以保护线上入口，同时不破坏本地开发体验。
+- 下次识别与避免: 凡是让用户填写 URL 并由服务端请求的功能，都必须区分云端/本地边界；上线前至少测试 `127.0.0.1`、私网 IP、HTTP、合法 HTTPS 四类端点。
+- 结果与经验: 云端会在模型请求发出前阻止本机/内网模型端点；本地 Codex 能力继续通过 `cloudUnavailable` 标记展示并阻止云端提交。
