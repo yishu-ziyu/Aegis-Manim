@@ -152,6 +152,25 @@ supply = axes.plot(lambda x: 2 + x, line_config={"stroke_opacity": 0.5})
         append_log.assert_called_once()
         assert append_log.call_args.args[0] == "CLIENT_DISCONNECT"
 
+    def test_json_response_header_disconnect_does_not_escape_render_success_path(self) -> None:
+        class FakeHandler:
+            wfile = Mock()
+
+            def send_response(self, _status: int) -> None:
+                pass
+
+            def send_header(self, _name: str, _value: str) -> None:
+                pass
+
+            def end_headers(self) -> None:
+                raise BrokenPipeError("client closed during headers")
+
+        with patch.object(web_app, "append_runtime_log") as append_log:
+            web_app.AegisWebHandler._send_json(FakeHandler(), HTTPStatus.OK, {"ok": True})
+
+        append_log.assert_called_once()
+        assert append_log.call_args.args[0] == "CLIENT_DISCONNECT"
+
 
 if __name__ == "__main__":
     unittest.main()

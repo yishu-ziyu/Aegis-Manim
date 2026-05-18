@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib import error, request
 from urllib.parse import urlparse
 
-DEFAULT_PROVIDER = "zhipu"
+DEFAULT_PROVIDER = "codex-cli"
 DEFAULT_ZHIPU_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 DEFAULT_ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MODEL = "glm-5"

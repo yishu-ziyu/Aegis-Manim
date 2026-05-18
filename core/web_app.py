@@ -584,6 +584,79 @@ def make_index_html() -> str:
       color: #113f37;
     }}
 
+    .process-panel {{
+      display: none;
+      border: 1.5px solid rgba(10, 53, 87, 0.2);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.5);
+      padding: 12px;
+      gap: 10px;
+    }}
+
+    .process-panel.visible {{
+      display: grid;
+      animation: field-in 240ms ease-out;
+    }}
+
+    .process-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: #463729;
+      font-size: 0.86rem;
+      line-height: 1.45;
+    }}
+
+    .process-time {{
+      flex: 0 0 auto;
+      color: #173452;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.78rem;
+    }}
+
+    .process-steps {{
+      display: grid;
+      gap: 8px;
+    }}
+
+    .process-step {{
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 9px;
+      color: #6d5a46;
+      font-size: 0.84rem;
+    }}
+
+    .process-dot {{
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      border: 1.5px solid rgba(10, 53, 87, 0.28);
+      background: rgba(255, 255, 255, 0.7);
+    }}
+
+    .process-step.active {{
+      color: #123a5f;
+      font-weight: 700;
+    }}
+
+    .process-step.active .process-dot {{
+      border-color: rgba(31, 136, 118, 0.65);
+      background: rgba(31, 136, 118, 0.85);
+      box-shadow: 0 0 0 5px rgba(31, 136, 118, 0.12);
+      animation: pulse-dot 1.2s ease-in-out infinite;
+    }}
+
+    .process-step.done {{
+      color: #145c4f;
+    }}
+
+    .process-step.done .process-dot {{
+      border-color: rgba(20, 92, 79, 0.45);
+      background: rgba(20, 92, 79, 0.7);
+    }}
+
     .result-head {{
       padding: 26px 28px 20px;
       border-bottom: 2px solid var(--line);
@@ -878,6 +951,11 @@ def make_index_html() -> str:
       from {{ opacity: 0; transform: translateY(6px); }}
       to {{ opacity: 1; transform: translateY(0); }}
     }}
+
+    @keyframes pulse-dot {{
+      0%, 100% {{ transform: scale(1); opacity: 0.72; }}
+      50% {{ transform: scale(1.35); opacity: 1; }}
+    }}
   </style>
 </head>
 <body>
@@ -944,6 +1022,18 @@ def make_index_html() -> str:
         </label>
 
         <button id="submitBtn" class="btn" type="submit">Generate & Render</button>
+        <div id="processPanel" class="process-panel">
+          <div class="process-head">
+            <span id="processMessage">正在准备任务...</span>
+            <span id="processTime" class="process-time">0s</span>
+          </div>
+          <div class="process-steps">
+            <div class="process-step" data-stage="0"><span class="process-dot"></span><span>生成 Manim 教学代码</span></div>
+            <div class="process-step" data-stage="1"><span class="process-dot"></span><span>渲染动画并检查兼容性</span></div>
+            <div class="process-step" data-stage="2"><span class="process-dot"></span><span>失败时自动带错误重写代码</span></div>
+            <div class="process-step" data-stage="3"><span class="process-dot"></span><span>生成同步讲稿，可在视频完成后增强对齐</span></div>
+          </div>
+        </div>
         <div id="statusBox" class="status-box">等待输入...</div>
       </form>
     </section>
@@ -1020,6 +1110,10 @@ def make_index_html() -> str:
     const modelInput = document.getElementById("model");
     const baseUrlInput = document.getElementById("baseUrl");
     const baseUrlField = document.getElementById("baseUrlField");
+    const processPanel = document.getElementById("processPanel");
+    const processMessage = document.getElementById("processMessage");
+    const processTime = document.getElementById("processTime");
+    const processSteps = Array.from(document.querySelectorAll(".process-step"));
     const alignmentPanel = document.getElementById("alignmentPanel");
     const alignmentSummary = document.getElementById("alignmentSummary");
     const alignmentWarning = document.getElementById("alignmentWarning");
@@ -1031,6 +1125,8 @@ def make_index_html() -> str:
     let latestCode = "";
     let latestSceneName = "GeneratedScene";
     let latestProviderPayload = null;
+    let processStartedAt = 0;
+    let processTimer = null;
 
     function groupProviderIds() {{
       const groups = {{}};
@@ -1111,6 +1207,50 @@ def make_index_html() -> str:
     function setStatus(message, type = "") {{
       statusBox.className = "status-box" + (type ? " " + type : "");
       statusBox.textContent = message;
+    }}
+
+    function setProcessStage(stageIndex) {{
+      processSteps.forEach((step, index) => {{
+        step.classList.toggle("done", index < stageIndex);
+        step.classList.toggle("active", index === stageIndex);
+      }});
+    }}
+
+    function updateProcess() {{
+      if (!processStartedAt) return;
+      const elapsed = Math.floor((Date.now() - processStartedAt) / 1000);
+      processTime.textContent = `${{elapsed}}s`;
+      if (elapsed < 45) {{
+        setProcessStage(0);
+        processMessage.textContent = "模型正在把你的问题转成 Manim 场景代码。";
+      }} else if (elapsed < 150) {{
+        setProcessStage(1);
+        processMessage.textContent = "代码已进入渲染阶段；复杂图形可能需要几分钟。";
+      }} else if (elapsed < 260) {{
+        setProcessStage(2);
+        processMessage.textContent = "如果渲染失败，后端会把错误反馈给模型并自动重写。";
+      }} else {{
+        setProcessStage(3);
+        processMessage.textContent = "仍在处理长任务；页面会在后端完成后更新结果。";
+      }}
+    }}
+
+    function startProcess() {{
+      processStartedAt = Date.now();
+      processPanel.classList.add("visible");
+      updateProcess();
+      if (processTimer) window.clearInterval(processTimer);
+      processTimer = window.setInterval(updateProcess, 1000);
+    }}
+
+    function stopProcess() {{
+      if (processTimer) {{
+        window.clearInterval(processTimer);
+        processTimer = null;
+      }}
+      processStartedAt = 0;
+      processPanel.classList.remove("visible");
+      processSteps.forEach((step) => step.classList.remove("active", "done"));
     }}
 
     function setWarnings(warnings) {{
@@ -1247,6 +1387,7 @@ def make_index_html() -> str:
       }}
       submitBtn.disabled = true;
       setStatus("请求已发送，正在生成代码...", "");
+      startProcess();
       setWarnings([]);
       latestPrompt = "";
       latestCode = "";
@@ -1321,6 +1462,7 @@ def make_index_html() -> str:
       }} catch (err) {{
         setStatus(err && err.message ? err.message : "请求异常", "error");
       }} finally {{
+        stopProcess();
         submitBtn.disabled = false;
       }}
     }});
@@ -1373,11 +1515,11 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
         try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError) as exc:
             append_runtime_log("CLIENT_DISCONNECT", f"json_response status={status} error={exc}")
@@ -1693,18 +1835,19 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                 response["videoId"] = register_video(video_path)
                 if video_duration is not None:
                     response["videoDuration"] = video_duration
-                response["alignment"] = self._build_alignment_response(
-                    request_id=request_id,
+                response["alignment"] = generate_alignment(
                     prompt=prompt,
                     code=code,
                     scene_name=detected_scene_name,
                     video_duration=video_duration,
-                    provider_id=provider.id,
-                    api_key=api_key,
-                    base_url=base_url or None,
-                    endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
-                    model=model,
-                    temperature=temperature,
+                    llm_call=None,
+                )
+                append_runtime_log(
+                    "ALIGNMENT_FALLBACK",
+                    (
+                        f"request_id={request_id} scene={detected_scene_name} "
+                        "reason=initial_response_uses_fast_metadata_alignment"
+                    ),
                 )
                 response["message"] = "Code generated and video rendered successfully."
                 if attempt > 1:
