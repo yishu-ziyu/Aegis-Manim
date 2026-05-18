@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+from alignment import generate_alignment
 from llm_providers import DEFAULT_PROVIDER, provider_presets_for_ui, resolve_provider
 from manim_agent import (
     DEFAULT_MODEL,
@@ -196,6 +198,36 @@ def register_video(path: Path) -> str:
     return video_id
 
 
+def probe_video_duration(path: Path) -> float | None:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode != 0:
+        return None
+    return optional_positive_float((result.stdout or "").strip())
+
+
 def json_error(
     message: str,
     status: int = 400,
@@ -208,6 +240,16 @@ def json_error(
     if request_id:
         payload["requestId"] = request_id
     return status, payload
+
+
+def optional_positive_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
 
 
 def make_index_html() -> str:
@@ -667,6 +709,123 @@ def make_index_html() -> str:
       background: black;
     }}
 
+    .alignment-panel {{
+      display: none;
+      border: 1.5px solid rgba(31, 136, 118, 0.28);
+      border-radius: 16px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(245, 239, 229, 0.72));
+      padding: 14px;
+      gap: 12px;
+    }}
+
+    .alignment-panel.visible {{
+      display: grid;
+      animation: panel-up 260ms ease-out;
+    }}
+
+    .alignment-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }}
+
+    .alignment-head h3 {{
+      margin: 0 0 4px;
+      font-size: 1rem;
+      color: #183f36;
+    }}
+
+    .alignment-summary {{
+      margin: 0;
+      color: #5d4c3a;
+      font-size: 0.86rem;
+      line-height: 1.45;
+    }}
+
+    .alignment-warning {{
+      display: none;
+      border-radius: 12px;
+      border: 1px dashed rgba(155, 106, 25, 0.55);
+      color: #67430c;
+      background: rgba(155, 106, 25, 0.1);
+      padding: 9px 11px;
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }}
+
+    .alignment-warning.visible {{
+      display: block;
+    }}
+
+    .alignment-list {{
+      display: grid;
+      gap: 10px;
+    }}
+
+    .segment-card {{
+      text-align: left;
+      width: 100%;
+      border: 1.5px solid rgba(33, 25, 15, 0.17);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.72);
+      padding: 11px 12px;
+      color: #2c2117;
+      cursor: pointer;
+      transition: border-color var(--speed), transform var(--speed), background var(--speed), box-shadow var(--speed);
+    }}
+
+    .segment-card:hover {{
+      transform: translateY(-1px);
+      border-color: rgba(31, 136, 118, 0.48);
+    }}
+
+    .segment-card.active {{
+      background: rgba(255, 247, 223, 0.95);
+      border-color: rgba(209, 126, 45, 0.78);
+      box-shadow: 0 8px 18px rgba(129, 78, 25, 0.13);
+    }}
+
+    .segment-card.low-confidence {{
+      border-style: dashed;
+      border-color: rgba(155, 106, 25, 0.5);
+    }}
+
+    .segment-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+      margin-bottom: 5px;
+    }}
+
+    .segment-title {{
+      font-weight: 700;
+      color: #1f362f;
+    }}
+
+    .segment-time {{
+      flex: 0 0 auto;
+      color: #6a5a49;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+    }}
+
+    .segment-script {{
+      margin: 0;
+      color: #4c3c2e;
+      line-height: 1.5;
+      font-size: 0.9rem;
+    }}
+
+    .segment-intent {{
+      margin-top: 7px;
+      color: #686050;
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }}
+
     .foot {{
       margin-top: 2px;
       font-family: "JetBrains Mono", monospace;
@@ -816,6 +975,18 @@ def make_index_html() -> str:
           <video id="videoPlayer" controls preload="metadata"></video>
         </div>
 
+        <section id="alignmentPanel" class="alignment-panel">
+          <div class="alignment-head">
+            <div>
+              <h3>同步讲稿</h3>
+              <div id="alignmentSummary" class="alignment-summary">等待渲染完成后生成段落对齐。</div>
+            </div>
+            <button id="realignBtn" class="ghost-btn" type="button" disabled>重新对齐讲稿</button>
+          </div>
+          <div id="alignmentWarning" class="alignment-warning"></div>
+          <div id="alignmentList" class="alignment-list"></div>
+        </section>
+
         <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
       </div>
     </section>
@@ -849,6 +1020,17 @@ def make_index_html() -> str:
     const modelInput = document.getElementById("model");
     const baseUrlInput = document.getElementById("baseUrl");
     const baseUrlField = document.getElementById("baseUrlField");
+    const alignmentPanel = document.getElementById("alignmentPanel");
+    const alignmentSummary = document.getElementById("alignmentSummary");
+    const alignmentWarning = document.getElementById("alignmentWarning");
+    const alignmentList = document.getElementById("alignmentList");
+    const realignBtn = document.getElementById("realignBtn");
+
+    let currentAlignment = null;
+    let latestPrompt = "";
+    let latestCode = "";
+    let latestSceneName = "GeneratedScene";
+    let latestProviderPayload = null;
 
     function groupProviderIds() {{
       const groups = {{}};
@@ -941,6 +1123,105 @@ def make_index_html() -> str:
       }}
     }}
 
+    function formatTime(value) {{
+      const seconds = Number(value || 0);
+      const minutes = Math.floor(seconds / 60);
+      const rest = Math.max(0, seconds - minutes * 60);
+      return `${{minutes}}:${{rest.toFixed(1).padStart(4, "0")}}`;
+    }}
+
+    function clearAlignment() {{
+      currentAlignment = null;
+      alignmentPanel.classList.remove("visible");
+      alignmentSummary.textContent = "等待渲染完成后生成段落对齐。";
+      alignmentWarning.textContent = "";
+      alignmentWarning.classList.remove("visible");
+      alignmentList.replaceChildren();
+      realignBtn.disabled = !latestCode;
+    }}
+
+    function findActiveSegment(currentTime) {{
+      if (!currentAlignment || !Array.isArray(currentAlignment.segments)) return null;
+      return currentAlignment.segments.find((segment) => {{
+        return Number(segment.startTime) <= currentTime && currentTime < Number(segment.endTime);
+      }}) || currentAlignment.segments[currentAlignment.segments.length - 1] || null;
+    }}
+
+    function updateActiveSegment() {{
+      const active = findActiveSegment(videoPlayer.currentTime || 0);
+      Array.from(alignmentList.children).forEach((node) => {{
+        node.classList.toggle("active", Boolean(active) && node.dataset.segmentId === active.id);
+      }});
+    }}
+
+    function seekToSegment(segment) {{
+      if (!segment) return;
+      videoPlayer.currentTime = Math.max(0, Number(segment.startTime) || 0);
+      updateActiveSegment();
+    }}
+
+    function renderAlignment() {{
+      alignmentList.replaceChildren();
+      const segments = Array.isArray(currentAlignment && currentAlignment.segments)
+        ? currentAlignment.segments
+        : [];
+      segments.forEach((segment) => {{
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "segment-card";
+        card.dataset.segmentId = segment.id;
+        if (segment.confidence === "low") {{
+          card.classList.add("low-confidence");
+        }}
+
+        const top = document.createElement("div");
+        top.className = "segment-top";
+        const title = document.createElement("span");
+        title.className = "segment-title";
+        title.textContent = segment.title || "教学段落";
+        const time = document.createElement("span");
+        time.className = "segment-time";
+        time.textContent = `${{formatTime(segment.startTime)}} - ${{formatTime(segment.endTime)}}`;
+        top.append(title, time);
+
+        const script = document.createElement("p");
+        script.className = "segment-script";
+        script.textContent = segment.script || "这一段解释当前画面背后的概念含义。";
+
+        const intent = document.createElement("div");
+        intent.className = "segment-intent";
+        intent.textContent = segment.visualIntent ? `视觉对应：${{segment.visualIntent}}` : "";
+
+        card.append(top, script, intent);
+        card.addEventListener("click", () => seekToSegment(segment));
+        alignmentList.appendChild(card);
+      }});
+      updateActiveSegment();
+    }}
+
+    function setAlignment(alignment) {{
+      currentAlignment = alignment || null;
+      if (!currentAlignment) {{
+        clearAlignment();
+        return;
+      }}
+
+      const segments = Array.isArray(currentAlignment.segments) ? currentAlignment.segments : [];
+      const confidence = currentAlignment.confidence || "medium";
+      alignmentPanel.classList.add("visible");
+      alignmentSummary.textContent = `段落数：${{segments.length}} · 置信度：${{confidence}} · 点击段落可跳转视频`;
+      const warnings = Array.isArray(currentAlignment.warnings) ? currentAlignment.warnings.filter(Boolean) : [];
+      if (warnings.length) {{
+        alignmentWarning.textContent = warnings.join(" ; ");
+        alignmentWarning.classList.add("visible");
+      }} else {{
+        alignmentWarning.textContent = "";
+        alignmentWarning.classList.remove("visible");
+      }}
+      realignBtn.disabled = !latestCode;
+      renderAlignment();
+    }}
+
     toggleKey.addEventListener("click", () => {{
       apiKeyInput.type = apiKeyInput.type === "password" ? "text" : "password";
       toggleKey.textContent = apiKeyInput.type === "password" ? "显示" : "隐藏";
@@ -967,10 +1248,15 @@ def make_index_html() -> str:
       submitBtn.disabled = true;
       setStatus("请求已发送，正在生成代码...", "");
       setWarnings([]);
+      latestPrompt = "";
+      latestCode = "";
+      latestSceneName = "GeneratedScene";
+      latestProviderPayload = null;
       requestTag.textContent = "Req: -";
       videoCard.classList.remove("visible");
       videoPlayer.removeAttribute("src");
       videoPlayer.load();
+      clearAlignment();
 
       const payload = {{
         provider: providerSelect.value,
@@ -983,6 +1269,9 @@ def make_index_html() -> str:
         temperature: Number(document.getElementById("temperature").value || 0.2),
         noRender: document.getElementById("noRender").checked
       }};
+      latestPrompt = payload.prompt;
+      latestSceneName = payload.sceneName;
+      latestProviderPayload = {{ ...payload }};
       localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
       localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
 
@@ -1003,6 +1292,8 @@ def make_index_html() -> str:
         }}
 
         codeOutput.textContent = data.code || "# 未返回代码";
+        latestCode = data.code || "";
+        latestSceneName = data.sceneName || payload.sceneName || "GeneratedScene";
         sceneTag.textContent = "Scene: " + (data.sceneName || "-");
         fileTag.textContent = "File: " + (data.codeFile || "-");
         if (data.providerName) {{
@@ -1013,6 +1304,13 @@ def make_index_html() -> str:
         if (data.videoId) {{
           videoPlayer.src = "/api/video/" + data.videoId;
           videoCard.classList.add("visible");
+          if (data.alignment) {{
+            setAlignment(data.alignment);
+          }} else {{
+            clearAlignment();
+          }}
+        }} else {{
+          clearAlignment();
         }}
 
         const warningText = Array.isArray(data.warnings) && data.warnings.length
@@ -1024,6 +1322,41 @@ def make_index_html() -> str:
         setStatus(err && err.message ? err.message : "请求异常", "error");
       }} finally {{
         submitBtn.disabled = false;
+      }}
+    }});
+
+    videoPlayer.addEventListener("timeupdate", updateActiveSegment);
+    videoPlayer.addEventListener("loadedmetadata", updateActiveSegment);
+
+    realignBtn.addEventListener("click", async () => {{
+      if (!latestPrompt || !latestCode || !latestProviderPayload) return;
+      realignBtn.disabled = true;
+      const previousText = realignBtn.textContent;
+      realignBtn.textContent = "对齐中...";
+      try {{
+        const payload = {{
+          ...latestProviderPayload,
+          prompt: latestPrompt,
+          code: latestCode,
+          sceneName: latestSceneName,
+          videoDuration: Number.isFinite(videoPlayer.duration) ? videoPlayer.duration : null
+        }};
+        const response = await fetch("/api/align", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify(payload)
+        }});
+        const data = await response.json();
+        if (!response.ok || !data.ok) {{
+          throw new Error(data.error || "重新对齐失败");
+        }}
+        setAlignment(data.alignment);
+        setStatus("讲稿已重新对齐。", "success");
+      }} catch (err) {{
+        setStatus(err && err.message ? err.message : "重新对齐失败", "error");
+      }} finally {{
+        realignBtn.textContent = previousText;
+        realignBtn.disabled = !latestCode;
       }}
     }});
 
@@ -1123,6 +1456,10 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/api/align":
+            self._handle_align()
+            return
+
         if self.path != "/api/generate":
             self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
             return
@@ -1352,7 +1689,23 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                 video_path = find_latest_video(scene_file, detected_scene_name)
                 if video_path is None:
                     raise RuntimeError("Render completed but output video was not found.")
+                video_duration = probe_video_duration(video_path)
                 response["videoId"] = register_video(video_path)
+                if video_duration is not None:
+                    response["videoDuration"] = video_duration
+                response["alignment"] = self._build_alignment_response(
+                    request_id=request_id,
+                    prompt=prompt,
+                    code=code,
+                    scene_name=detected_scene_name,
+                    video_duration=video_duration,
+                    provider_id=provider.id,
+                    api_key=api_key,
+                    base_url=base_url or None,
+                    endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
+                    model=model,
+                    temperature=temperature,
+                )
                 response["message"] = "Code generated and video rendered successfully."
                 if attempt > 1:
                     response["message"] += f" Auto-retry succeeded on attempt {attempt}."
@@ -1413,6 +1766,122 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                     err["warnings"] = last_notes
                 self._send_json(status, err)
                 return
+
+    def _build_alignment_response(
+        self,
+        *,
+        request_id: str,
+        prompt: str,
+        code: str,
+        scene_name: str,
+        video_duration: float | None,
+        provider_id: str,
+        api_key: str,
+        base_url: str | None,
+        endpoint: str | None,
+        model: str,
+        temperature: float,
+    ) -> dict[str, Any]:
+        def call_alignment_model(system_prompt: str, user_prompt: str) -> str:
+            raw_text, _provider_name, _resolved_endpoint = generate_code_with_llm(
+                provider_id=provider_id,
+                api_key=api_key,
+                base_url=base_url,
+                endpoint=endpoint,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=min(0.4, temperature),
+            )
+            return raw_text
+
+        alignment = generate_alignment(
+            prompt=prompt,
+            code=code,
+            scene_name=scene_name,
+            video_duration=video_duration,
+            llm_call=call_alignment_model,
+        )
+        event_name = "ALIGNMENT_FALLBACK" if alignment.get("confidence") == "low" else "ALIGNMENT_OK"
+        append_runtime_log(
+            event_name,
+            (
+                f"request_id={request_id} scene={scene_name} "
+                f"segments={len(alignment.get('segments', []))} confidence={alignment.get('confidence')}"
+            ),
+        )
+        return alignment
+
+    def _handle_align(self) -> None:
+        request_id = build_request_id()
+        try:
+            payload = self._read_json_body()
+        except ValueError as exc:
+            status, err = json_error(
+                str(exc),
+                status=HTTPStatus.BAD_REQUEST,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        prompt = str(payload.get("prompt", "")).strip()
+        code = str(payload.get("code", "")).strip()
+        scene_name = safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
+        provider_id = str(payload.get("provider", DEFAULT_PROVIDER)).strip() or DEFAULT_PROVIDER
+        provider = resolve_provider(provider_id)
+        api_key = str(payload.get("apiKey", "")).strip()
+        model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
+        base_url = str(payload.get("baseUrl", "")).strip()
+        endpoint = str(payload.get("endpoint", "")).strip()
+        video_duration = optional_positive_float(payload.get("videoDuration"))
+
+        try:
+            temperature = float(payload.get("temperature", 0.2))
+        except (TypeError, ValueError):
+            temperature = 0.2
+        temperature = max(0.0, min(1.0, temperature))
+
+        if len(prompt) < 6 or not code:
+            status, err = json_error(
+                "Prompt and code are required for alignment.",
+                status=HTTPStatus.BAD_REQUEST,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        if provider.requires_api_key and not api_key:
+            status, err = json_error(
+                "Missing API key.",
+                status=HTTPStatus.BAD_REQUEST,
+                detail=f"Please paste your own {provider.name} API key in the form.",
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        alignment = self._build_alignment_response(
+            request_id=request_id,
+            prompt=prompt,
+            code=code,
+            scene_name=scene_name,
+            video_duration=video_duration,
+            provider_id=provider.id,
+            api_key=api_key,
+            base_url=base_url or None,
+            endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
+            model=model,
+            temperature=temperature,
+        )
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "ok": True,
+                "requestId": request_id,
+                "alignment": alignment,
+            },
+        )
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Keep server logs concise and avoid accidentally printing user payloads.

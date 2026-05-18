@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dual Coding Lesson Workspace Design</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ee;
+      --paper: #fffdf8;
+      --ink: #1e1b16;
+      --muted: #70685e;
+      --line: #ded5c8;
+      --accent: #a95624;
+      --accent-soft: #f7dfc8;
+      --ok: #2f6d55;
+      --warn: #9b6a19;
+      --code: #17202a;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+      line-height: 1.68;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 40px 28px 64px;
+    }
+
+    article {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 34px 40px;
+      box-shadow: 0 18px 45px rgba(60, 44, 26, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 34px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 34px 0 12px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 24px 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p, li {
+      font-size: 16px;
+    }
+
+    .lead {
+      color: var(--muted);
+      font-size: 17px;
+      margin-bottom: 24px;
+    }
+
+    .callout {
+      border-left: 5px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 14px 18px;
+      margin: 18px 0;
+      border-radius: 6px;
+    }
+
+    .quality {
+      border-left-color: var(--ok);
+      background: #e9f4ef;
+    }
+
+    code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      background: #f3eee6;
+      border: 1px solid #e7ded1;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      background: var(--code);
+      color: #f7f0e8;
+      border-radius: 8px;
+      padding: 18px;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    pre code {
+      background: transparent;
+      border: 0;
+      color: inherit;
+      padding: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 14px 0;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: #fffaf2;
+    }
+
+    .tag {
+      display: inline-block;
+      margin-right: 8px;
+      margin-bottom: 8px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: #eee6da;
+      color: #4f463b;
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      main { padding: 18px 12px 36px; }
+      article { padding: 24px 20px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+<article>
+  <h1>Dual Coding Lesson Workspace Design</h1>
+  <p class="lead">Aegis-Manim 的下一阶段：把 Manim 视频、语言讲稿和教学教纲同步起来，让学生同时看见过程，也读懂过程背后的解释。</p>
+
+  <div class="callout quality">
+    <strong>质量原则：</strong>第一版可以轻量，但不能因为便捷性或轻便性牺牲教学质量。C-lite 是实现路径，不是降低标准。
+  </div>
+
+  <h2>Product Goal</h2>
+  <ul>
+    <li>左侧显示生成后的 Manim 教学视频。</li>
+    <li>右侧显示段落级教学讲稿和教纲。</li>
+    <li>视频播放到某个时间段时，高亮对应讲稿段落。</li>
+    <li>点击讲稿段落可以跳到视频对应位置。</li>
+    <li>讲稿和视频不匹配时，可以重新对齐，不必重新渲染视频。</li>
+  </ul>
+
+  <h2>Chosen Architecture: C-lite Post-hoc Metadata Alignment</h2>
+  <p>系统先生成和渲染 Manim 视频。视频存在之后，再用可获得的元数据建立视频时间段和讲稿段落之间的对齐关系。</p>
+  <p>第一版不依赖完整视频理解，而是使用这些信号：</p>
+  <div>
+    <span class="tag">原始用户问题</span>
+    <span class="tag">生成 Manim 代码</span>
+    <span class="tag">Scene class</span>
+    <span class="tag">play / wait 顺序</span>
+    <span class="tag">run_time</span>
+    <span class="tag">视频时长</span>
+    <span class="tag">渲染日志</span>
+  </div>
+
+  <h2>Data Model</h2>
+  <pre><code>{
+  "videoUrl": "/video/...",
+  "code": "from manim import *\n...",
+  "alignment": {
+    "mode": "posthoc_metadata",
+    "confidence": "medium",
+    "warnings": [],
+    "segments": [
+      {
+        "id": "seg_1",
+        "title": "建立直觉",
+        "script": "这一段先用图形展示问题的基本结构，让学生把文字描述和画面对象对应起来。",
+        "visualIntent": "展示初始对象、坐标或变量关系。",
+        "startTime": 0,
+        "endTime": 18,
+        "confidence": "medium"
+      }
+    ]
+  }
+}</code></pre>
+
+  <h2>Backend Components</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Alignment Signal Extractor</h3>
+      <p>从生成代码和渲染结果中提取可对齐信号。优先用 Python AST，保守回退到 regex，不执行用户生成代码。</p>
+    </div>
+    <div class="card">
+      <h3>Alignment Generator</h3>
+      <p>调用当前配置的 LLM，基于原始问题、代码摘要、时间信号和渲染元数据生成段落级讲稿时间轴。</p>
+    </div>
+    <div class="card">
+      <h3>Alignment Validator</h3>
+      <p>检查 LLM 输出：段落必须有序、不重叠、时间范围合法，低质量结果必须暴露 warning 或错误。</p>
+    </div>
+    <div class="card">
+      <h3>Workspace UI</h3>
+      <p>播放器 timeupdate 驱动右侧段落高亮；点击段落 seek；低置信度段落显示警告状态。</p>
+    </div>
+  </div>
+
+  <h2>Quality Gates</h2>
+  <ul>
+    <li>Alignment quality 是产品要求，不是装饰。</li>
+    <li>系统必须显示不确定性，不能把弱对齐伪装成精确对齐。</li>
+    <li>用户必须能检查、重新对齐，并看到失败状态。</li>
+    <li>如果 timing 只是估算，confidence 不能是 high。</li>
+    <li>架构要能升级到抽帧校准和视觉模型校准。</li>
+  </ul>
+
+  <h2>Borrow From ManimCat</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Borrow Now</h3>
+      <ul>
+        <li>Problem framing 的中间思考层。</li>
+        <li>生成、渲染、对齐、失败、完成的任务状态。</li>
+        <li>Modify-and-rerender 的产品模式。</li>
+        <li>工作台式布局。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Defer</h3>
+      <ul>
+        <li>完整 React + Redis + Bull 迁移。</li>
+        <li>Plot Studio。</li>
+        <li>长生命周期 Agent Studio。</li>
+        <li>完整视频理解对齐。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Acceptance Criteria</h2>
+  <ul>
+    <li>生成结果能包含 <code>alignment.segments[]</code>。</li>
+    <li>视频播放时 UI 能高亮当前段落。</li>
+    <li>点击段落能跳转视频。</li>
+    <li>低置信度或失败对齐对用户可见。</li>
+    <li>可以不重渲染视频，只重新生成对齐。</li>
+    <li>段落级同步不阻碍未来逐句同步。</li>
+  </ul>
+
+  <h2>Open Decisions</h2>
+  <ul>
+    <li>第一版视频时长来自 ffprobe、Manim 元数据，还是浏览器 metadata。</li>
+    <li>Problem framing 是同一 milestone 做，还是 alignment MVP 后立刻补。</li>
+    <li>第一版是否支持手动编辑 segment，还是先只支持重新对齐。</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
