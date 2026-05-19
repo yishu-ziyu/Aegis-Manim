@@ -19,6 +19,14 @@ from uuid import uuid4
 
 from alignment import generate_alignment
 from llm_providers import DEFAULT_PROVIDER, provider_presets_for_ui, resolve_provider
+from manim_knowledge import (
+    build_repair_feedback,
+    classify_render_error,
+    knowledge_sources_for_ui,
+    precheck_manim_code,
+    repair_recipes_for_ui,
+    summarize_precheck_for_prompt,
+)
 from manim_agent import (
     DEFAULT_MODEL,
     DEFAULT_ZHIPU_ENDPOINT,
@@ -39,6 +47,8 @@ APP_VERSION = "web_app_v20260429_1"
 MAX_RENDER_ATTEMPTS = 3
 VIDEO_CACHE: dict[str, Path] = {}
 VIDEO_CACHE_LOCK = threading.Lock()
+JOB_STORE: dict[str, dict[str, Any]] = {}
+JOB_STORE_LOCK = threading.Lock()
 
 
 def ensure_generated_dir() -> None:
@@ -198,6 +208,101 @@ def register_video(path: Path) -> str:
     return video_id
 
 
+def create_job(prompt: str) -> str:
+    job_id = build_request_id()
+    now = datetime.now().isoformat(timespec="seconds")
+    with JOB_STORE_LOCK:
+        JOB_STORE[job_id] = {
+            "ok": True,
+            "jobId": job_id,
+            "requestId": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "currentStudentMessage": "任务已进入队列，正在准备拆解你的学习问题。",
+            "events": [],
+            "technicalEvents": [],
+            "result": None,
+            "error": None,
+            "promptHash": prompt_fingerprint(prompt) if prompt else None,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+    return job_id
+
+
+def emit_job_event(
+    job_id: str,
+    *,
+    stage: str,
+    student_message: str,
+    technical_message: str = "",
+    status: str | None = None,
+    severity: str = "info",
+    attempt: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    event: dict[str, Any] = {
+        "time": now,
+        "stage": stage,
+        "severity": severity,
+        "studentMessage": student_message,
+    }
+    if attempt is not None:
+        event["attempt"] = attempt
+    if metadata:
+        event["metadata"] = metadata
+    technical_event = {
+        **event,
+        "technicalMessage": technical_message or student_message,
+    }
+    with JOB_STORE_LOCK:
+        job = JOB_STORE.get(job_id)
+        if not job:
+            return
+        job["stage"] = stage
+        if status:
+            job["status"] = status
+        job["currentStudentMessage"] = student_message
+        job["events"].append(event)
+        job["technicalEvents"].append(technical_event)
+        job["updatedAt"] = now
+
+
+def finish_job(job_id: str, result: dict[str, Any]) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with JOB_STORE_LOCK:
+        job = JOB_STORE.get(job_id)
+        if not job:
+            return
+        job["status"] = "succeeded"
+        job["stage"] = "complete"
+        job["currentStudentMessage"] = "教学视频已经生成完成，讲稿段落也准备好了。"
+        job["result"] = result
+        job["updatedAt"] = now
+
+
+def fail_job(job_id: str, error_payload: dict[str, Any], student_message: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with JOB_STORE_LOCK:
+        job = JOB_STORE.get(job_id)
+        if not job:
+            return
+        job["status"] = "failed"
+        job["stage"] = "failed"
+        job["currentStudentMessage"] = student_message
+        job["error"] = error_payload
+        job["updatedAt"] = now
+
+
+def job_snapshot(job_id: str) -> dict[str, Any] | None:
+    with JOB_STORE_LOCK:
+        job = JOB_STORE.get(job_id)
+        if not job:
+            return None
+        return json.loads(json.dumps(job, ensure_ascii=False))
+
+
 def probe_video_duration(path: Path) -> float | None:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
@@ -250,6 +355,389 @@ def optional_positive_float(value: object) -> float | None:
     if parsed <= 0:
         return None
     return parsed
+
+
+def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
+    prompt = str(payload.get("prompt", "")).strip()
+    provider_id = str(payload.get("provider", DEFAULT_PROVIDER)).strip() or DEFAULT_PROVIDER
+    provider = resolve_provider(provider_id)
+    api_key = str(payload.get("apiKey", "")).strip()
+    model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
+    base_url = str(payload.get("baseUrl", "")).strip()
+    endpoint = str(payload.get("endpoint", "")).strip()
+    scene_name = safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
+    no_render = bool(payload.get("noRender", False))
+
+    try:
+        temperature = float(payload.get("temperature", 0.2))
+    except (TypeError, ValueError):
+        temperature = 0.2
+    temperature = max(0.0, min(1.0, temperature))
+
+    request_context = {
+        "provider": provider.id,
+        "providerName": provider.name,
+        "apiType": provider.api_type,
+        "model": model,
+        "baseUrl": base_url or provider.base_url,
+        "endpoint": endpoint or provider.base_url,
+        "sceneNameInput": scene_name,
+        "temperature": temperature,
+        "noRender": no_render,
+        "promptLen": len(prompt),
+        "promptHash": prompt_fingerprint(prompt) if prompt else None,
+    }
+
+    emit_job_event(
+        job_id,
+        status="running",
+        stage="validation",
+        student_message="正在确认你的问题足够清楚，并准备拆成教学动画。",
+        technical_message=f"provider={provider.id} model={model}",
+    )
+
+    if len(prompt) < 6:
+        detail = "Please provide a clearer learning question."
+        append_bug_log(
+            request_id=job_id,
+            stage="validation",
+            severity="warn",
+            message="Prompt is too short",
+            detail=detail,
+            context=request_context,
+        )
+        fail_job(
+            job_id,
+            {"ok": False, "error": "Prompt is too short.", "detail": detail, "requestId": job_id},
+            "这个问题还不够明确，需要补充你想理解的概念或例子。",
+        )
+        return
+
+    if provider.requires_api_key and not api_key:
+        detail = f"Please paste your own {provider.name} API key in the form."
+        append_bug_log(
+            request_id=job_id,
+            stage="validation",
+            severity="warn",
+            message="Missing API key",
+            detail=detail,
+            context=request_context,
+        )
+        fail_job(
+            job_id,
+            {"ok": False, "error": "Missing API key.", "detail": detail, "requestId": job_id},
+            "模型服务还没有可用凭证，暂时不能开始生成动画。",
+        )
+        return
+
+    if is_placeholder_api_key(api_key):
+        detail = "Please use a real key generated in your own account."
+        append_bug_log(
+            request_id=job_id,
+            stage="validation",
+            severity="warn",
+            message="Placeholder API key detected",
+            detail=detail,
+            context=request_context,
+        )
+        fail_job(
+            job_id,
+            {"ok": False, "error": "Placeholder API key detected.", "detail": detail, "requestId": job_id},
+            "检测到示例 Key，暂时不能调用真实模型生成动画。",
+        )
+        return
+
+    ensure_generated_dir()
+    resolved_endpoint = endpoint or provider.base_url
+    provider_name = provider.name
+    max_attempts = 1 if no_render else MAX_RENDER_ATTEMPTS
+    retry_feedback = ""
+    last_code = ""
+    last_scene_file: Path | None = None
+    last_scene_name = scene_name
+    last_notes: list[str] = []
+    last_precheck: list[Any] = []
+
+    for attempt in range(1, max_attempts + 1):
+        effective_prompt = prompt
+        if retry_feedback:
+            effective_prompt = f"{prompt}\n\n{retry_feedback}"
+
+        try:
+            emit_job_event(
+                job_id,
+                stage="model",
+                student_message=f"正在生成第 {attempt} 版 Manim 教学脚本，把问题转换成可播放的动画结构。",
+                technical_message=f"MODEL_REQUEST_START attempt={attempt}/{max_attempts} provider={provider.id} model={model}",
+                attempt=attempt,
+            )
+            append_runtime_log(
+                "MODEL_REQUEST_START",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={model} endpoint={resolved_endpoint}",
+            )
+            raw_code, provider_name, resolved_endpoint = generate_code_with_llm(
+                provider_id=provider.id,
+                api_key=api_key,
+                base_url=base_url or None,
+                endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
+                model=model,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=effective_prompt,
+                temperature=temperature,
+            )
+            request_context["endpoint"] = resolved_endpoint
+            code = extract_python_only(raw_code)
+            code, notes = apply_runtime_compatibility_fixes(code)
+            precheck_issues = precheck_manim_code(code, scene_name)
+            last_precheck = precheck_issues
+            if notes:
+                append_runtime_log(
+                    "COMPATIBILITY_FIX",
+                    f"request_id={job_id} attempt={attempt}/{max_attempts} {'; '.join(notes)}",
+                )
+            emit_job_event(
+                job_id,
+                stage="precheck",
+                student_message="正在用 Manim 规则库检查场景结构、文字、坐标轴和常见不稳定写法。",
+                technical_message=f"precheck issues={len(precheck_issues)} compatibility_notes={len(notes)}",
+                attempt=attempt,
+                metadata={
+                    "precheckIssues": [
+                        {
+                            "category": issue.category,
+                            "severity": issue.severity,
+                            "studentMessage": issue.student_message,
+                            "technicalMessage": issue.technical_message,
+                            "repairHint": issue.repair_hint,
+                            "sourceIds": list(issue.source_ids),
+                        }
+                        for issue in precheck_issues
+                    ],
+                    "compatibilityNotes": notes,
+                },
+            )
+            append_runtime_log(
+                "MODEL_REQUEST_OK",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={model} chars={len(code)}",
+            )
+        except Exception as exc:
+            detail = str(exc)
+            append_runtime_log(
+                "MODEL_REQUEST_FAIL",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={model} endpoint={resolved_endpoint} error={detail}",
+            )
+            append_bug_log(
+                request_id=job_id,
+                stage="model",
+                severity="error",
+                message="Model request failed",
+                detail=detail,
+                context={**request_context, "attempt": attempt, "maxAttempts": max_attempts},
+            )
+            fail_job(
+                job_id,
+                {"ok": False, "error": "Model request failed.", "detail": detail, "requestId": job_id},
+                "模型生成阶段失败了，暂时还没有形成可用动画脚本。",
+            )
+            return
+
+        blocking_precheck = [issue for issue in precheck_issues if issue.severity == "error"]
+        if blocking_precheck and attempt < max_attempts:
+            retry_feedback = summarize_precheck_for_prompt(blocking_precheck)
+            emit_job_event(
+                job_id,
+                stage="repair",
+                student_message="规则库发现这版脚本还不能稳定播放，正在先修好场景结构再渲染。",
+                technical_message=retry_feedback,
+                severity="warn",
+                attempt=attempt,
+            )
+            append_bug_log(
+                request_id=job_id,
+                stage="precheck",
+                severity="warn",
+                message="Pre-render rule check requested repair",
+                detail=retry_feedback,
+                context={**request_context, "attempt": attempt, "maxAttempts": max_attempts},
+            )
+            continue
+
+        detected_scene_name = detect_scene_name(code, scene_name)
+        filename = f"scene_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}.py"
+        scene_file = GENERATED_DIR / filename
+        scene_file.write_text(code.strip() + "\n", encoding="utf-8")
+        last_code = code
+        last_scene_file = scene_file
+        last_scene_name = detected_scene_name
+        last_notes = notes
+
+        response: dict[str, Any] = {
+            "ok": True,
+            "requestId": job_id,
+            "provider": provider.id,
+            "providerName": provider_name,
+            "endpoint": resolved_endpoint,
+            "sceneName": detected_scene_name,
+            "code": code,
+            "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
+            "attempt": attempt,
+            "maxAttempts": max_attempts,
+            "knowledgeSources": knowledge_sources_for_ui(),
+            "repairRecipes": repair_recipes_for_ui(),
+        }
+        if notes:
+            response["warnings"] = notes
+        if precheck_issues:
+            response["precheckIssues"] = [
+                {
+                    "category": issue.category,
+                    "severity": issue.severity,
+                    "studentMessage": issue.student_message,
+                    "technicalMessage": issue.technical_message,
+                    "repairHint": issue.repair_hint,
+                    "sourceIds": list(issue.source_ids),
+                }
+                for issue in precheck_issues
+            ]
+
+        if no_render:
+            response["message"] = "Code generated successfully. Render skipped."
+            append_runtime_log("GENERATE_SKIP_RENDER", f"request_id={job_id} file={scene_file.name} scene={detected_scene_name}")
+            emit_job_event(
+                job_id,
+                stage="complete",
+                student_message="脚本已经生成完成，这次按你的选择跳过了视频渲染。",
+                technical_message=f"GENERATE_SKIP_RENDER file={scene_file.name}",
+                attempt=attempt,
+            )
+            finish_job(job_id, response)
+            return
+
+        try:
+            emit_job_event(
+                job_id,
+                stage="render",
+                student_message="正在渲染动画，检查画面能否清楚表达这个概念。",
+                technical_message=f"RENDER_START file={scene_file.name} scene={detected_scene_name}",
+                attempt=attempt,
+            )
+            render_scene(scene_file, detected_scene_name)
+            video_path = find_latest_video(scene_file, detected_scene_name)
+            if video_path is None:
+                raise RuntimeError("Render completed but output video was not found.")
+            video_duration = probe_video_duration(video_path)
+            response["videoId"] = register_video(video_path)
+            if video_duration is not None:
+                response["videoDuration"] = video_duration
+            emit_job_event(
+                job_id,
+                stage="alignment",
+                student_message="视频已经出来，正在把讲稿段落和画面时间对应起来。",
+                technical_message="ALIGNMENT_FALLBACK initial metadata alignment",
+                attempt=attempt,
+            )
+            response["alignment"] = generate_alignment(
+                prompt=prompt,
+                code=code,
+                scene_name=detected_scene_name,
+                video_duration=video_duration,
+                llm_call=None,
+            )
+            append_runtime_log(
+                "ALIGNMENT_FALLBACK",
+                f"request_id={job_id} scene={detected_scene_name} reason=initial_response_uses_fast_metadata_alignment",
+            )
+            response["message"] = "Code generated and video rendered successfully."
+            if attempt > 1:
+                response["message"] += f" Auto-retry succeeded on attempt {attempt}."
+            append_runtime_log(
+                "RENDER_OK",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} file={scene_file.name} scene={detected_scene_name} video={video_path}",
+            )
+            finish_job(job_id, response)
+            return
+        except Exception as exc:
+            detail = str(exc)
+            classification = classify_render_error(detail)
+            append_runtime_log(
+                "RENDER_FAIL",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} file={scene_file.name} scene={detected_scene_name} category={classification.category} error={detail}",
+            )
+            append_bug_log(
+                request_id=job_id,
+                stage="render",
+                severity="error",
+                message="Render failed",
+                detail=detail,
+                context={
+                    **request_context,
+                    "attempt": attempt,
+                    "maxAttempts": max_attempts,
+                    "sceneNameDetected": detected_scene_name,
+                    "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
+                    "warnings": notes,
+                    "errorCategory": classification.category,
+                    "repairRecipes": list(classification.recipe_ids),
+                },
+            )
+            emit_job_event(
+                job_id,
+                stage="repair",
+                student_message=classification.student_message,
+                technical_message=f"{classification.technical_message} Error: {detail[-800:]}",
+                severity="warn",
+                attempt=attempt,
+                metadata={
+                    "errorCategory": classification.category,
+                    "repairRecipes": list(classification.recipe_ids),
+                },
+            )
+            if attempt < max_attempts:
+                retry_feedback = build_repair_feedback(
+                    original_prompt=prompt,
+                    render_error=detail,
+                    classification=classification,
+                    precheck_issues=precheck_issues,
+                    attempt=attempt + 1,
+                )
+                append_runtime_log("RENDER_RETRY", f"request_id={job_id} next_attempt={attempt + 1}/{max_attempts}")
+                continue
+
+            err = {
+                "ok": False,
+                "error": f"Render failed after {max_attempts} attempts.",
+                "detail": detail,
+                "requestId": job_id,
+                "attempt": attempt,
+                "maxAttempts": max_attempts,
+                "code": last_code,
+                "sceneName": last_scene_name,
+                "errorCategory": classification.category,
+                "studentMessage": classification.student_message,
+                "repairRecipes": list(classification.recipe_ids),
+            }
+            if last_scene_file is not None:
+                err["codeFile"] = str(last_scene_file.relative_to(PROJECT_ROOT))
+            if last_notes:
+                err["warnings"] = last_notes
+            if last_precheck:
+                err["precheckIssues"] = [
+                    {
+                        "category": issue.category,
+                        "severity": issue.severity,
+                        "studentMessage": issue.student_message,
+                        "technicalMessage": issue.technical_message,
+                        "repairHint": issue.repair_hint,
+                        "sourceIds": list(issue.source_ids),
+                    }
+                    for issue in last_precheck
+                ]
+            fail_job(
+                job_id,
+                err,
+                "系统已经尝试多次重写这段动画，但这次还没有生成清晰稳定的视频。",
+            )
+            return
 
 
 def make_index_html() -> str:
@@ -617,6 +1105,48 @@ def make_index_html() -> str:
     .process-steps {{
       display: grid;
       gap: 8px;
+    }}
+
+    .process-feed {{
+      display: grid;
+      gap: 7px;
+      max-height: 190px;
+      overflow: auto;
+      padding-right: 3px;
+    }}
+
+    .process-feed-item {{
+      border-left: 3px solid rgba(31, 136, 118, 0.45);
+      padding: 5px 0 5px 9px;
+      color: #463729;
+      font-size: 0.82rem;
+      line-height: 1.38;
+      background: rgba(255, 255, 255, 0.34);
+      border-radius: 0 8px 8px 0;
+    }}
+
+    .process-feed-item.warn {{
+      border-left-color: rgba(209, 77, 35, 0.65);
+    }}
+
+    .tech-details {{
+      border-top: 1px dashed rgba(10, 53, 87, 0.2);
+      padding-top: 8px;
+      color: #4d3b2b;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.75rem;
+    }}
+
+    .tech-details summary {{
+      cursor: pointer;
+      color: #173452;
+    }}
+
+    .tech-log {{
+      white-space: pre-wrap;
+      margin: 8px 0 0;
+      max-height: 170px;
+      overflow: auto;
     }}
 
     .process-step {{
@@ -1033,6 +1563,11 @@ def make_index_html() -> str:
             <div class="process-step" data-stage="2"><span class="process-dot"></span><span>失败时自动带错误重写代码</span></div>
             <div class="process-step" data-stage="3"><span class="process-dot"></span><span>生成同步讲稿，可在视频完成后增强对齐</span></div>
           </div>
+          <div id="processFeed" class="process-feed"></div>
+          <details id="techDetails" class="tech-details">
+            <summary>技术细节</summary>
+            <pre id="techLog" class="tech-log"></pre>
+          </details>
         </div>
         <div id="statusBox" class="status-box">等待输入...</div>
       </form>
@@ -1114,6 +1649,8 @@ def make_index_html() -> str:
     const processMessage = document.getElementById("processMessage");
     const processTime = document.getElementById("processTime");
     const processSteps = Array.from(document.querySelectorAll(".process-step"));
+    const processFeed = document.getElementById("processFeed");
+    const techLog = document.getElementById("techLog");
     const alignmentPanel = document.getElementById("alignmentPanel");
     const alignmentSummary = document.getElementById("alignmentSummary");
     const alignmentWarning = document.getElementById("alignmentWarning");
@@ -1253,6 +1790,98 @@ def make_index_html() -> str:
       processSteps.forEach((step) => step.classList.remove("active", "done"));
     }}
 
+    function resetProcessDetails() {{
+      processFeed.replaceChildren();
+      techLog.textContent = "";
+    }}
+
+    function stageIndexFor(stage) {{
+      if (stage === "model" || stage === "precheck" || stage === "validation" || stage === "queued") return 0;
+      if (stage === "render") return 1;
+      if (stage === "repair" || stage === "failed") return 2;
+      if (stage === "alignment" || stage === "complete") return 3;
+      return 0;
+    }}
+
+    function renderJobSnapshot(job) {{
+      if (!job) return;
+      processPanel.classList.add("visible");
+      setProcessStage(stageIndexFor(job.stage));
+      if (job.currentStudentMessage) {{
+        processMessage.textContent = job.currentStudentMessage;
+      }}
+      const events = Array.isArray(job.events) ? job.events.slice(-8) : [];
+      processFeed.replaceChildren();
+      events.forEach((event) => {{
+        const item = document.createElement("div");
+        item.className = "process-feed-item" + (event.severity === "warn" || event.severity === "error" ? " warn" : "");
+        const attempt = event.attempt ? `第 ${{event.attempt}} 次 · ` : "";
+        item.textContent = attempt + (event.studentMessage || event.stage || "处理中");
+        processFeed.appendChild(item);
+      }});
+      const technical = Array.isArray(job.technicalEvents) ? job.technicalEvents.slice(-12) : [];
+      techLog.textContent = technical.map((event) => {{
+        const attempt = event.attempt ? ` attempt=${{event.attempt}}` : "";
+        return `[${{event.time || ""}}] ${{event.stage || "event"}}${{attempt}} ${{event.technicalMessage || ""}}`;
+      }}).join("\\n");
+    }}
+
+    function applyGenerateResult(data, payload, requestId) {{
+      codeOutput.textContent = data.code || "# 未返回代码";
+      latestCode = data.code || "";
+      latestSceneName = data.sceneName || payload.sceneName || "GeneratedScene";
+      sceneTag.textContent = "Scene: " + (data.sceneName || "-");
+      fileTag.textContent = "File: " + (data.codeFile || "-");
+      if (data.providerName) {{
+        sceneTag.textContent += " · " + data.providerName;
+      }}
+      setWarnings(data.warnings || []);
+
+      if (data.videoId) {{
+        videoPlayer.src = "/api/video/" + data.videoId;
+        videoCard.classList.add("visible");
+        if (data.alignment) {{
+          setAlignment(data.alignment);
+        }} else {{
+          clearAlignment();
+        }}
+      }} else {{
+        clearAlignment();
+      }}
+
+      const warningText = Array.isArray(data.warnings) && data.warnings.length
+        ? " | 已自动做兼容修复"
+        : "";
+      const reqText = requestId && requestId !== "-" ? " | 诊断ID: " + requestId : "";
+      setStatus((data.message || "处理完成") + warningText + reqText, "success");
+    }}
+
+    async function waitForJob(statusUrl, payload) {{
+      while (true) {{
+        const response = await fetch(statusUrl, {{ cache: "no-store" }});
+        const job = await response.json();
+        if (!response.ok || !job.ok) {{
+          throw new Error(job.error || "无法读取任务状态");
+        }}
+        renderJobSnapshot(job);
+        requestTag.textContent = "Req: " + (job.requestId || job.jobId || "-");
+        if (job.status === "succeeded") {{
+          applyGenerateResult(job.result || {{}}, payload, job.requestId || job.jobId || "-");
+          return;
+        }}
+        if (job.status === "failed") {{
+          const err = job.error || {{}};
+          codeOutput.textContent = err.code || codeOutput.textContent || "# 这次没有可用代码";
+          if (err.code) latestCode = err.code;
+          if (err.sceneName) latestSceneName = err.sceneName;
+          setWarnings(err.warnings || []);
+          const detail = err.studentMessage || job.currentStudentMessage || err.detail || err.error || "任务失败";
+          throw new Error(detail + " | 诊断ID: " + (job.requestId || job.jobId || "-"));
+        }}
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      }}
+    }}
+
     function setWarnings(warnings) {{
       if (Array.isArray(warnings) && warnings.length) {{
         warningBox.textContent = "自动兼容修复: " + warnings.join(" ; ");
@@ -1388,6 +2017,7 @@ def make_index_html() -> str:
       submitBtn.disabled = true;
       setStatus("请求已发送，正在生成代码...", "");
       startProcess();
+      resetProcessDetails();
       setWarnings([]);
       latestPrompt = "";
       latestCode = "";
@@ -1417,52 +2047,22 @@ def make_index_html() -> str:
       localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
 
       try {{
-        let requestId = "-";
-        const response = await fetch("/api/generate", {{
+        const response = await fetch("/api/generate/start", {{
           method: "POST",
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify(payload)
         }});
         const data = await response.json();
-        requestId = data.requestId || "-";
-        requestTag.textContent = "Req: " + requestId;
         if (!response.ok || !data.ok) {{
           const detail = data.detail ? " | " + data.detail : "";
-          const reqText = requestId !== "-" ? " | 诊断ID: " + requestId : "";
+          const reqText = data.requestId ? " | 诊断ID: " + data.requestId : "";
           throw new Error((data.error || "请求失败") + detail + reqText);
         }}
-
-        codeOutput.textContent = data.code || "# 未返回代码";
-        latestCode = data.code || "";
-        latestSceneName = data.sceneName || payload.sceneName || "GeneratedScene";
-        sceneTag.textContent = "Scene: " + (data.sceneName || "-");
-        fileTag.textContent = "File: " + (data.codeFile || "-");
-        if (data.providerName) {{
-          sceneTag.textContent += " · " + data.providerName;
-        }}
-        setWarnings(data.warnings || []);
-
-        if (data.videoId) {{
-          videoPlayer.src = "/api/video/" + data.videoId;
-          videoCard.classList.add("visible");
-          if (data.alignment) {{
-            setAlignment(data.alignment);
-          }} else {{
-            clearAlignment();
-          }}
-        }} else {{
-          clearAlignment();
-        }}
-
-        const warningText = Array.isArray(data.warnings) && data.warnings.length
-          ? " | 已自动做兼容修复"
-          : "";
-        const reqText = requestId !== "-" ? " | 诊断ID: " + requestId : "";
-        setStatus((data.message || "处理完成") + warningText + reqText, "success");
+        requestTag.textContent = "Req: " + (data.requestId || data.jobId || "-");
+        await waitForJob(data.statusUrl, payload);
       }} catch (err) {{
         setStatus(err && err.message ? err.message : "请求异常", "error");
       }} finally {{
-        stopProcess();
         submitBtn.disabled = false;
       }}
     }});
@@ -1565,6 +2165,15 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route.startswith("/api/jobs/"):
+            job_id = route.rsplit("/", 1)[-1]
+            snapshot = job_snapshot(job_id)
+            if snapshot is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Job not found."})
+                return
+            self._send_json(HTTPStatus.OK, snapshot)
+            return
+
         if route == "/api/bugs/recent":
             query = parse_qs(parsed.query)
             limit_raw = query.get("limit", ["20"])[0]
@@ -1600,6 +2209,10 @@ class AegisWebHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/api/align":
             self._handle_align()
+            return
+
+        if self.path == "/api/generate/start":
+            self._handle_generate_start()
             return
 
         if self.path != "/api/generate":
@@ -1909,6 +2522,48 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                     err["warnings"] = last_notes
                 self._send_json(status, err)
                 return
+
+    def _handle_generate_start(self) -> None:
+        try:
+            payload = self._read_json_body()
+        except ValueError as exc:
+            request_id = build_request_id()
+            append_bug_log(
+                request_id=request_id,
+                stage="request",
+                severity="error",
+                message="Invalid request payload",
+                detail=str(exc),
+            )
+            status, err = json_error(
+                str(exc),
+                status=HTTPStatus.BAD_REQUEST,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        prompt = str(payload.get("prompt", "")).strip()
+        job_id = create_job(prompt)
+        emit_job_event(
+            job_id,
+            status="queued",
+            stage="queued",
+            student_message="任务已创建，正在准备把问题变成教学动画。",
+            technical_message="GENERATE_JOB_CREATED",
+        )
+        thread = threading.Thread(target=run_generate_job, args=(job_id, payload), daemon=True)
+        thread.start()
+        self._send_json(
+            HTTPStatus.ACCEPTED,
+            {
+                "ok": True,
+                "jobId": job_id,
+                "requestId": job_id,
+                "statusUrl": f"/api/jobs/{job_id}",
+            },
+        )
+        return
 
     def _build_alignment_response(
         self,

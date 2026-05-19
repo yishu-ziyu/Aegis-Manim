@@ -1,3 +1,18 @@
+# Dual-Coding Generation Process Goal
+
+- [x] Build a real backend job/event state layer for generation, rendering, retry, and alignment.
+- [x] Translate backend events into student-facing learning-process language.
+- [x] Keep technical errors, attempts, and logs in a collapsible diagnostic layer.
+- [x] Add a product knowledge substrate for Manim rules, local failure patterns, and verified repair recipes.
+- [x] Add rule prechecks, error classification, and repair recipe prompts before retry.
+- [x] Wire the Web UI to poll real job state instead of relying on timed placeholder progress.
+- [x] Add focused tests for event translation, precheck, classification, repair prompts, and job snapshots.
+- [x] Verify locally with tests, compile checks, and API smoke checks on `127.0.0.1:18011`.
+
+## Review
+
+Implemented the first event-driven dual-coding generation loop. Web generation now starts an async job, polls `/api/jobs/{id}`, shows real student-facing events, and keeps technical events in a collapsible diagnostics layer. Added a Manim product knowledge substrate with official-doc source anchors, local-failure source anchors, pre-render checks, render-error classification, and repair recipes used for retry prompts. Verified with 31 focused Aegis tests, compile checks, local health, async job success smoke, and async validation-failure smoke. Chrome visual automation was blocked by a local CDP authorization prompt, so browser-level visual QA remains to be rerun after Chrome debugging access is allowed.
+
 # Manim Knowledge Layer Task
 
 - [x] Inspect existing prompt and generation flow.

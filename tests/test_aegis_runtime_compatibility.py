@@ -171,6 +171,44 @@ supply = axes.plot(lambda x: 2 + x, line_config={"stroke_opacity": 0.5})
         append_log.assert_called_once()
         assert append_log.call_args.args[0] == "CLIENT_DISCONNECT"
 
+    def test_job_events_keep_student_and_technical_layers_separate(self) -> None:
+        job_id = web_app.create_job("解释税收楔子")
+
+        try:
+            web_app.emit_job_event(
+                job_id,
+                status="running",
+                stage="repair",
+                student_message="这版画面还不够清楚，正在重新组织表达。",
+                technical_message="Render failed: NameError curve",
+                severity="warn",
+                attempt=1,
+            )
+            snapshot = web_app.job_snapshot(job_id)
+        finally:
+            with web_app.JOB_STORE_LOCK:
+                web_app.JOB_STORE.pop(job_id, None)
+
+        assert snapshot is not None
+        assert snapshot["status"] == "running"
+        assert snapshot["currentStudentMessage"] == "这版画面还不够清楚，正在重新组织表达。"
+        assert snapshot["events"][-1]["studentMessage"] == "这版画面还不够清楚，正在重新组织表达。"
+        assert snapshot["technicalEvents"][-1]["technicalMessage"] == "Render failed: NameError curve"
+
+    def test_finish_job_stores_result_for_polling(self) -> None:
+        job_id = web_app.create_job("解释税收楔子")
+
+        try:
+            web_app.finish_job(job_id, {"ok": True, "code": "from manim import *"})
+            snapshot = web_app.job_snapshot(job_id)
+        finally:
+            with web_app.JOB_STORE_LOCK:
+                web_app.JOB_STORE.pop(job_id, None)
+
+        assert snapshot is not None
+        assert snapshot["status"] == "succeeded"
+        assert snapshot["result"]["ok"] is True
+
 
 if __name__ == "__main__":
     unittest.main()
