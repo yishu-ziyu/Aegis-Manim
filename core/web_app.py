@@ -1292,6 +1292,13 @@ def make_index_html() -> str:
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
     }}
 
+    .lesson-pair {{
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+      gap: 14px;
+      align-items: stretch;
+    }}
+
     .video-card {{
       display: none;
       border-radius: 16px;
@@ -1303,6 +1310,11 @@ def make_index_html() -> str:
     .video-card.visible {{
       display: block;
       animation: panel-up 260ms ease-out;
+    }}
+
+    .lesson-pair .video-card.visible {{
+      display: flex;
+      align-items: center;
     }}
 
     video {{
@@ -1324,6 +1336,7 @@ def make_index_html() -> str:
 
     .alignment-panel.visible {{
       display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
       animation: panel-up 260ms ease-out;
     }}
 
@@ -1365,6 +1378,9 @@ def make_index_html() -> str:
     .alignment-list {{
       display: grid;
       gap: 10px;
+      max-height: 410px;
+      overflow: auto;
+      padding-right: 2px;
     }}
 
     .segment-card {{
@@ -1445,6 +1461,12 @@ def make_index_html() -> str:
       .shell {{
         grid-template-columns: 1fr;
         width: min(720px, 94vw);
+      }}
+      .lesson-pair {{
+        grid-template-columns: 1fr;
+      }}
+      .alignment-list {{
+        max-height: none;
       }}
       .hero::before {{
         display: none;
@@ -1596,21 +1618,23 @@ def make_index_html() -> str:
 
         <pre id="codeOutput"># 生成的 Manim 代码会显示在这里</pre>
 
-        <div id="videoCard" class="video-card">
-          <video id="videoPlayer" controls preload="metadata"></video>
-        </div>
-
-        <section id="alignmentPanel" class="alignment-panel">
-          <div class="alignment-head">
-            <div>
-              <h3>同步讲稿</h3>
-              <div id="alignmentSummary" class="alignment-summary">等待渲染完成后生成段落对齐。</div>
-            </div>
-            <button id="realignBtn" class="ghost-btn" type="button" disabled>重新对齐讲稿</button>
+        <div class="lesson-pair">
+          <div id="videoCard" class="video-card">
+            <video id="videoPlayer" controls preload="metadata"></video>
           </div>
-          <div id="alignmentWarning" class="alignment-warning"></div>
-          <div id="alignmentList" class="alignment-list"></div>
-        </section>
+
+          <section id="alignmentPanel" class="alignment-panel">
+            <div class="alignment-head">
+              <div>
+                <h3>同步讲稿</h3>
+                <div id="alignmentSummary" class="alignment-summary">等待渲染完成后生成段落对齐。</div>
+              </div>
+              <button id="realignBtn" class="ghost-btn" type="button" disabled>重新对齐讲稿</button>
+            </div>
+            <div id="alignmentWarning" class="alignment-warning"></div>
+            <div id="alignmentList" class="alignment-list"></div>
+          </section>
+        </div>
 
         <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
       </div>
