@@ -60,3 +60,16 @@ The subdomain can now do useful work: Vercel generates Manim code through remote
 ## Review
 
 The repository was correct. The mismatch came from a non-Aegis service occupying local port 8000 plus a separate Vercel-only gateway page. Local Aegis is verified on `127.0.0.1:8010`; the Vercel page now derives from `core/web_app.py` and only swaps cloud-mode copy and render-backend boundaries.
+
+# Learning View and Complex Prompt Resilience Task
+
+- [x] Add regression coverage for complex prompt brief planning and model-timeout retry.
+- [x] Add a teaching brief layer before Manim code generation for complex prompts.
+- [x] Retry recoverable model request failures instead of failing after the first timeout.
+- [x] Rework the result surface so successful generation enters a learning-first view.
+- [x] Keep generated code and technical logs available but secondary by default.
+- [x] Verify with tests, compile checks, local API checks, and browser/source smoke checks.
+
+## Review
+
+Implemented the first bounded learning-view closure. Complex formula-heavy learning prompts now produce a compact teaching brief before code generation, recoverable model-call failures retry instead of failing immediately, and retry attempts can switch to a faster model variant when the provider exposes one. Successful generations now enter a learning-first result surface with video and synchronized script as the primary right-side view, while generated code remains available as a secondary toggle and technical events stay in diagnostics.

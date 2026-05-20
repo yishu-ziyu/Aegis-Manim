@@ -209,6 +209,58 @@ supply = axes.plot(lambda x: 2 + x, line_config={"stroke_opacity": 0.5})
         assert snapshot["status"] == "succeeded"
         assert snapshot["result"]["ok"] is True
 
+    def test_complex_prompt_is_converted_to_teaching_brief(self) -> None:
+        prompt = (
+            "此均衡状态。也可以定义游戏者 $i$ 在给定 $s_{-i}$ 时的最优反应集为 "
+            "$B_i(s_{-i}) = {s_i^* \\in S_i, U(s_i^*, s_{-i}^*) \\ge U(s_i, s_{-i}^*) "
+            "\\mid \\forall s_i' \\in S_i}$。请用动画讲清楚纳什均衡。"
+        )
+
+        brief = web_app.build_teaching_brief(prompt)
+
+        assert "教学目标" in brief
+        assert "不要把原始公式整段塞进画面" in brief
+        assert "画面段落" in brief
+        assert "$B_i" not in brief
+
+    def test_model_timeout_retries_with_teaching_brief_before_failure(self) -> None:
+        prompt = (
+            "此均衡状态。也可以定义游戏者 $i$ 在给定 $s_{-i}$ 时的最优反应集为 "
+            "$B_i(s_{-i}) = {s_i^* \\in S_i, U(s_i^*, s_{-i}^*) \\ge U(s_i, s_{-i}^*) "
+            "\\mid \\forall s_i' \\in S_i}$。请用动画讲清楚纳什均衡。"
+        )
+        job_id = web_app.create_job(prompt)
+        payload = {
+            "provider": "minimax-coding-cn",
+            "apiKey": "real-test-key",
+            "prompt": prompt,
+            "model": "MiniMax-M2.7",
+            "sceneName": "GeneratedScene",
+            "temperature": 0.2,
+            "noRender": True,
+        }
+
+        generated_code = "from manim import *\n\nclass GeneratedScene(Scene):\n    def construct(self):\n        self.add(Text('Nash'))\n"
+
+        try:
+            with patch.object(
+                web_app,
+                "generate_code_with_llm",
+                side_effect=[RuntimeError("The read operation timed out"), (generated_code, "MiniMax", "https://api.test/messages")],
+            ) as generate:
+                web_app.run_generate_job(job_id, payload)
+            snapshot = web_app.job_snapshot(job_id)
+        finally:
+            with web_app.JOB_STORE_LOCK:
+                web_app.JOB_STORE.pop(job_id, None)
+
+        assert generate.call_count == 2
+        assert "教学 brief" in generate.call_args_list[0].kwargs["user_prompt"]
+        assert generate.call_args_list[1].kwargs["model"] == "MiniMax-M2.7-highspeed"
+        assert snapshot is not None
+        assert snapshot["status"] == "succeeded"
+        assert any(event["stage"] == "repair" for event in snapshot["events"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ RUNTIME_LOG_PATH = RUNTIME_LOG_DIR / "web_runtime.log"
 BUG_LOG_PATH = RUNTIME_LOG_DIR / "bug_trace.jsonl"
 APP_VERSION = "web_app_v20260429_1"
 MAX_RENDER_ATTEMPTS = 3
+COMPLEX_PROMPT_MIN_LEN = 600
 VIDEO_CACHE: dict[str, Path] = {}
 VIDEO_CACHE_LOCK = threading.Lock()
 JOB_STORE: dict[str, dict[str, Any]] = {}
@@ -82,6 +83,58 @@ def safe_short_text(value: str, max_len: int = 300) -> str:
 def prompt_fingerprint(prompt: str) -> str:
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     return digest[:16]
+
+
+def is_complex_learning_prompt(prompt: str) -> bool:
+    markers = (
+        "$",
+        "\\",
+        "forall",
+        "exists",
+        "argmax",
+        "argmin",
+        "均衡",
+        "效用",
+        "最优反应",
+        "纳什",
+        "证明",
+        "定义",
+    )
+    return len(prompt) >= COMPLEX_PROMPT_MIN_LEN or any(marker in prompt for marker in markers)
+
+
+def compact_prompt_for_brief(prompt: str, max_len: int = 520) -> str:
+    without_formula = re.sub(r"\$[^$]*\$", " [公式略] ", prompt)
+    without_formula = re.sub(r"\\[A-Za-z]+", " ", without_formula)
+    normalized = re.sub(r"\s+", " ", without_formula).strip()
+    if len(normalized) <= max_len:
+        return normalized
+    return normalized[: max_len - 3].rstrip() + "..."
+
+
+def build_teaching_brief(prompt: str) -> str:
+    core_question = compact_prompt_for_brief(prompt)
+    return "\n".join(
+        [
+            "教学 brief：把复杂问题先转换成可动画化结构，再写 Manim 代码。",
+            f"用户问题摘要：{core_question}",
+            "教学目标：解释这个抽象概念的含义、成立条件、关键直觉和一个最小例子。",
+            "画面段落：1. 给出直觉场景；2. 展示关键对象和符号含义；3. 用动态变化说明条件；4. 总结结论。",
+            "视觉策略：优先用坐标轴、集合、点、箭头、表格和高亮关系；不要把原始公式整段塞进画面。",
+            "讲解策略：公式只保留必要符号，复杂推导改写成短句和分步说明。",
+            "Manim 约束：使用 Text，不使用 Tex/MathTex；避免依赖 LaTeX；代码必须能在本地 Manim 版本稳定渲染。",
+        ]
+    )
+
+
+def model_for_attempt(provider: Any, requested_model: str, attempt: int) -> str:
+    if attempt <= 1:
+        return requested_model
+    highspeed = f"{requested_model}-highspeed"
+    models = tuple(getattr(provider, "models", ()) or ())
+    if highspeed in models:
+        return highspeed
+    return requested_model
 
 
 def append_bug_log(
@@ -450,37 +503,48 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
     ensure_generated_dir()
     resolved_endpoint = endpoint or provider.base_url
     provider_name = provider.name
-    max_attempts = 1 if no_render else MAX_RENDER_ATTEMPTS
+    max_attempts = MAX_RENDER_ATTEMPTS
     retry_feedback = ""
     last_code = ""
     last_scene_file: Path | None = None
     last_scene_name = scene_name
     last_notes: list[str] = []
     last_precheck: list[Any] = []
+    teaching_brief = build_teaching_brief(prompt) if is_complex_learning_prompt(prompt) else ""
+
+    if teaching_brief:
+        emit_job_event(
+            job_id,
+            stage="brief",
+            student_message="这个问题比较复杂，先把它拆成教学目标、画面段落和可动画化结构。",
+            technical_message="TEACHING_BRIEF_CREATED",
+            metadata={"briefLength": len(teaching_brief), "promptLength": len(prompt)},
+        )
 
     for attempt in range(1, max_attempts + 1):
-        effective_prompt = prompt
+        active_model = model_for_attempt(provider, model, attempt)
+        effective_prompt = teaching_brief or prompt
         if retry_feedback:
-            effective_prompt = f"{prompt}\n\n{retry_feedback}"
+            effective_prompt = f"{effective_prompt}\n\n{retry_feedback}"
 
         try:
             emit_job_event(
                 job_id,
                 stage="model",
                 student_message=f"正在生成第 {attempt} 版 Manim 教学脚本，把问题转换成可播放的动画结构。",
-                technical_message=f"MODEL_REQUEST_START attempt={attempt}/{max_attempts} provider={provider.id} model={model}",
+                technical_message=f"MODEL_REQUEST_START attempt={attempt}/{max_attempts} provider={provider.id} model={active_model}",
                 attempt=attempt,
             )
             append_runtime_log(
                 "MODEL_REQUEST_START",
-                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={model} endpoint={resolved_endpoint}",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={active_model} endpoint={resolved_endpoint}",
             )
             raw_code, provider_name, resolved_endpoint = generate_code_with_llm(
                 provider_id=provider.id,
                 api_key=api_key,
                 base_url=base_url or None,
                 endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
-                model=model,
+                model=active_model,
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=effective_prompt,
                 temperature=temperature,
@@ -518,13 +582,13 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
             )
             append_runtime_log(
                 "MODEL_REQUEST_OK",
-                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={model} chars={len(code)}",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={active_model} chars={len(code)}",
             )
         except Exception as exc:
             detail = str(exc)
             append_runtime_log(
                 "MODEL_REQUEST_FAIL",
-                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={model} endpoint={resolved_endpoint} error={detail}",
+                f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={active_model} endpoint={resolved_endpoint} error={detail}",
             )
             append_bug_log(
                 request_id=job_id,
@@ -532,12 +596,28 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 severity="error",
                 message="Model request failed",
                 detail=detail,
-                context={**request_context, "attempt": attempt, "maxAttempts": max_attempts},
+                context={**request_context, "attempt": attempt, "maxAttempts": max_attempts, "model": active_model},
             )
+            if attempt < max_attempts:
+                retry_feedback = (
+                    "# Model request failed\n"
+                    "The previous model call did not return a script. Keep the answer shorter, use the teaching brief, "
+                    "avoid long formulas, and output only complete Manim Python code.\n"
+                    f"Failure detail: {detail[-800:]}"
+                )
+                emit_job_event(
+                    job_id,
+                    stage="repair",
+                    student_message="模型这次没有及时返回，正在压缩教学 brief 并换更快的生成方式重试。",
+                    technical_message=f"MODEL_REQUEST_RETRY detail={detail}",
+                    severity="warn",
+                    attempt=attempt,
+                )
+                continue
             fail_job(
                 job_id,
                 {"ok": False, "error": "Model request failed.", "detail": detail, "requestId": job_id},
-                "模型生成阶段失败了，暂时还没有形成可用动画脚本。",
+                "模型生成阶段连续失败，暂时还没有形成可用动画脚本。",
             )
             return
 
@@ -582,6 +662,7 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
             "codeFile": str(scene_file.relative_to(PROJECT_ROOT)),
             "attempt": attempt,
             "maxAttempts": max_attempts,
+            "teachingBrief": teaching_brief or None,
             "knowledgeSources": knowledge_sources_for_ui(),
             "repairRecipes": repair_recipes_for_ui(),
         }
@@ -808,6 +889,12 @@ def make_index_html() -> str:
       animation: shell-in 520ms cubic-bezier(.2,.9,.2,1) both;
       position: relative;
       z-index: 2;
+    }}
+
+    body.learning-mode .shell {{
+      width: min(1500px, 96vw);
+      grid-template-columns: minmax(320px, 0.56fr) minmax(780px, 1.44fr);
+      align-items: start;
     }}
 
     .panel {{
@@ -1209,6 +1296,24 @@ def make_index_html() -> str:
       font-size: 1rem;
     }}
 
+    .result-title-row {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+    }}
+
+    .result-actions {{
+      display: none;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }}
+
+    body.learning-mode .result-actions {{
+      display: flex;
+    }}
+
     .result-wrap {{
       padding: 22px 26px 26px;
       display: grid;
@@ -1278,6 +1383,19 @@ def make_index_html() -> str:
       filter: brightness(1.05);
     }}
 
+    .code-section {{
+      display: grid;
+      gap: 10px;
+    }}
+
+    body.learning-mode .code-section {{
+      display: none;
+    }}
+
+    body.learning-mode.show-code .code-section {{
+      display: grid;
+    }}
+
     pre {{
       margin: 0;
       padding: 14px;
@@ -1297,6 +1415,11 @@ def make_index_html() -> str:
       grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
       gap: 14px;
       align-items: stretch;
+    }}
+
+    body.learning-mode .lesson-pair {{
+      grid-template-columns: minmax(520px, 1.18fr) minmax(360px, 0.82fr);
+      gap: 18px;
     }}
 
     .video-card {{
@@ -1322,6 +1445,10 @@ def make_index_html() -> str:
       border-radius: 12px;
       max-height: 420px;
       background: black;
+    }}
+
+    body.learning-mode video {{
+      max-height: 620px;
     }}
 
     .alignment-panel {{
@@ -1381,6 +1508,10 @@ def make_index_html() -> str:
       max-height: 410px;
       overflow: auto;
       padding-right: 2px;
+    }}
+
+    body.learning-mode .alignment-list {{
+      max-height: 560px;
     }}
 
     .segment-card {{
@@ -1462,7 +1593,14 @@ def make_index_html() -> str:
         grid-template-columns: 1fr;
         width: min(720px, 94vw);
       }}
+      body.learning-mode .shell {{
+        grid-template-columns: 1fr;
+        width: min(860px, 94vw);
+      }}
       .lesson-pair {{
+        grid-template-columns: 1fr;
+      }}
+      body.learning-mode .lesson-pair {{
         grid-template-columns: 1fr;
       }}
       .alignment-list {{
@@ -1486,6 +1624,12 @@ def make_index_html() -> str:
       .result-wrap {{
         padding-left: 16px;
         padding-right: 16px;
+      }}
+      .result-title-row {{
+        display: grid;
+      }}
+      .result-actions {{
+        justify-content: flex-start;
       }}
     }}
 
@@ -1597,8 +1741,16 @@ def make_index_html() -> str:
 
     <section class="panel">
       <header class="result-head">
-        <h2>结果面板</h2>
-        <p>代码、修复提示、渲染视频统一展示。</p>
+        <div class="result-title-row">
+          <div>
+            <h2>结果面板</h2>
+            <p>生成后自动切换为视频与讲稿优先的学习视图。</p>
+          </div>
+          <div class="result-actions">
+            <button id="editAgainBtn" class="ghost-btn" type="button">返回编辑</button>
+            <button id="toggleCodeBtn" class="ghost-btn" type="button">查看代码</button>
+          </div>
+        </div>
       </header>
 
       <div class="result-wrap">
@@ -1611,12 +1763,14 @@ def make_index_html() -> str:
 
         <div id="warningBox" class="warning-box"></div>
 
-        <div class="code-header">
-          <span>Generated Python</span>
-          <button id="copyCodeBtn" class="ghost-btn" type="button">复制代码</button>
-        </div>
+        <section class="code-section">
+          <div class="code-header">
+            <span>Generated Python</span>
+            <button id="copyCodeBtn" class="ghost-btn" type="button">复制代码</button>
+          </div>
 
-        <pre id="codeOutput"># 生成的 Manim 代码会显示在这里</pre>
+          <pre id="codeOutput"># 生成的 Manim 代码会显示在这里</pre>
+        </section>
 
         <div class="lesson-pair">
           <div id="videoCard" class="video-card">
@@ -1659,6 +1813,8 @@ def make_index_html() -> str:
     const apiKeyField = document.getElementById("apiKeyField");
     const warningBox = document.getElementById("warningBox");
     const copyCodeBtn = document.getElementById("copyCodeBtn");
+    const editAgainBtn = document.getElementById("editAgainBtn");
+    const toggleCodeBtn = document.getElementById("toggleCodeBtn");
     const providerSelect = document.getElementById("provider");
     const providerRegion = document.getElementById("providerRegion");
     const providerProtocol = document.getElementById("providerProtocol");
@@ -1819,8 +1975,20 @@ def make_index_html() -> str:
       techLog.textContent = "";
     }}
 
+    function enterLearningMode() {{
+      document.body.classList.add("learning-mode");
+      document.body.classList.remove("show-code");
+      toggleCodeBtn.textContent = "查看代码";
+    }}
+
+    function exitLearningMode() {{
+      document.body.classList.remove("learning-mode", "show-code");
+      toggleCodeBtn.textContent = "查看代码";
+      form.scrollIntoView({{ behavior: "smooth", block: "start" }});
+    }}
+
     function stageIndexFor(stage) {{
-      if (stage === "model" || stage === "precheck" || stage === "validation" || stage === "queued") return 0;
+      if (stage === "brief" || stage === "model" || stage === "precheck" || stage === "validation" || stage === "queued") return 0;
       if (stage === "render") return 1;
       if (stage === "repair" || stage === "failed") return 2;
       if (stage === "alignment" || stage === "complete") return 3;
@@ -1864,6 +2032,7 @@ def make_index_html() -> str:
       if (data.videoId) {{
         videoPlayer.src = "/api/video/" + data.videoId;
         videoCard.classList.add("visible");
+        enterLearningMode();
         if (data.alignment) {{
           setAlignment(data.alignment);
         }} else {{
@@ -2031,6 +2200,13 @@ def make_index_html() -> str:
       }}
     }});
 
+    editAgainBtn.addEventListener("click", exitLearningMode);
+
+    toggleCodeBtn.addEventListener("click", () => {{
+      const showing = document.body.classList.toggle("show-code");
+      toggleCodeBtn.textContent = showing ? "隐藏代码" : "查看代码";
+    }});
+
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
       const preset = activePreset();
@@ -2039,6 +2215,8 @@ def make_index_html() -> str:
         return;
       }}
       submitBtn.disabled = true;
+      document.body.classList.remove("learning-mode", "show-code");
+      toggleCodeBtn.textContent = "查看代码";
       setStatus("请求已发送，正在生成代码...", "");
       startProcess();
       resetProcessDetails();
