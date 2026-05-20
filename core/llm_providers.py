@@ -56,7 +56,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     "kimi-code": ProviderPreset(
         id="kimi-code",
         name="Kimi Code API",
-        api_type="openai-compatible",
+        api_type="anthropic-compatible",
         region="cn",
         base_url="https://api.kimi.com/coding/v1",
         default_model="kimi-for-coding",
@@ -358,7 +358,10 @@ def call_openai_compatible(
         ],
         "temperature": temperature,
     }
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Aegis-Manim/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)",
+    }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
