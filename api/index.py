@@ -222,7 +222,7 @@ def generate_code_with_trial_plan(
             continue
 
         try:
-            raw_code, used_provider, _used_endpoint = generate_code_with_llm(
+            raw_code, _used_provider_name, _used_endpoint = generate_code_with_llm(
                 provider_id=provider.id,
                 api_key=api_key,
                 base_url="",
@@ -245,7 +245,7 @@ def generate_code_with_trial_plan(
         warnings = list(compatibility_notes)
         if skipped:
             warnings.append("部分试用模型暂不可用，已自动使用可用的备用模型。")
-        elif used_provider.id != str(plan["attempts"][0]["provider_id"]):
+        elif provider.id != str(plan["attempts"][0]["provider_id"]):
             warnings.append("Kimi 暂不可用，已自动切换到 MiniMax 备用模型。")
 
         return HTTPStatus.OK, {
