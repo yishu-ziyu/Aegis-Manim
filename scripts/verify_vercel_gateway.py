@@ -75,8 +75,11 @@ def main() -> int:
     assert "tex-chtml.js" in html
     assert "script.textContent = segment.script" not in html
 
-    providers = public_provider_config()["providers"]
-    assert public_provider_config()["defaultProvider"] == "kimi-code"
+    public_config = public_provider_config()
+    providers = public_config["providers"]
+    assert public_config["defaultProvider"] == "kimi-code"
+    assert public_config["providerStorageKey"] == "aegis.provider.public.v2"
+    assert "aegis.provider.public.v2" in html
     assert providers["kimi-code"]["baseURL"] == "https://api.kimi.com/coding/v1"
     assert providers["kimi-code"]["defaultModel"] == "kimi-for-coding"
     assert providers["codex-cli"]["cloudUnavailable"] is True

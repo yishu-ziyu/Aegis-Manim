@@ -1947,7 +1947,8 @@ def make_index_html() -> str:
         }});
         providerSelect.appendChild(optgroup);
       }});
-      providerSelect.value = localStorage.getItem("aegis.provider") || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
+      const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
+      providerSelect.value = localStorage.getItem(providerStorageKey) || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
       if (!PROVIDERS[providerSelect.value]) {{
         providerSelect.value = PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
       }}
@@ -1993,7 +1994,8 @@ def make_index_html() -> str:
     }}
 
     providerSelect.addEventListener("change", () => {{
-      localStorage.setItem("aegis.provider", providerSelect.value);
+      const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
+      localStorage.setItem(providerStorageKey, providerSelect.value);
       updateProviderUI(false);
     }});
 

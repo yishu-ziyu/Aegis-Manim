@@ -21,6 +21,7 @@ class AegisWebUiTest(unittest.TestCase):
         assert "function renderRichText" in html
         assert "renderRichText(script, segment.script" in html
         assert "script.textContent = segment.script" not in html
+        assert "PROVIDER_CONFIG.providerStorageKey" in html
 
     def test_teaching_brief_requires_chinese_visible_language(self) -> None:
         brief = web_app.build_teaching_brief("解释 $MP_L < 0$ 的经济含义")

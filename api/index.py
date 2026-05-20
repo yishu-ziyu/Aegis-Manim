@@ -74,7 +74,12 @@ def public_provider_config() -> dict[str, object]:
         provider["cloudUnavailable"] = True
         provider["apiKeyPlaceholder"] = "仅本地 Aegis Web 可用"
         provider["requiresApiKey"] = False
-    return {**config, "defaultProvider": "kimi-code", "providers": providers}
+    return {
+        **config,
+        "defaultProvider": "kimi-code",
+        "providerStorageKey": "aegis.provider.public.v2",
+        "providers": providers,
+    }
 
 
 def clamp_temperature(value: object) -> float:
