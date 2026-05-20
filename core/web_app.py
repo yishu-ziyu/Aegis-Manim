@@ -1934,7 +1934,7 @@ def make_index_html() -> str:
     function renderProviderOptions() {{
       providerSelect.replaceChildren();
       const groups = groupProviderIds();
-      ["global", "cn", "coding", "local", "custom"].forEach((region) => {{
+      ["trial", "global", "cn", "coding", "local", "custom"].forEach((region) => {{
         const ids = groups[region] || [];
         if (!ids.length) return;
         const optgroup = document.createElement("optgroup");
@@ -1961,20 +1961,24 @@ def make_index_html() -> str:
     function updateProviderUI(keepModel = false) {{
       const preset = activePreset();
       providerRegion.textContent = REGION_LABELS[preset.region] || preset.region || "Provider";
-      providerProtocol.textContent = preset.apiType || "-";
+      providerProtocol.textContent = preset.displayProtocol || preset.apiType || "-";
       providerDoc.href = preset.doc || "#";
       providerDoc.classList.toggle("hidden", !preset.doc);
-      providerHelp.textContent = `${{preset.name || providerSelect.value}} · ${{preset.apiType || "compatible"}} · 模型 ID 可手动改写。`;
+      providerHelp.textContent = preset.description || `${{preset.name || providerSelect.value}} · ${{preset.apiType || "compatible"}} · 模型 ID 可手动改写。`;
       apiKeyLabel.textContent = `${{preset.name || "Provider"}} API Key`;
       apiKeyInput.placeholder = preset.apiKeyPlaceholder || "API Key...";
       apiKeyInput.required = Boolean(preset.requiresApiKey);
       const usesCodexCli = preset.apiType === "codex-cli";
+      const serverManaged = Boolean(preset.serverManaged);
       const cloudUnavailable = Boolean(preset.cloudUnavailable);
-      apiKeyField.style.display = usesCodexCli ? "none" : "";
-      baseUrlField.style.display = usesCodexCli ? "none" : "";
+      apiKeyField.style.display = (usesCodexCli || serverManaged || preset.hideApiKey) ? "none" : "";
+      baseUrlField.style.display = (usesCodexCli || serverManaged || preset.hideBaseUrl) ? "none" : "";
+      modelInput.readOnly = Boolean(preset.lockModel);
       if (cloudUnavailable) {{
         providerHelp.textContent = `${{preset.name || providerSelect.value}} · 仅本地可执行 · 下载项目后可用。`;
         apiKeyHelp.textContent = "这个 Provider 是下载项目后在本地 Aegis Web 使用的选项；Vercel 云端只展示能力入口。";
+      }} else if (serverManaged) {{
+        apiKeyHelp.textContent = "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。";
       }} else {{
         apiKeyHelp.textContent = preset.requiresApiKey
           ? "Key 仅用于本次请求，不落盘；如果报 401，请确认 Key 未过期且有可用额度。"
@@ -1984,12 +1988,12 @@ def make_index_html() -> str:
       }}
 
       const savedBaseUrl = localStorage.getItem(`aegis.baseUrl.${{providerSelect.value}}`);
-      baseUrlInput.value = usesCodexCli ? "" : savedBaseUrl || preset.baseURL || "";
+      baseUrlInput.value = (usesCodexCli || serverManaged) ? "" : savedBaseUrl || preset.baseURL || "";
       baseUrlInput.placeholder = preset.baseURL || "https://api.example.com/v1";
 
       const savedModel = localStorage.getItem(`aegis.model.${{providerSelect.value}}`);
       if (!keepModel || !modelInput.value.trim()) {{
-        modelInput.value = savedModel || preset.defaultModel || "";
+        modelInput.value = serverManaged ? preset.defaultModel || "" : savedModel || preset.defaultModel || "";
       }}
     }}
 
@@ -2390,11 +2394,11 @@ def make_index_html() -> str:
 
       const payload = {{
         provider: providerSelect.value,
-        apiKey: apiKeyInput.value.trim(),
+        apiKey: preset.serverManaged ? "" : apiKeyInput.value.trim(),
         prompt: promptInput.value.trim(),
         model: modelInput.value.trim() || activePreset().defaultModel || "{DEFAULT_MODEL}",
-        baseUrl: baseUrlInput.value.trim(),
-        endpoint: baseUrlInput.value.trim(),
+        baseUrl: preset.serverManaged ? "" : baseUrlInput.value.trim(),
+        endpoint: preset.serverManaged ? "" : baseUrlInput.value.trim(),
         sceneName: document.getElementById("sceneName").value.trim() || "GeneratedScene",
         temperature: Number(document.getElementById("temperature").value || 0.2),
         noRender: document.getElementById("noRender").checked
@@ -2402,8 +2406,10 @@ def make_index_html() -> str:
       latestPrompt = payload.prompt;
       latestSceneName = payload.sceneName;
       latestProviderPayload = {{ ...payload }};
-      localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
-      localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
+      if (!preset.serverManaged) {{
+        localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
+        localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
+      }}
 
       try {{
         const response = await fetch("/api/generate/start", {{

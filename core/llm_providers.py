@@ -193,6 +193,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
 }
 
 REGION_LABELS = {
+    "trial": "内测免费试用",
     "global": "海外 / 原生厂商",
     "cn": "国内直连",
     "coding": "Token Plan / Coding Plan",

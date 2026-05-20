@@ -60,13 +60,14 @@ def main() -> int:
     assert "/api/health" in html
     assert "Generate Code" in html
     assert "Vercel 云端模式" in html
-    assert "VERCEL · USER-KEY · CODE" in html
-    assert "Codex CLI 登录态（本机）（仅本地）" in html
-    assert "下载项目后在本地 Aegis Web 使用的选项" in html
-    assert "Vercel 云端无法访问你的本机 Codex" in html
-    assert "Vercel 云端只展示能力入口" in html
-    assert "云端无法访问你电脑上的 127.0.0.1 本地代理" in html
-    assert "例如本地代理" not in html
+    assert "VERCEL · FREE TRIAL · CODE" in html
+    assert "内测免费试用：Aegis 后端托管模型额度" in html
+    assert "免费试用 · Kimi 优先" in html
+    assert "免费试用 · MiniMax 稳定" in html
+    assert "Kimi Code API" not in html
+    assert "Moonshot Kimi API" not in html
+    assert "Codex CLI 登录态" not in html
+    assert "自定义 OpenAI-Compatible" not in html
     assert 'fetch("/api/generate"' in html
     assert 'fetch("/api/generate/start"' not in html
     assert "await waitForJob(data.statusUrl, payload);" not in html
@@ -77,13 +78,14 @@ def main() -> int:
 
     public_config = public_provider_config()
     providers = public_config["providers"]
-    assert public_config["defaultProvider"] == "kimi-code"
-    assert public_config["providerStorageKey"] == "aegis.provider.public.v2"
-    assert "aegis.provider.public.v2" in html
-    assert providers["kimi-code"]["baseURL"] == "https://api.kimi.com/coding/v1"
-    assert providers["kimi-code"]["defaultModel"] == "kimi-for-coding"
-    assert providers["codex-cli"]["cloudUnavailable"] is True
-    assert providers["codex-local-proxy"]["cloudUnavailable"] is True
+    assert public_config["defaultProvider"] == "trial-kimi-priority"
+    assert public_config["providerStorageKey"] == "aegis.provider.public.v3"
+    assert "aegis.provider.public.v3" in html
+    assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct"}
+    assert providers["trial-kimi-priority"]["serverManaged"] is True
+    assert providers["trial-kimi-priority"]["hideApiKey"] is True
+    assert "baseURL" not in providers["trial-kimi-priority"]
+    assert "apiType" not in providers["trial-kimi-priority"]
 
     status, missing_prompt = generate_manim_code_for_gateway({"prompt": ""})
     assert status == 400
@@ -94,24 +96,19 @@ def main() -> int:
     )
     assert status == 400
     assert disabled_provider["ok"] is False
+    assert "内置免费试用模型" in disabled_provider["error"]
 
     status, private_endpoint = generate_manim_code_for_gateway(
         {
             "prompt": "解释消费者剩余",
-            "provider": "openai-compatible",
+            "provider": "custom-openai",
             "apiKey": "test-key",
             "baseUrl": "http://127.0.0.1:8317/api/provider/antigravity/v1",
         },
     )
     assert status == 400
     assert private_endpoint["ok"] is False
-    assert "公网 HTTPS" in private_endpoint["error"]
-
-    status, missing_key = generate_manim_code_for_gateway(
-        {"prompt": "解释消费者剩余", "provider": "zhipu"},
-    )
-    assert status == 400
-    assert missing_key["ok"] is False
+    assert "内置免费试用模型" in private_endpoint["error"]
 
     status_code, _headers, body = asyncio.run(call_asgi_app("GET", "/favicon.ico"))
     assert status_code == 204

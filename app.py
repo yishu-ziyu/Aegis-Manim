@@ -4,7 +4,12 @@ import json
 from http import HTTPStatus
 from typing import Any
 
-from api.index import build_health_payload, build_index_html, generate_manim_code_for_gateway
+from api.index import (
+    MAX_PUBLIC_BODY_BYTES,
+    build_health_payload,
+    build_index_html,
+    generate_manim_code_for_gateway,
+)
 
 
 async def read_body(receive: Any) -> bytes:
@@ -13,6 +18,8 @@ async def read_body(receive: Any) -> bytes:
     while more_body:
         message = await receive()
         chunks.append(message.get("body", b""))
+        if sum(len(chunk) for chunk in chunks) > MAX_PUBLIC_BODY_BYTES:
+            raise ValueError("请求体太大，请缩短问题后再试。")
         more_body = bool(message.get("more_body", False))
     return b"".join(chunks)
 
