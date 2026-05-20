@@ -48,11 +48,15 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
 
     method = scope.get("method", "GET")
     path = scope.get("path", "/")
-    if method == "GET" and path == "/":
+    if method in {"GET", "HEAD"} and path == "/favicon.ico":
+        await send_response(send, HTTPStatus.NO_CONTENT, b"", "image/x-icon")
+        return
+
+    if method in {"GET", "HEAD"} and path == "/":
         await send_response(
             send,
             HTTPStatus.OK,
-            build_index_html().encode("utf-8"),
+            b"" if method == "HEAD" else build_index_html().encode("utf-8"),
             "text/html; charset=utf-8",
         )
         return

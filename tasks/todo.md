@@ -73,3 +73,19 @@ The repository was correct. The mismatch came from a non-Aegis service occupying
 ## Review
 
 Implemented the first bounded learning-view closure. Complex formula-heavy learning prompts now produce a compact teaching brief before code generation, recoverable model-call failures retry instead of failing immediately, and retry attempts can switch to a faster model variant when the provider exposes one. Successful generations now enter a learning-first result surface with video and synchronized script as the primary right-side view, while generated code remains available as a secondary toggle and technical events stay in diagnostics.
+
+# Public Gateway and Layout Stability Task
+
+- [x] Reproduce and fix the Vercel gateway route mismatch that makes the public page submit to a missing API path.
+- [x] Make the public gateway default to a cloud-usable provider instead of a local-only Codex provider.
+- [x] Add Kimi Code as a cloud model provider using the official OpenAI-compatible API endpoint.
+- [x] Add static guardrails for overlapping Manim text and missing text sizing.
+- [x] Add readable formula rendering for prompt previews and synchronized teaching scripts.
+- [x] Make generated Manim videos default to Chinese visible labels and explanations.
+- [x] Verify with focused tests, gateway checks, local source/browser checks, and production smoke checks after deployment.
+
+## Review
+
+Stabilized the public learning flow for formula-heavy Chinese teaching prompts. The Web layer now renders Markdown/LaTeX-style formulas in the prompt preview and synchronized script panel, while the Manim generation path stays LaTeX-free for runtime stability. Generated scenes now default to Chinese visible titles, labels, captions, and teaching explanations unless the user explicitly asks for another language. The public gateway now defaults to a cloud-usable Kimi Code provider, submits to `/api/generate`, handles favicon HEAD/GET cleanly, and keeps local-only providers marked as unavailable in cloud mode.
+
+Verified with Python compile checks, focused pytest suites, gateway verification, `git diff --check`, Vercel build, production deployment, live health/favicon checks, live page source checks, Chrome network/console checks, live MathJax prompt-preview DOM inspection, and a bad-key `/api/generate` smoke test proving the route reaches Kimi authentication instead of failing at routing.

@@ -36,6 +36,36 @@ class GeneratedScene(Scene):
         categories = {issue.category for issue in issues}
         assert "latex" in categories
         assert "axes-api" in categories
+        assert any(issue.category == "latex" and issue.severity == "error" for issue in issues)
+
+    def test_precheck_flags_repeated_text_without_cleanup(self) -> None:
+        code = """
+from manim import *
+
+class GeneratedScene(Scene):
+    def construct(self):
+        self.play(Write(Text("第一段很长的解释")))
+        self.wait(1)
+        self.play(Write(Text("第二段继续写在同一片画面上")))
+"""
+
+        issues = manim_knowledge.precheck_manim_code(code, "GeneratedScene")
+
+        assert any(issue.category == "layout-fit" and issue.severity == "error" for issue in issues)
+
+    def test_precheck_flags_text_without_explicit_font_size(self) -> None:
+        code = """
+from manim import *
+
+class GeneratedScene(Scene):
+    def construct(self):
+        title = Text("市场均衡")
+        self.play(Write(title))
+"""
+
+        issues = manim_knowledge.precheck_manim_code(code, "GeneratedScene")
+
+        assert any(issue.category == "layout-fit" and "font_size" in issue.technical_message for issue in issues)
 
     def test_classifies_latex_render_failures_with_recipe(self) -> None:
         classification = manim_knowledge.classify_render_error("LaTeX Error: File `standalone.cls' not found")

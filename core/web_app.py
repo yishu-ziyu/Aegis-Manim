@@ -122,6 +122,8 @@ def build_teaching_brief(prompt: str) -> str:
             "画面段落：1. 给出直觉场景；2. 展示关键对象和符号含义；3. 用动态变化说明条件；4. 总结结论。",
             "视觉策略：优先用坐标轴、集合、点、箭头、表格和高亮关系；不要把原始公式整段塞进画面。",
             "讲解策略：公式只保留必要符号，复杂推导改写成短句和分步说明。",
+            "语言策略：默认使用中文标题、中文标签、中文阶段说明和中文结论；变量符号可以保留英文缩写，但必须用中文解释含义。",
+            "排版策略：所有 Text 都写 font_size；长解释拆成 VGroup 多行短句，先 FadeOut 或 ReplacementTransform 旧讲解再出现新讲解。",
             "Manim 约束：使用 Text，不使用 Tex/MathTex；避免依赖 LaTeX；代码必须能在本地 Manim 版本稳定渲染。",
         ]
     )
@@ -832,6 +834,14 @@ def make_index_html() -> str:
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bungee:wght@400&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
+  <script>
+    window.MathJax = {{
+      startup: {{ typeset: false }},
+      tex: {{ inlineMath: [["\\\\(", "\\\\)"], ["$", "$"]], displayMath: [["\\\\[", "\\\\]"], ["$$", "$$"]] }},
+      options: {{ skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] }}
+    }};
+  </script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <style>
     :root {{
       --paper: #f7f0e4;
@@ -1021,6 +1031,65 @@ def make_index_html() -> str:
       min-height: 142px;
       resize: vertical;
       line-height: 1.55;
+    }}
+
+    .prompt-preview {{
+      display: none;
+      border: 1px dashed rgba(10, 53, 87, 0.26);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.5);
+      padding: 10px 12px;
+      color: #33271d;
+      font-size: 0.86rem;
+      line-height: 1.55;
+    }}
+
+    .prompt-preview.visible {{
+      display: block;
+    }}
+
+    .prompt-preview-label {{
+      display: block;
+      margin-bottom: 6px;
+      color: #173452;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.74rem;
+      text-transform: uppercase;
+    }}
+
+    .rich-text {{
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }}
+
+    .rich-text strong {{
+      font-weight: 800;
+      color: #152a43;
+    }}
+
+    .rich-text code,
+    .math-inline,
+    .math-block {{
+      font-family: "JetBrains Mono", monospace;
+      color: #132942;
+      background: rgba(10, 53, 87, 0.08);
+      border: 1px solid rgba(10, 53, 87, 0.16);
+      border-radius: 7px;
+    }}
+
+    .rich-text code,
+    .math-inline {{
+      padding: 1px 5px;
+      font-size: 0.9em;
+    }}
+
+    .math-block {{
+      display: block;
+      margin: 8px 0;
+      padding: 8px 10px;
+      max-width: 100%;
+      overflow-x: auto;
+      white-space: nowrap;
     }}
 
     input:focus,
@@ -1687,6 +1756,10 @@ def make_index_html() -> str:
         <div class="field">
           <label for="prompt">你要讲清楚的问题</label>
           <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。" required></textarea>
+          <div id="promptPreview" class="prompt-preview">
+            <span class="prompt-preview-label">公式预览</span>
+            <div id="promptPreviewContent" class="rich-text"></div>
+          </div>
         </div>
 
         <div class="row">
@@ -1836,6 +1909,9 @@ def make_index_html() -> str:
     const alignmentWarning = document.getElementById("alignmentWarning");
     const alignmentList = document.getElementById("alignmentList");
     const realignBtn = document.getElementById("realignBtn");
+    const promptInput = document.getElementById("prompt");
+    const promptPreview = document.getElementById("promptPreview");
+    const promptPreviewContent = document.getElementById("promptPreviewContent");
 
     let currentAlignment = null;
     let latestPrompt = "";
@@ -1924,6 +2000,80 @@ def make_index_html() -> str:
     function setStatus(message, type = "") {{
       statusBox.className = "status-box" + (type ? " " + type : "");
       statusBox.textContent = message;
+    }}
+
+    function textHasRichSyntax(text) {{
+      return /(\\$\\$[\\s\\S]+?\\$\\$|\\\\\\[[\\s\\S]+?\\\\\\]|\\\\\\([\\s\\S]+?\\\\\\)|\\$[^$\\n]+\\$|\\*\\*[^*]+\\*\\*|`[^`]+`|^\\s*#{{1,4}}\\s+)/m.test(text || "");
+    }}
+
+    function isDisplayMath(token) {{
+      return token.startsWith("$$") || token.startsWith("\\\\[");
+    }}
+
+    function appendMarkdownInline(target, text) {{
+      const pattern = /(\\*\\*[^*]+\\*\\*|`[^`]+`)/g;
+      let cursor = 0;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {{
+        if (match.index > cursor) {{
+          target.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+        }}
+        const token = match[0];
+        const node = document.createElement(token.startsWith("`") ? "code" : "strong");
+        node.textContent = token.slice(token.startsWith("`") ? 1 : 2, token.startsWith("`") ? -1 : -2);
+        target.appendChild(node);
+        cursor = pattern.lastIndex;
+      }}
+      if (cursor < text.length) {{
+        target.appendChild(document.createTextNode(text.slice(cursor)));
+      }}
+    }}
+
+    function appendRichLine(target, line) {{
+      const cleaned = line.replace(/^\\s*#{{1,4}}\\s+/, "").replace(/^\\s*[-*]\\s+/, "• ");
+      const mathPattern = /(\\$\\$[\\s\\S]+?\\$\\$|\\\\\\[[\\s\\S]+?\\\\\\]|\\\\\\([\\s\\S]+?\\\\\\)|\\$[^$\\n]+\\$)/g;
+      let cursor = 0;
+      let match;
+      while ((match = mathPattern.exec(cleaned)) !== null) {{
+        if (match.index > cursor) {{
+          appendMarkdownInline(target, cleaned.slice(cursor, match.index));
+        }}
+        const token = match[0];
+        const math = document.createElement(isDisplayMath(token) ? "div" : "span");
+        math.className = isDisplayMath(token) ? "math-block" : "math-inline";
+        math.textContent = token;
+        target.appendChild(math);
+        cursor = mathPattern.lastIndex;
+      }}
+      if (cursor < cleaned.length) {{
+        appendMarkdownInline(target, cleaned.slice(cursor));
+      }}
+    }}
+
+    function renderRichText(target, rawText, fallback = "") {{
+      target.replaceChildren();
+      target.classList.add("rich-text");
+      const text = String(rawText || fallback || "").trim();
+      if (!text) return;
+      const lines = text.split(/\\n+/);
+      lines.forEach((line, index) => {{
+        if (index > 0) target.appendChild(document.createElement("br"));
+        appendRichLine(target, line);
+      }});
+      if (window.MathJax && window.MathJax.typesetPromise) {{
+        window.MathJax.typesetPromise([target]).catch(() => undefined);
+      }}
+    }}
+
+    function updatePromptPreview() {{
+      const text = promptInput.value || "";
+      if (!textHasRichSyntax(text)) {{
+        promptPreview.classList.remove("visible");
+        promptPreviewContent.replaceChildren();
+        return;
+      }}
+      promptPreview.classList.add("visible");
+      renderRichText(promptPreviewContent, text);
     }}
 
     function setProcessStage(stageIndex) {{
@@ -2148,11 +2298,16 @@ def make_index_html() -> str:
 
         const script = document.createElement("p");
         script.className = "segment-script";
-        script.textContent = segment.script || "这一段解释当前画面背后的概念含义。";
+        renderRichText(script, segment.script, "这一段解释当前画面背后的概念含义。");
 
         const intent = document.createElement("div");
         intent.className = "segment-intent";
-        intent.textContent = segment.visualIntent ? `视觉对应：${{segment.visualIntent}}` : "";
+        if (segment.visualIntent) {{
+          intent.appendChild(document.createTextNode("视觉对应："));
+          const intentText = document.createElement("span");
+          renderRichText(intentText, segment.visualIntent);
+          intent.appendChild(intentText);
+        }}
 
         card.append(top, script, intent);
         card.addEventListener("click", () => seekToSegment(segment));
@@ -2234,7 +2389,7 @@ def make_index_html() -> str:
       const payload = {{
         provider: providerSelect.value,
         apiKey: apiKeyInput.value.trim(),
-        prompt: document.getElementById("prompt").value.trim(),
+        prompt: promptInput.value.trim(),
         model: modelInput.value.trim() || activePreset().defaultModel || "{DEFAULT_MODEL}",
         baseUrl: baseUrlInput.value.trim(),
         endpoint: baseUrlInput.value.trim(),
@@ -2271,6 +2426,7 @@ def make_index_html() -> str:
 
     videoPlayer.addEventListener("timeupdate", updateActiveSegment);
     videoPlayer.addEventListener("loadedmetadata", updateActiveSegment);
+    promptInput.addEventListener("input", updatePromptPreview);
 
     realignBtn.addEventListener("click", async () => {{
       if (!latestPrompt || !latestCode || !latestProviderPayload) return;
@@ -2306,6 +2462,7 @@ def make_index_html() -> str:
 
     renderProviderOptions();
     updateProviderUI(false);
+    updatePromptPreview();
   </script>
 </body>
 </html>

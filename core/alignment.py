@@ -310,7 +310,7 @@ def _build_alignment_prompts(
                 "Explain the concept behind the visuals, not just what appears on screen.",
                 "Use low or medium confidence when timing is estimated.",
                 "Keep segments ordered and non-overlapping.",
-                "Return Chinese title/script/visualIntent unless the user prompt is clearly non-Chinese.",
+                "Return Chinese title/script/visualIntent by default; only switch language if the user explicitly asks for another language.",
             ],
             "schema": {
                 "mode": "posthoc_metadata",

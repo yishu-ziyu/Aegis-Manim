@@ -203,48 +203,47 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
 
         return re.sub(r"line_config\s*=\s*\{([^{}\n]*)\}", convert_config, plot_call)
 
-    if not LATEX_AVAILABLE:
-        candidate = re.sub(r"\bMathTex\s*\(", "Text(", patched)
-        if candidate != patched:
-            notes.append("Replaced MathTex(...) with Text(...) because LaTeX is unavailable.")
-            patched = candidate
+    candidate = re.sub(r"\bMathTex\s*\(", "Text(", patched)
+    if candidate != patched:
+        notes.append("Replaced MathTex(...) with Text(...) for the default LaTeX-free product path.")
+        patched = candidate
 
-        candidate = re.sub(r"(?<!\w)Tex\s*\(", "Text(", patched)
-        if candidate != patched:
-            notes.append("Replaced Tex(...) with Text(...) because LaTeX is unavailable.")
-            patched = candidate
+    candidate = re.sub(r"(?<!\w)Tex\s*\(", "Text(", patched)
+    if candidate != patched:
+        notes.append("Replaced Tex(...) with Text(...) for the default LaTeX-free product path.")
+        patched = candidate
 
-        candidate = re.sub(r"include_numbers\s*=\s*True", "include_numbers=False", patched)
-        if candidate != patched:
-            notes.append("Forced include_numbers=False to avoid LaTeX-dependent axis labels.")
-            patched = candidate
+    candidate = re.sub(r"include_numbers\s*=\s*True", "include_numbers=False", patched)
+    if candidate != patched:
+        notes.append("Forced include_numbers=False to avoid LaTeX-dependent axis labels.")
+        patched = candidate
 
-        candidate = re.sub(r"([\"'])include_numbers\1\s*:\s*True", r"\1include_numbers\1: False", patched)
-        if candidate != patched:
-            notes.append("Forced axis_config include_numbers=False for LaTeX-free rendering.")
-            patched = candidate
+    candidate = re.sub(r"([\"'])include_numbers\1\s*:\s*True", r"\1include_numbers\1: False", patched)
+    if candidate != patched:
+        notes.append("Forced axis_config include_numbers=False for LaTeX-free rendering.")
+        patched = candidate
 
-        brace_lines = []
-        changed_brace_label = False
-        for line in patched.splitlines():
-            stripped = line.rstrip()
-            trailing = line[len(stripped) :]
-            if "BraceLabel(" in stripped and "label_constructor" not in stripped and stripped.endswith(")"):
-                stripped = f"{stripped[:-1]}, label_constructor=Text)"
-                changed_brace_label = True
-            brace_lines.append(f"{stripped}{trailing}")
-        if changed_brace_label:
-            notes.append("Forced BraceLabel to use Text labels because LaTeX is unavailable.")
-            patched = "\n".join(brace_lines)
+    brace_lines = []
+    changed_brace_label = False
+    for line in patched.splitlines():
+        stripped = line.rstrip()
+        trailing = line[len(stripped) :]
+        if "BraceLabel(" in stripped and "label_constructor" not in stripped and stripped.endswith(")"):
+            stripped = f"{stripped[:-1]}, label_constructor=Text)"
+            changed_brace_label = True
+        brace_lines.append(f"{stripped}{trailing}")
+    if changed_brace_label:
+        notes.append("Forced BraceLabel to use Text labels for the default LaTeX-free product path.")
+        patched = "\n".join(brace_lines)
 
-        candidate = re.sub(
-            r"(?m)^([ \t]*)[A-Za-z_][A-Za-z0-9_]*\.add_coordinates\([^)]*\)[ \t]*(?:#.*)?$",
-            r"\1# Removed numeric axis labels because they require LaTeX.",
-            patched,
-        )
-        if candidate != patched:
-            notes.append("Removed add_coordinates() because numeric axis labels require LaTeX.")
-            patched = candidate
+    candidate = re.sub(
+        r"(?m)^([ \t]*)[A-Za-z_][A-Za-z0-9_]*\.add_coordinates\([^)]*\)[ \t]*(?:#.*)?$",
+        r"\1# Removed numeric axis labels because they require LaTeX.",
+        patched,
+    )
+    if candidate != patched:
+        notes.append("Removed add_coordinates() because numeric axis labels require LaTeX.")
+        patched = candidate
 
     candidate = re.sub(r"\.get_h_line\s*\(", ".get_horizontal_line(", patched)
     candidate = re.sub(r"\.get_v_line\s*\(", ".get_vertical_line(", candidate)

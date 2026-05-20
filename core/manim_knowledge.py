@@ -80,7 +80,7 @@ REPAIR_RECIPES: dict[str, dict[str, Any]] = {
     },
     "layout-fit": {
         "student": "正在重新安排画面位置，避免标签或图形挤出画面。",
-        "prompt": "Group related mobjects, scale groups to fit the frame, use arrange/buff, and place labels with next_to or to_edge.",
+        "prompt": "Group related mobjects, scale groups to fit the frame, use arrange/buff, and place labels with next_to or to_edge. Do not write a new Text object over an old one; use FadeOut or ReplacementTransform before changing explanations.",
         "sourceIds": ("manim-mobjects", "local-bug-log"),
     },
     "undefined-symbol": {
@@ -173,10 +173,34 @@ def precheck_manim_code(code: str, expected_scene_name: str) -> list[PrecheckIss
         issues.append(
             PrecheckIssue(
                 category="latex",
-                severity="warn",
-                student_message="检测到依赖 LaTeX 的文字表达，必要时会降级为普通文本以保证视频产出。",
-                technical_message="Tex/MathTex usage may fail when LaTeX is unavailable.",
+                severity="error",
+                student_message="检测到视频脚本依赖 LaTeX，正在改成普通文字公式以保证中文教学视频稳定产出。",
+                technical_message="Tex/MathTex usage is blocked in the default product path; use Text(...) formula labels instead.",
                 repair_hint=REPAIR_RECIPES["latex-to-text"]["prompt"],
+                source_ids=("manim-text", "local-bug-log"),
+            )
+        )
+
+    if _has_text_without_font_size(tree):
+        issues.append(
+            PrecheckIssue(
+                category="layout-fit",
+                severity="warn",
+                student_message="检测到部分文字没有显式字号，正在降低文字挤压和遮挡风险。",
+                technical_message="Text(...) call without explicit font_size; default text can become too large for dense teaching scenes.",
+                repair_hint="Set font_size on every Text object, usually 18-32 for labels and 32-40 for short titles.",
+                source_ids=("manim-text", "local-bug-log"),
+            )
+        )
+
+    if _has_repeated_direct_text_without_cleanup(tree):
+        issues.append(
+            PrecheckIssue(
+                category="layout-fit",
+                severity="error",
+                student_message="检测到连续文字可能叠在同一区域，正在要求模型先清场或替换旧文字。",
+                technical_message="Multiple direct Write(Text(...)) or add(Text(...)) calls appear without FadeOut/ReplacementTransform cleanup.",
+                repair_hint=REPAIR_RECIPES["layout-fit"]["prompt"],
                 source_ids=("manim-text", "local-bug-log"),
             )
         )
@@ -342,3 +366,60 @@ def _scene_class_name(node: ast.ClassDef) -> str | None:
 
 def _has_construct_method(node: ast.ClassDef) -> bool:
     return any(isinstance(item, ast.FunctionDef) and item.name == "construct" for item in node.body)
+
+
+def _is_call_named(node: ast.AST, names: set[str]) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Name):
+        return node.func.id in names
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr in names
+    return False
+
+
+def _has_text_without_font_size(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if not _is_call_named(node, {"Text"}):
+            continue
+        assert isinstance(node, ast.Call)
+        if not any(keyword.arg == "font_size" for keyword in node.keywords):
+            return True
+    return False
+
+
+def _call_contains_text(node: ast.AST) -> bool:
+    return any(_is_call_named(child, {"Text"}) for child in ast.walk(node))
+
+
+def _call_contains_cleanup(node: ast.AST) -> bool:
+    return any(
+        _is_call_named(child, {"FadeOut", "ReplacementTransform", "Transform"})
+        for child in ast.walk(node)
+    )
+
+
+def _is_direct_text_write_or_add(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        return False
+    call = node.value
+    if isinstance(call.func, ast.Attribute) and call.func.attr in {"play", "add"}:
+        return _call_contains_text(call)
+    return False
+
+
+def _has_repeated_direct_text_without_cleanup(tree: ast.AST) -> bool:
+    for class_node in [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]:
+        for item in class_node.body:
+            if not isinstance(item, ast.FunctionDef) or item.name != "construct":
+                continue
+            pending_text = False
+            for statement in item.body:
+                if _call_contains_cleanup(statement):
+                    pending_text = False
+                    continue
+                if _is_direct_text_write_or_add(statement):
+                    if pending_text:
+                        return True
+                    pending_text = True
+    return False

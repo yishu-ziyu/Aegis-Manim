@@ -25,6 +25,9 @@ class AegisPromptContextTest(unittest.TestCase):
         assert "Text Lifecycle" in prompt
         assert "ReplacementTransform(old_text, new_text)" in prompt
         assert "FadeOut(section_group)" in prompt
+        assert "Language Default" in prompt
+        assert "Use Chinese for all visible titles" in prompt
+        assert "Default visible scene language is Chinese" in prompt
 
     def test_load_system_prompt_tolerates_missing_knowledge_pack(self) -> None:
         with patch.object(manim_agent, "MANIM_KNOWLEDGE_PATH", PROJECT_ROOT / "prompts" / "missing.md"):

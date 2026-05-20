@@ -146,6 +146,17 @@ class GeneratedScene(Scene):
         assert result["confidence"] == "high"
         assert result["segments"][0]["title"] == "圆形出现"
 
+    def test_alignment_prompt_defaults_to_chinese_unless_explicitly_requested(self) -> None:
+        _system_prompt, user_prompt = alignment._build_alignment_prompts(  # noqa: SLF001
+            prompt="解释 $Q^*$ 为什么是最优产量",
+            code="from manim import *",
+            scene_name="GeneratedScene",
+            signals={"duration": 10, "events": []},
+        )
+
+        assert "Return Chinese title/script/visualIntent by default" in user_prompt
+        assert "explicitly asks for another language" in user_prompt
+
 
 if __name__ == "__main__":
     unittest.main()

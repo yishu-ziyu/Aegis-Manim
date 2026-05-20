@@ -19,10 +19,14 @@ Refresh sources: local Manim docs under `docs/source`, official Manim Community 
 - For axis labels, prefer `axes.get_axis_labels(x_label=Text("x"), y_label=Text("y"))`.
 - For braces, use `BraceLabel(..., label_constructor=Text)`.
 - Keep text short and place it with `to_edge`, `next_to`, `move_to`, or `arrange`; avoid overlapping labels.
+- Every `Text(...)` must set explicit `font_size`; use 18-28 for dense labels/captions and reserve 30-40 for short titles.
 - Manage every transient text object explicitly. If a caption, paragraph, or bullet group is only needed for one step, store it in a variable and remove it with `FadeOut(...)` before the next text appears.
 - When two explanations occupy the same region, prefer `ReplacementTransform(old_text, new_text)` or `Transform(old_group, new_group)` instead of writing the new text on top of the old text.
 - At a scene or section boundary, fade out the temporary explanation group with `self.play(FadeOut(section_group))`. Leave only persistent visual anchors such as axes, frontier curves, or a main title.
 - Do not create multiple `Text(...)` objects at the same `to_edge`, `next_to`, or `move_to` position without first removing or transforming the previous one.
+- For paragraph-like explanations, split text into multiple short `Text` rows in a `VGroup(...).arrange(DOWN, aligned_edge=LEFT, buff=0.18)` and call `scale_to_fit_width(...)` before placing the group.
+- Default visible scene language is Chinese. Keep formula symbols compact, but write titles, captions, axis explanations, stage labels, and conclusions in Chinese unless the user explicitly requests another language.
+- When the user provides LaTeX-style formulas, show them as readable plain-text formula labels with `Text(..., font_size=...)`; do not introduce `Tex` or `MathTex` just because the prompt contains `$...$`, `\\(...)`, or `\\[...]`.
 
 ## Layout patterns
 

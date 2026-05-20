@@ -74,7 +74,7 @@ def public_provider_config() -> dict[str, object]:
         provider["cloudUnavailable"] = True
         provider["apiKeyPlaceholder"] = "仅本地 Aegis Web 可用"
         provider["requiresApiKey"] = False
-    return {**config, "providers": providers}
+    return {**config, "defaultProvider": "kimi-code", "providers": providers}
 
 
 def clamp_temperature(value: object) -> float:
@@ -225,6 +225,10 @@ def build_index_html() -> str:
         "只生成代码，不渲染视频（调试模式）": "只生成代码，不渲染视频（Vercel 云端模式）",
         "Generate & Render": "Generate Code",
         "代码、修复提示、渲染视频统一展示。": "代码与兼容修复提示会在这里展示；视频渲染需要独立后端。",
+        'fetch("/api/generate/start"': 'fetch("/api/generate"',
+        "await waitForJob(data.statusUrl, payload);": (
+            'applyGenerateResult(data, payload, data.requestId || "-");'
+        ),
     }
     for old, new in replacements.items():
         html = html.replace(old, new)
@@ -264,6 +268,11 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
+        if route == "/favicon.ico":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if route == "/":
             self._send_html(build_index_html())
             return
@@ -271,6 +280,24 @@ class handler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, build_health_payload())
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        route = urlparse(self.path).path
+        if route == "/favicon.ico":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if route == "/":
+            body = build_index_html().encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return
+        self.send_response(HTTPStatus.NOT_FOUND)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
         route = urlparse(self.path).path

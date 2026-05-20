@@ -15,7 +15,40 @@ from api.index import (  # noqa: E402
 )
 
 
+async def call_asgi_app(method: str, path: str, body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
+    from app import app
+
+    sent: list[dict[str, object]] = []
+    received = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal received
+        if received:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        received = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    await app(
+        {"type": "http", "method": method, "path": path},
+        receive,
+        send,
+    )
+
+    start = sent[0]
+    response = sent[1]
+    headers = {
+        key.decode("utf-8"): value.decode("utf-8")
+        for key, value in start.get("headers", [])
+    }
+    return int(start["status"]), headers, response.get("body", b"")
+
+
 def main() -> int:
+    import asyncio
+
     health = build_health_payload()
     assert health["ok"] is True
     assert health["runtime"] == "vercel-python-function"
@@ -34,8 +67,18 @@ def main() -> int:
     assert "Vercel 云端只展示能力入口" in html
     assert "云端无法访问你电脑上的 127.0.0.1 本地代理" in html
     assert "例如本地代理" not in html
+    assert 'fetch("/api/generate"' in html
+    assert 'fetch("/api/generate/start"' not in html
+    assert "await waitForJob(data.statusUrl, payload);" not in html
+    assert "promptPreview" in html
+    assert "function renderRichText" in html
+    assert "tex-chtml.js" in html
+    assert "script.textContent = segment.script" not in html
 
     providers = public_provider_config()["providers"]
+    assert public_provider_config()["defaultProvider"] == "kimi-code"
+    assert providers["kimi-code"]["baseURL"] == "https://api.kimi.com/coding/v1"
+    assert providers["kimi-code"]["defaultModel"] == "kimi-for-coding"
     assert providers["codex-cli"]["cloudUnavailable"] is True
     assert providers["codex-local-proxy"]["cloudUnavailable"] is True
 
@@ -67,9 +110,9 @@ def main() -> int:
     assert status == 400
     assert missing_key["ok"] is False
 
-    from app import app
-
-    assert callable(app)
+    status_code, _headers, body = asyncio.run(call_asgi_app("GET", "/favicon.ico"))
+    assert status_code == 204
+    assert body == b""
 
     print("Vercel gateway verification passed.")
     return 0

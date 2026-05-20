@@ -43,6 +43,18 @@ class GeneratedScene(Scene):
 
         assert patched == "axes.get_horizontal_line(axes.coords_to_point(1, 2))"
 
+    def test_tex_is_rewritten_even_when_latex_exists(self) -> None:
+        code = 'title = Tex("Short-run Production Function")\nlabel = MathTex("MP_L")'
+
+        with patch.object(manim_agent, "LATEX_AVAILABLE", True):
+            patched, notes = manim_agent.apply_runtime_compatibility_fixes(code)
+
+        assert "Tex(" not in patched
+        assert "MathTex(" not in patched
+        assert 'title = Text("Short-run Production Function")' in patched
+        assert 'label = Text("MP_L")' in patched
+        assert any("LaTeX-free product path" in note for note in notes)
+
     def test_unsupported_stroke_dash_style_call_is_removed(self) -> None:
         code = "h_line_tax.set_style(stroke_dash=[5, 5])\nself.play(Create(h_line_tax))"
 
