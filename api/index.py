@@ -5,6 +5,7 @@ import ipaddress
 import os
 import socket
 import sys
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
@@ -90,34 +91,71 @@ def _render_backend_headers() -> dict[str, str]:
 
 
 def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, object] | None = None, timeout: int = 15) -> tuple[int, dict[str, object]]:
-    """Proxy a request to the render backend. Returns (http_status, json_body)."""
+    """Proxy a request to the render backend. Returns (http_status, json_body).
+
+    If the first attempt fails due to a connection error (e.g. Render free tier
+    instance is spun down), we send a wake-up ping, wait briefly, and retry once.
+    """
     if not RENDER_BACKEND_URL:
         return HTTPStatus.SERVICE_UNAVAILABLE, {
             "ok": False,
             "error": "渲染后端未配置。请设置 RENDER_BACKEND_URL 环境变量。",
         }
-    url = f"{RENDER_BACKEND_URL}{path}"
-    try:
-        if method == "POST" and payload is not None:
-            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            req = urllib_request.Request(
-                url, data=data, headers=_render_backend_headers(), method="POST"
+
+    def _try_once() -> tuple[int, str] | None:
+        """Return (status, body) on success, None on connection failure."""
+        url = f"{RENDER_BACKEND_URL}{path}"
+        try:
+            if method == "POST" and payload is not None:
+                data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                req = urllib_request.Request(
+                    url, data=data, headers=_render_backend_headers(), method="POST"
+                )
+            else:
+                req = urllib_request.Request(
+                    url, headers=_render_backend_headers(), method=method
+                )
+            with urllib_request.urlopen(req, timeout=timeout) as resp:
+                return resp.status, resp.read().decode("utf-8")
+        except urllib_request.HTTPError as exc:
+            # HTTP error means the instance is up but returned an error status
+            return exc.code, exc.read().decode("utf-8")
+        except (urllib_request.URLError, socket.error, TimeoutError, OSError):
+            # Connection-level error: instance is likely spun down
+            return None
+        except Exception:
+            # Unexpected error, treat as connection failure for retry purposes
+            return None
+
+    # First attempt
+    result = _try_once()
+
+    # If connection failed, wake up the instance and retry once
+    if result is None:
+        print("[Render] Connection failed, instance may be cold. Sending wake-up ping...", file=sys.stderr)
+        # Fire-and-forget wake-up request (ignore any response)
+        try:
+            ping_url = f"{RENDER_BACKEND_URL}/health"
+            ping_req = urllib_request.Request(
+                ping_url, headers=_render_backend_headers(), method="GET"
             )
-        else:
-            req = urllib_request.Request(
-                url, headers=_render_backend_headers(), method=method
-            )
-        with urllib_request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-            status = resp.status
-    except urllib_request.HTTPError as exc:
-        body = exc.read().decode("utf-8")
-        status = exc.code
-    except Exception as exc:
+            urllib_request.urlopen(ping_req, timeout=5)
+        except Exception:
+            pass  # Wake-up pings are best-effort
+
+        # Wait for Render free tier to cold-start (typically 30-60s, but 10s is often enough for the HTTP layer)
+        time.sleep(10)
+
+        print("[Render] Retrying original request after wake-up...", file=sys.stderr)
+        result = _try_once()
+
+    if result is None:
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": f"渲染后端连接失败: {exc}",
+            "error": "渲染后端连接失败：实例可能正在冷启动，请稍后再试。",
         }
+
+    status, body = result
     try:
         parsed = json.loads(body) if body else {}
     except json.JSONDecodeError:
@@ -126,32 +164,57 @@ def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, 
 
 
 def _proxy_to_render_backend_raw(path: str, method: str = "GET", payload: dict[str, object] | None = None, timeout: int = 15) -> tuple[int, bytes, dict[str, str]]:
-    """Proxy a request to the render backend and return raw bytes. Returns (http_status, body_bytes, headers_dict)."""
+    """Proxy a request to the render backend and return raw bytes. Returns (http_status, body_bytes, headers_dict).
+
+    If the first attempt fails due to a connection error (e.g. Render free tier
+    instance is spun down), we send a wake-up ping, wait briefly, and retry once.
+    """
     if not RENDER_BACKEND_URL:
         return HTTPStatus.SERVICE_UNAVAILABLE, b"", {}
-    url = f"{RENDER_BACKEND_URL}{path}"
-    try:
-        if method == "POST" and payload is not None:
-            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            req = urllib_request.Request(
-                url, data=data, headers=_render_backend_headers(), method="POST"
+
+    def _try_once_raw() -> tuple[int, bytes, dict[str, str]] | None:
+        """Return (status, body, headers) on success, None on connection failure."""
+        url = f"{RENDER_BACKEND_URL}{path}"
+        try:
+            if method == "POST" and payload is not None:
+                data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                req = urllib_request.Request(
+                    url, data=data, headers=_render_backend_headers(), method="POST"
+                )
+            else:
+                req = urllib_request.Request(
+                    url, headers=_render_backend_headers(), method=method
+                )
+            with urllib_request.urlopen(req, timeout=timeout) as resp:
+                return resp.status, resp.read(), dict(resp.headers)
+        except urllib_request.HTTPError as exc:
+            return exc.code, exc.read(), dict(exc.headers)
+        except (urllib_request.URLError, socket.error, TimeoutError, OSError):
+            return None
+        except Exception:
+            return None
+
+    result = _try_once_raw()
+
+    if result is None:
+        print("[RenderRaw] Connection failed, instance may be cold. Sending wake-up ping...", file=sys.stderr)
+        try:
+            ping_url = f"{RENDER_BACKEND_URL}/health"
+            ping_req = urllib_request.Request(
+                ping_url, headers=_render_backend_headers(), method="GET"
             )
-        else:
-            req = urllib_request.Request(
-                url, headers=_render_backend_headers(), method=method
-            )
-        with urllib_request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-            status = resp.status
-            headers = dict(resp.headers)
-    except urllib_request.HTTPError as exc:
-        body = exc.read()
-        status = exc.code
-        headers = dict(exc.headers)
-    except Exception as exc:
-        err_body = f"渲染后端连接失败: {exc}".encode("utf-8")
+            urllib_request.urlopen(ping_req, timeout=5)
+        except Exception:
+            pass
+        time.sleep(10)
+        print("[RenderRaw] Retrying original request after wake-up...", file=sys.stderr)
+        result = _try_once_raw()
+
+    if result is None:
+        err_body = "渲染后端连接失败：实例可能正在冷启动，请稍后再试。".encode("utf-8")
         return HTTPStatus.BAD_GATEWAY, err_body, {"content-type": "text/plain; charset=utf-8"}
-    return status, body, headers
+
+    return result
 
 
 def build_health_payload() -> dict[str, object]:
