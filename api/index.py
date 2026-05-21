@@ -79,7 +79,7 @@ CLOUD_ENDPOINT_ERROR = (
 
 # Render backend configuration
 RENDER_BACKEND_URL = os.environ.get("RENDER_BACKEND_URL", "").rstrip("/")
-RENDER_BACKEND_API_KEY = os.environ.get("RENDER_BACKEND_API_KEY", "")
+RENDER_BACKEND_API_KEY = os.environ.get("RENDER_BACKEND_API_KEY", "").strip()
 
 
 def _render_backend_headers() -> dict[str, str]:
