@@ -26,7 +26,8 @@ def _supabase_url() -> str:
 
 
 def _supabase_service_key() -> str:
-    return os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+    # Render env vars may contain newlines/spaces in the MIDDLE of the value
+    return "".join(os.environ.get("SUPABASE_SERVICE_KEY", "").split())
 
 
 # Headers for service-role requests (bypasses RLS)
