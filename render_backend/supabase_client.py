@@ -19,7 +19,10 @@ STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "manim-videos")
 
 
 def _supabase_url() -> str:
-    return os.environ.get("SUPABASE_URL", "https://qrmmlolsslnxiamznicf.supabase.co").rstrip("/")
+    url = os.environ.get("SUPABASE_URL", "")
+    if not url:
+        url = "https://qrmmlolsslnxiamznicf.supabase.co"
+    return url.rstrip("/")
 
 
 def _supabase_service_key() -> str:
