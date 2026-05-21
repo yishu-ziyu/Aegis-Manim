@@ -31,6 +31,8 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 WORKDIR /app
 RUN mkdir -p /app/temp /app/outputs
 
+# Force cache bust on code changes
+ARG CACHE_BUST=1
 COPY render_backend/app.py .
 COPY render_backend/supabase_client.py .
 
