@@ -376,6 +376,141 @@ def run_manim(file_path: str, scene_name: str) -> None:
         raise RuntimeError("Manim render failed.")
 
 
+def try_render_code(
+    code: str,
+    scene_name: str,
+    media_dir: str = "media",
+) -> tuple[bool, str]:
+    """Try to render Manim code in a temp directory. Return (success, error_log)."""
+    with tempfile.TemporaryDirectory(prefix="aegis-ritl-") as temp_dir:
+        temp_path = Path(temp_dir) / "scene.py"
+        temp_path.write_text(code + "\n", encoding="utf-8")
+        cmd = [
+            sys.executable,
+            "-m",
+            "manim",
+            "-ql",
+            "--media_dir",
+            str(Path(temp_dir) / media_dir),
+            str(temp_path),
+            scene_name,
+        ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode == 0:
+            return True, ""
+        # Collect stderr first, fallback to stdout
+        error_log = (result.stderr or result.stdout or "").strip()
+        return False, error_log
+
+
+def build_ritl_feedback_prompt(
+    original_prompt: str,
+    current_code: str,
+    error_log: str,
+    attempt: int,
+) -> str:
+    """Build a feedback prompt for RITL retry."""
+    # Truncate error log to avoid overwhelming the context window
+    max_error_chars = 2_000
+    truncated_error = error_log[:max_error_chars]
+    if len(error_log) > max_error_chars:
+        truncated_error += "\n...[error log truncated]"
+
+    return f"""The following Manim Python code was generated for this request:
+
+--- Original Request ---
+{original_prompt}
+
+--- Generated Code (Attempt {attempt}) ---
+```python
+{current_code}
+```
+
+--- Render Error ---
+{truncated_error}
+
+--- Task ---
+Fix the code so it renders successfully. Preserve the educational content and narrative structure. Output ONLY the corrected Python code.
+"""
+
+
+def generate_code_with_ritl(
+    *,
+    provider_id: str,
+    api_key: str,
+    base_url: str | None,
+    endpoint: str | None,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    scene_name: str = "GeneratedScene",
+    max_retries: int = 3,
+) -> tuple[str, int, list[str]]:
+    """Generate Manim code with RITL (Renderer-in-the-Loop) feedback.
+
+    Returns:
+        (final_code, attempts_used, ritl_notes)
+    """
+    original_prompt = user_prompt
+    ritl_notes: list[str] = []
+    current_code = ""
+
+    for attempt in range(1, max_retries + 1):
+        # Adjust temperature: slightly increase on retry for exploration
+        adjusted_temp = min(temperature + (attempt - 1) * 0.1, 0.7)
+
+        raw_code, provider_name, used_endpoint = generate_code_with_llm(
+            provider_id=provider_id,
+            api_key=api_key,
+            base_url=base_url,
+            endpoint=endpoint,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=adjusted_temp,
+        )
+
+        cleaned_code = extract_python_only(raw_code)
+        patched_code, compat_notes = apply_runtime_compatibility_fixes(cleaned_code)
+        current_code = patched_code
+
+        if compat_notes:
+            ritl_notes.extend(compat_notes)
+
+        # Try rendering
+        success, error_log = try_render_code(current_code, scene_name)
+
+        if success:
+            if attempt > 1:
+                ritl_notes.append(f"RITL: Render succeeded on attempt {attempt}.")
+            return current_code, attempt, ritl_notes
+
+        # Render failed — prepare feedback for next attempt
+        ritl_notes.append(
+            f"RITL attempt {attempt} failed: {error_log[:200]}..."
+            if len(error_log) > 200
+            else f"RITL attempt {attempt} failed: {error_log}"
+        )
+
+        if attempt < max_retries:
+            user_prompt = build_ritl_feedback_prompt(
+                original_prompt=original_prompt,
+                current_code=current_code,
+                error_log=error_log,
+                attempt=attempt,
+            )
+
+    # All retries exhausted
+    ritl_notes.append(f"RITL: All {max_retries} attempts failed. Returning last code.")
+    return current_code, max_retries, ritl_notes
+
+
 def main() -> int:
     load_dotenv(PROJECT_ROOT / ".env")
 
@@ -435,6 +570,17 @@ def main() -> int:
         action="store_true",
         help="Only generate code and skip Manim rendering",
     )
+    parser.add_argument(
+        "--ritl",
+        action="store_true",
+        help="Enable Renderer-in-the-Loop: auto-retry on render failures",
+    )
+    parser.add_argument(
+        "--ritl-retries",
+        type=int,
+        default=3,
+        help="Max RITL retry attempts (default: 3)",
+    )
 
     args = parser.parse_args()
     system_prompt = load_system_prompt()
@@ -475,17 +621,36 @@ def main() -> int:
             )
             return 1
         try:
-            code, provider_name, resolved_endpoint = generate_code_with_llm(
-                provider_id=provider.id,
-                api_key=api_key or "",
-                base_url=args.base_url or None,
-                endpoint=args.endpoint if provider.id == "zhipu" else None,
-                model=args.model,
-                system_prompt=system_prompt,
-                user_prompt=args.prompt,
-                temperature=args.temperature,
-            )
-            print(f"Provider: {provider_name} ({resolved_endpoint})")
+            if args.ritl:
+                print(f"RITL enabled (max {args.ritl_retries} retries)...")
+                cleaned_code, attempts, ritl_notes = generate_code_with_ritl(
+                    provider_id=provider.id,
+                    api_key=api_key or "",
+                    base_url=args.base_url or None,
+                    endpoint=args.endpoint if provider.id == "zhipu" else None,
+                    model=args.model,
+                    system_prompt=system_prompt,
+                    user_prompt=args.prompt,
+                    temperature=args.temperature,
+                    scene_name=args.scene_name,
+                    max_retries=args.ritl_retries,
+                )
+                print(f"RITL completed in {attempts} attempt(s).")
+                notes = ritl_notes
+            else:
+                code, provider_name, resolved_endpoint = generate_code_with_llm(
+                    provider_id=provider.id,
+                    api_key=api_key or "",
+                    base_url=args.base_url or None,
+                    endpoint=args.endpoint if provider.id == "zhipu" else None,
+                    model=args.model,
+                    system_prompt=system_prompt,
+                    user_prompt=args.prompt,
+                    temperature=args.temperature,
+                )
+                print(f"Provider: {provider_name} ({resolved_endpoint})")
+                cleaned_code = extract_python_only(code)
+                cleaned_code, notes = apply_runtime_compatibility_fixes(cleaned_code)
         except Exception as exc:  # pragma: no cover - network errors are environment-specific.
             print(f"Failed to generate code from model: {exc}")
             return 1
@@ -494,15 +659,16 @@ def main() -> int:
     if not output_path.is_absolute():
         output_path = PROJECT_ROOT / output_path
 
-    try:
-        cleaned_code = extract_python_only(code)
-    except RuntimeError as exc:
-        print(f"Generated code validation failed: {exc}")
-        return 1
+    if args.simulate:
+        try:
+            cleaned_code = extract_python_only(code)
+        except RuntimeError as exc:
+            print(f"Generated code validation failed: {exc}")
+            return 1
+        cleaned_code, notes = apply_runtime_compatibility_fixes(cleaned_code)
 
-    cleaned_code, notes = apply_runtime_compatibility_fixes(cleaned_code)
     if notes:
-        print("Applied compatibility fixes:")
+        print("Applied compatibility fixes / RITL notes:")
         for note in notes:
             print(f"- {note}")
 

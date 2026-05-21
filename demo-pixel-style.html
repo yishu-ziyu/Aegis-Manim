@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aegis-Manim — Pixel Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --bg-2: #161616;
+    --bg-3: #1c1c1c;
+    --fg: #d8d4cf;
+    --fg-bright: #e8e4df;
+    --muted: #6b6560;
+    --muted-2: #4a4540;
+    --accent: #5a8a7a;
+    --accent-2: #7a7a6a;
+    --accent-3: #6a7a8a;
+    --danger: #8a5a5a;
+    --ok: #5a7a6a;
+    --code-bg: #13181f;
+    --border: #252525;
+    --border-light: #2e2e2e;
+    --pixel: #d8d4cf;
+    --radius: 4px;
+    --speed: 200ms;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* subtle pixel grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.25;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 8px 8px;
+    z-index: 0;
+  }
+
+  /* ── Shell ── */
+  .shell {
+    position: relative;
+    z-index: 1;
+    width: min(1280px, 95vw);
+    margin: 28px auto 40px;
+    display: grid;
+    gap: 20px;
+    grid-template-columns: 1.05fr 0.95fr;
+    animation: shell-in 420ms ease-out both;
+  }
+
+  body.learning-mode .shell {
+    width: min(1500px, 96vw);
+    grid-template-columns: minmax(320px, 0.52fr) minmax(780px, 1.48fr);
+    align-items: start;
+  }
+
+  /* ── Panel ── */
+  .panel {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .panel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+  }
+
+  /* ── Hero ── */
+  .hero {
+    padding: 16px 22px 12px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent);
+    position: relative;
+  }
+
+  .hero h1 {
+    margin: 0 0 4px;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--fg-bright);
+  }
+
+  .hero p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.84rem;
+    max-width: 42ch;
+    line-height: 1.4;
+  }
+
+  .hero small {
+    display: inline-flex;
+    margin-top: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    padding: 3px 6px;
+    color: var(--muted);
+    background: var(--bg-3);
+    border: 1px dashed var(--border-light);
+  }
+
+  /* ── Form ── */
+  .form-wrap {
+    padding: 16px 22px 18px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .field {
+    display: grid;
+    gap: 4px;
+    animation: field-in var(--speed) ease-out both;
+  }
+  .field:nth-child(1) { animation-delay: 30ms; }
+  .field:nth-child(2) { animation-delay: 70ms; }
+  .field:nth-child(3) { animation-delay: 110ms; }
+
+  label {
+    font-size: 0.8rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--muted);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+
+  .help {
+    margin-top: -2px;
+    color: var(--muted-2);
+    font-size: 0.78rem;
+  }
+
+  input, select, textarea {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font: inherit;
+    background: var(--bg);
+    color: var(--fg-bright);
+    padding: 8px 10px;
+    transition: border-color var(--speed);
+    outline: none;
+  }
+
+  textarea {
+    min-height: 72px;
+    resize: vertical;
+    line-height: 1.45;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--accent);
+  }
+
+  .prompt-preview {
+    display: none;
+    border: 1px dashed var(--border-light);
+    border-radius: var(--radius);
+    background: var(--bg);
+    padding: 10px 12px;
+    color: var(--fg);
+    font-size: 0.84rem;
+    line-height: 1.5;
+  }
+  .prompt-preview.visible { display: block; }
+  .prompt-preview-label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+  }
+
+  .rich-text strong { font-weight: 700; color: var(--fg-bright); }
+  .rich-text code {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent-3);
+    background: rgba(106,122,138,0.1);
+    border: 1px solid rgba(106,122,138,0.15);
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 0.88em;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .key-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+  }
+
+  .provider-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+
+  .provider-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px dashed var(--border-light);
+    padding: 3px 8px;
+    background: var(--bg);
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--muted);
+    font-size: 0.72rem;
+  }
+
+  .provider-doc {
+    color: var(--accent-3);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(106,122,138,0.3);
+  }
+  .provider-doc.hidden { display: none; }
+
+  /* ── Buttons ── */
+  .tiny-btn, .btn, .ghost-btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    border-radius: var(--radius);
+    cursor: pointer;
+    border: none;
+    transition: opacity var(--speed), transform var(--speed);
+  }
+
+  .tiny-btn {
+    padding: 0 12px;
+    color: var(--fg-bright);
+    background: var(--accent);
+    min-width: 56px;
+    font-size: 0.78rem;
+    height: 36px;
+  }
+  .tiny-btn:hover { opacity: 0.85; }
+
+  .btn {
+    margin-top: 2px;
+    padding: 10px 14px;
+    color: var(--bg);
+    background: var(--fg-bright);
+    letter-spacing: 0.3px;
+    font-size: 0.84rem;
+    text-transform: uppercase;
+  }
+  .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  .btn[disabled] { opacity: 0.45; cursor: wait; transform: none; }
+
+  .ghost-btn {
+    padding: 6px 10px;
+    border: 1px solid var(--border-light);
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.74rem;
+  }
+  .ghost-btn:hover { color: var(--fg); border-color: var(--muted); }
+
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 0.86rem;
+  }
+  .check-row input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+    padding: 0;
+  }
+
+  /* ── Status ── */
+  .status-box {
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    line-height: 1.45;
+    font-size: 0.86rem;
+  }
+  .status-box.error { border-color: rgba(138,90,90,0.4); background: rgba(138,90,90,0.08); color: #a07070; }
+  .status-box.success { border-color: rgba(90,122,106,0.4); background: rgba(90,122,106,0.08); color: #7a9a8a; }
+
+  /* ── Process Panel ── */
+  .process-panel {
+    display: none;
+    border: 1px solid var(--border-light);
+    background: var(--bg);
+    padding: 12px;
+    gap: 10px;
+  }
+  .process-panel.visible { display: grid; animation: field-in 240ms ease-out; }
+
+  .process-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  .process-time {
+    flex: 0 0 auto;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.74rem;
+  }
+
+  .process-steps { display: grid; gap: 8px; }
+  .process-feed {
+    display: grid;
+    gap: 6px;
+    max-height: 170px;
+    overflow: auto;
+    padding-right: 3px;
+  }
+  .process-feed-item {
+    border-left: 2px solid var(--accent);
+    padding: 5px 0 5px 9px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    background: rgba(255,255,255,0.02);
+  }
+  .process-feed-item.warn { border-left-color: var(--danger); }
+
+  .tech-details {
+    border-top: 1px dashed var(--border);
+    padding-top: 8px;
+    color: var(--muted-2);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+  }
+  .tech-details summary { cursor: pointer; color: var(--muted); }
+  .tech-log {
+    white-space: pre-wrap;
+    margin: 6px 0 0;
+    max-height: 150px;
+    overflow: auto;
+  }
+
+  .process-step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 9px;
+    color: var(--muted-2);
+    font-size: 0.8rem;
+  }
+  .process-dot {
+    width: 8px;
+    height: 8px;
+    border: 1px solid var(--border-light);
+    background: var(--bg-3);
+  }
+  .process-step.active { color: var(--fg); font-weight: 600; }
+  .process-step.active .process-dot {
+    border-color: var(--accent);
+    background: var(--accent);
+    animation: pulse-dot 1.4s ease-in-out infinite;
+  }
+  .process-step.done { color: var(--ok); }
+  .process-step.done .process-dot {
+    border-color: var(--ok);
+    background: var(--ok);
+  }
+
+  /* ── Result Panel ── */
+  .result-head {
+    padding: 24px 26px 18px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent);
+  }
+  .result-head h2 {
+    margin: 0 0 8px;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--fg-bright);
+  }
+  .result-head p { margin: 0; color: var(--muted); font-size: 0.92rem; }
+
+  .result-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .result-actions {
+    display: none;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  body.learning-mode .result-actions { display: flex; }
+
+  .result-wrap {
+    padding: 20px 26px 24px;
+    display: grid;
+    gap: 14px;
+  }
+
+  .tag-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    background: var(--bg);
+  }
+
+  .warning-box {
+    display: none;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px dashed rgba(138,90,90,0.4);
+    color: #907070;
+    background: rgba(138,90,90,0.05);
+    font-size: 0.84rem;
+    line-height: 1.45;
+  }
+  .warning-box.visible { display: block; animation: field-in 240ms ease-out; }
+
+  .code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .code-header span {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .code-section {
+    display: grid;
+    gap: 10px;
+  }
+  body.learning-mode .code-section { display: none; }
+  body.learning-mode.show-code .code-section { display: grid; }
+
+  pre {
+    margin: 0;
+    padding: 14px;
+    border-radius: var(--radius);
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    color: #b8c8d8;
+    font: 12px/1.6 'JetBrains Mono', monospace;
+    max-height: 320px;
+    overflow: auto;
+  }
+
+  .lesson-pair {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    align-items: stretch;
+  }
+  body.learning-mode .lesson-pair {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .video-card {
+    display: none;
+    border: 1px solid var(--border);
+    background: var(--code-bg);
+    padding: 10px;
+  }
+  .video-card.visible {
+    display: block;
+    animation: panel-up 260ms ease-out;
+  }
+  .lesson-pair .video-card.visible {
+    display: flex;
+    align-items: center;
+  }
+
+  video {
+    width: 100%;
+    border-radius: var(--radius);
+    max-height: 520px;
+    background: var(--bg);
+  }
+  body.learning-mode video { max-height: 640px; }
+
+  /* ── Alignment / Script Panel ── */
+  .alignment-panel {
+    display: none;
+    border: 1px solid var(--border-light);
+    background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+    padding: 14px;
+    gap: 12px;
+  }
+  .alignment-panel.visible {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    animation: panel-up 260ms ease-out;
+  }
+
+  .alignment-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .alignment-head h3 {
+    margin: 0 0 4px;
+    font-size: 0.95rem;
+    color: var(--fg-bright);
+  }
+  .alignment-summary {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+  .alignment-warning {
+    display: none;
+    border-radius: var(--radius);
+    border: 1px dashed rgba(140,120,80,0.4);
+    color: #908060;
+    background: rgba(140,120,80,0.06);
+    padding: 9px 11px;
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+  .alignment-warning.visible { display: block; }
+
+  .alignment-list {
+    display: grid;
+    gap: 10px;
+    max-height: 360px;
+    overflow: auto;
+    padding-right: 2px;
+  }
+  body.learning-mode .alignment-list { max-height: 480px; }
+
+  .segment-card {
+    text-align: left;
+    width: 100%;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    padding: 11px 12px;
+    color: var(--fg);
+    cursor: pointer;
+    transition: border-color var(--speed), background var(--speed);
+  }
+  .segment-card:hover { border-color: var(--accent); }
+  .segment-card.active {
+    background: rgba(90,138,122,0.08);
+    border-color: var(--accent);
+  }
+  .segment-card.low-confidence { border-style: dashed; border-color: var(--muted-2); }
+
+  .segment-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: baseline;
+    margin-bottom: 5px;
+  }
+  .segment-title { font-weight: 600; color: var(--fg-bright); font-size: 0.88rem; }
+  .segment-time {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+  }
+  .segment-script {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.5;
+    font-size: 0.85rem;
+  }
+  .segment-intent {
+    margin-top: 6px;
+    color: var(--muted-2);
+    font-size: 0.76rem;
+    line-height: 1.4;
+  }
+
+  .foot {
+    margin-top: 2px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted-2);
+    text-align: right;
+  }
+  .foot b { color: var(--accent-3); }
+
+  /* ── 8x8 pixel icon (CSS grid) ── */
+  .pixel-icon {
+    width: 20px;
+    height: 20px;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    gap: 0;
+    flex-shrink: 0;
+  }
+  .pixel-icon .p { background: var(--fg); }
+
+  /* ── Header bar ── */
+  .top-bar {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 32px;
+    border-bottom: 1px solid var(--border);
+  }
+  .top-bar h1 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--fg-bright);
+  }
+  .top-bar .status {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    background: var(--accent);
+    box-shadow: 0 0 3px var(--accent);
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 1020px) {
+    .shell {
+      grid-template-columns: 1fr;
+      width: min(720px, 94vw);
+    }
+    body.learning-mode .shell {
+      grid-template-columns: 1fr;
+      width: min(860px, 94vw);
+    }
+    .lesson-pair { grid-template-columns: 1fr; }
+    body.learning-mode .lesson-pair { grid-template-columns: 1fr; }
+    .alignment-list { max-height: none; }
+  }
+
+  @media (max-width: 720px) {
+    .row { grid-template-columns: 1fr; }
+    .shell { margin: 16px auto 24px; }
+    .hero, .form-wrap, .result-head, .result-wrap { padding-left: 16px; padding-right: 16px; }
+    .result-title-row { display: grid; }
+    .result-actions { justify-content: flex-start; }
+    .top-bar { padding: 12px 16px; }
+  }
+
+  @keyframes shell-in {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes field-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes panel-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Top bar with pixel logo -->
+<div class="top-bar">
+  <div class="pixel-icon">
+    <div></div><div></div><div></div><div class="p"></div><div></div><div></div><div></div><div></div>
+    <div></div><div></div><div class="p"></div><div class="p"></div><div class="p"></div><div></div><div></div><div></div>
+    <div></div><div class="p"></div><div></div><div class="p"></div><div></div><div class="p"></div><div></div><div></div>
+    <div class="p"></div><div class="p"></div><div class="p"></div><div class="p"></div><div class="p"></div><div class="p"></div><div class="p"></div><div></div>
+    <div></div><div class="p"></div><div></div><div class="p"></div><div></div><div class="p"></div><div></div><div></div>
+    <div></div><div class="p"></div><div></div><div></div><div></div><div class="p"></div><div></div><div></div>
+    <div></div><div></div><div class="p"></div><div class="p"></div><div class="p"></div><div></div><div></div><div></div>
+    <div></div><div></div><div></div><div class="p"></div><div></div><div></div><div></div><div></div>
+  </div>
+  <h1>Aegis-Manim</h1>
+  <div class="status">
+    <div class="status-dot"></div>
+    <span>在线</span>
+  </div>
+</div>
+
+<main class="shell">
+  <!-- LEFT: Form -->
+  <section class="panel">
+    <header class="hero">
+      <h1>Aegis Studio</h1>
+      <p>用自然语言描述，把抽象知识变成动态可视化视频。</p>
+      <small>Secure: API Key 仅用于本次请求，不落盘。</small>
+    </header>
+
+    <form id="generate-form" class="form-wrap">
+      <div class="field">
+        <label for="provider">模型服务</label>
+        <select id="provider" name="provider">
+          <option value="trial">内测免费试用 · Kimi</option>
+          <option value="zhipu">智谱 GLM</option>
+          <option value="openai">OpenAI Compatible</option>
+        </select>
+        <div class="provider-meta">
+          <span class="provider-pill">国内</span>
+          <span class="provider-pill">OpenAI-Compatible</span>
+        </div>
+        <div class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理。</div>
+      </div>
+
+      <div class="field">
+        <label for="apiKey">API Key</label>
+        <div class="key-row">
+          <input id="apiKey" name="apiKey" type="password" placeholder="输入 API Key" />
+          <button type="button" class="tiny-btn">显示</button>
+        </div>
+        <div class="help">Key 仅用于本次请求，不写入仓库。</div>
+      </div>
+
+      <div class="field">
+        <label for="prompt">你要讲清楚的问题</label>
+        <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。" required></textarea>
+        <div class="prompt-preview">
+          <span class="prompt-preview-label">公式预览</span>
+          <div class="rich-text"></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="model">模型</label>
+          <input id="model" name="model" value="kimi-coding" />
+        </div>
+        <div class="field">
+          <label for="sceneName">场景类名</label>
+          <input id="sceneName" name="sceneName" value="GeneratedScene" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="temperature">Temperature (0-1)</label>
+          <input id="temperature" name="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
+        </div>
+        <div class="field">
+          <label for="baseUrl">Base URL</label>
+          <input id="baseUrl" name="baseUrl" placeholder="https://api.example.com/v1" />
+        </div>
+      </div>
+
+      <label class="check-row">
+        <input type="checkbox" />
+        只生成代码，不渲染视频（调试模式）
+      </label>
+
+      <button type="submit" class="btn">Generate & Render</button>
+
+      <!-- Process Panel -->
+      <div class="process-panel">
+        <div class="process-head">
+          <span>正在准备任务...</span>
+          <span class="process-time">0s</span>
+        </div>
+        <div class="process-steps">
+          <div class="process-step active" data-stage="0"><span class="process-dot"></span><span>生成 Manim 教学代码</span></div>
+          <div class="process-step" data-stage="1"><span class="process-dot"></span><span>渲染动画并检查兼容性</span></div>
+          <div class="process-step" data-stage="2"><span class="process-dot"></span><span>失败时自动带错误重写代码</span></div>
+          <div class="process-step" data-stage="3"><span class="process-dot"></span><span>生成同步讲稿，可在视频完成后增强对齐</span></div>
+        </div>
+        <div class="process-feed">
+          <div class="process-feed-item">模型正在分析你的问题...</div>
+          <div class="process-feed-item">已生成 Manim 场景代码（42 行）</div>
+          <div class="process-feed-item warn">检测到 LaTeX 宏包缺失，已自动替换为原生 Text</div>
+        </div>
+        <details class="tech-details">
+          <summary>技术细节</summary>
+          <pre class="tech-log">[14:23:01] stage=validation attempt=1 message="prompt_ok"
+[14:23:02] stage=model provider=trial-kimi model=kimi-coding
+[14:23:08] stage=pre-check warnings=1 "latex_package_fallback"
+[14:23:09] stage=render queued</pre>
+        </details>
+      </div>
+
+      <div class="status-box">等待输入...</div>
+    </form>
+  </section>
+
+  <!-- RIGHT: Results -->
+  <section class="panel">
+    <header class="result-head">
+      <div class="result-title-row">
+        <div>
+          <h2>结果面板</h2>
+          <p>生成后自动切换为视频与讲稿优先的学习视图。</p>
+        </div>
+        <div class="result-actions">
+          <button type="button" class="ghost-btn">返回编辑</button>
+          <button type="button" class="ghost-btn">查看代码</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="result-wrap">
+      <div class="tag-wrap">
+        <span class="tag">Scene: CircleApproximation</span>
+        <span class="tag">File: scene_001.py</span>
+        <span class="tag">Req: 8a3f2e1d</span>
+        <span class="tag">v0.1</span>
+      </div>
+
+      <div class="warning-box visible">
+        自动兼容修复: 已替换不支持的 LaTeX 宏包 ; 已调整字体大小避免溢出
+      </div>
+
+      <section class="code-section">
+        <div class="code-header">
+          <span>Generated Python</span>
+          <button type="button" class="ghost-btn">复制代码</button>
+        </div>
+        <pre><span style="color:#6b7a6a"># Generated by Aegis-Manim</span>
+<span style="color:#8a9aaa">from</span> manim <span style="color:#8a9aaa">import</span> *
+
+<span style="color:#8a9aaa">class</span> <span style="color:#aaa090">CircleApproximation</span>(Scene):
+    <span style="color:#8a9aaa">def</span> construct(<span style="color:#8a9aaa">self</span>):
+        circle = Circle(radius=<span style="color:#8a8a7a">2</span>, color=WHITE)
+        approx_text = Text(<span style="color:#7a8a6a">"π ≈ ?"</span>, font_size=<span style="color:#8a8a7a">28</span>)
+        <span style="color:#8a9aaa">for</span> n <span style="color:#8a9aaa">in</span> [<span style="color:#8a8a7a">6</span>, <span style="color:#8a8a7a">12</span>, <span style="color:#8a8a7a">24</span>, <span style="color:#8a8a7a">48</span>]:
+            poly = RegularPolygon(n, radius=<span style="color:#8a8a7a">2</span>)
+            self.play(Create(poly), run_time=<span style="color:#8a8a7a">1.5</span>)
+            self.wait(<span style="color:#8a8a7a">0.5</span>)
+        self.play(Transform(approx_text, Text(
+            <span style="color:#7a8a6a">"π ≈ 3.14159"</span>, font_size=<span style="color:#8a8a7a">32</span>)))</pre>
+      </section>
+
+      <div class="lesson-pair">
+        <div class="video-card visible">
+          <video controls preload="metadata"
+            poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='360'%3E%3Crect fill='%230a0a0a' width='640' height='360'/%3E%3Ctext fill='%23252525' x='320' y='180' text-anchor='middle' font-family='monospace' font-size='14'%3EVideo Preview%3C/text%3E%3C/svg%3E">
+          </video>
+        </div>
+
+        <section class="alignment-panel visible">
+          <div class="alignment-head">
+            <div>
+              <h3>同步讲稿</h3>
+              <div class="alignment-summary">段落数：4 · 置信度：high · 点击段落可跳转视频</div>
+            </div>
+            <button type="button" class="ghost-btn">重新对齐</button>
+          </div>
+          <div class="alignment-warning visible">
+            部分段落时间对齐置信度较低，建议人工复核。
+          </div>
+          <div class="alignment-list">
+            <button type="button" class="segment-card active" data-segment-id="s1">
+              <div class="segment-top">
+                <span class="segment-title">引入问题</span>
+                <span class="segment-time">0:00 - 0:08</span>
+              </div>
+              <p class="segment-script">我们如何从正多边形逼近圆的面积？古希腊人用内接正多边形来估算 π。</p>
+              <div class="segment-intent">视觉对应：画面中央出现单位圆，标题文字淡入</div>
+            </button>
+
+            <button type="button" class="segment-card" data-segment-id="s2">
+              <div class="segment-top">
+                <span class="segment-title">正六边形逼近</span>
+                <span class="segment-time">0:08 - 0:22</span>
+              </div>
+              <p class="segment-script">先看正六边形——它的周长是 6r，也就是 6，与圆周长 2π 相差甚远。</p>
+              <div class="segment-intent">视觉对应：正六边形从圆心展开，边长标注出现</div>
+            </button>
+
+            <button type="button" class="segment-card" data-segment-id="s3">
+              <div class="segment-top">
+                <span class="segment-title">倍增边数</span>
+                <span class="segment-time">0:22 - 0:45</span>
+              </div>
+              <p class="segment-script">把边数倍增到 12、24、48... 每一次倍增，正多边形都更贴近圆周。</p>
+              <div class="segment-intent">视觉对应：正十二边形、二十四边形依次替换，π 近似值实时更新</div>
+            </button>
+
+            <button type="button" class="segment-card low-confidence" data-segment-id="s4">
+              <div class="segment-top">
+                <span class="segment-title">极限与结论</span>
+                <span class="segment-time">0:45 - 0:58</span>
+              </div>
+              <p class="segment-script">当边数趋向无穷，正多边形就是圆本身——这就是极限思想的直观演示。</p>
+              <div class="segment-intent">视觉对应：最终 π 值定格，所有多边形叠合淡出</div>
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
+    </div>
+  </section>
+</main>
+
+</body>
+</html>

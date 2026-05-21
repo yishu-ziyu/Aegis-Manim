@@ -1850,6 +1850,21 @@ def make_index_html() -> str:
     let processStartedAt = 0;
     let processTimer = null;
 
+    // ── Render backend warm-up ──
+    // Render free tier spins down after 15 min of inactivity. When the page loads,
+    // we fire a lightweight request in the background so the instance is likely
+    // already awake by the time the user clicks "GENERATE & RENDER".
+    (function warmUpRenderBackend() {{
+      const WARMUP_URL = "/api/render/status/health";
+      // Use a short timeout so it doesn't block anything
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      fetch(WARMUP_URL, {{ method: "GET", signal: controller.signal }})
+        .then(() => console.log("[WarmUp] Render backend ping sent."))
+        .catch(() => {{ /* Silent fail – warm-up is best-effort */ }})
+        .finally(() => clearTimeout(timeoutId));
+    }})();
+
     function groupProviderIds() {{
       const groups = {{}};
       Object.entries(PROVIDERS).forEach(([id, preset]) => {{
