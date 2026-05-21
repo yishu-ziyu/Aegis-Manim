@@ -6,6 +6,7 @@ from typing import Any
 
 from api.index import (
     MAX_PUBLIC_BODY_BYTES,
+    _proxy_to_render_backend,
     build_health_payload,
     build_index_html,
     generate_manim_code_for_gateway,
@@ -72,6 +73,18 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
         await send_json(send, HTTPStatus.OK, build_health_payload())
         return
 
+    if method == "GET" and path.startswith("/api/render/status/"):
+        job_id = path.split("/api/render/status/", 1)[-1]
+        status, response = _proxy_to_render_backend(f"/status/{job_id}")
+        await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method == "GET" and path.startswith("/api/render/download/"):
+        job_id = path.split("/api/render/download/", 1)[-1]
+        status, response = _proxy_to_render_backend(f"/download/{job_id}")
+        await send_json(send, HTTPStatus(status), response)
+        return
+
     if method == "POST" and path == "/api/generate":
         try:
             raw_body = await read_body(receive)
@@ -83,6 +96,31 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             return
 
         status, response = generate_manim_code_for_gateway(payload)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method == "POST" and path == "/api/render":
+        try:
+            raw_body = await read_body(receive)
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception as exc:
+            await send_json(send, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        code = str(payload.get("code", "")).strip()
+        scene_name = str(payload.get("sceneName", "GeneratedScene")).strip()
+        if not code:
+            await send_json(send, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
+            return
+
+        status, response = _proxy_to_render_backend(
+            "/render-async",
+            method="POST",
+            payload={"code": code, "scene_name": scene_name},
+            timeout=15,
+        )
         await send_json(send, HTTPStatus(status), response)
         return
 
