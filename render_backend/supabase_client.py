@@ -14,24 +14,32 @@ from typing import Any
 
 import requests
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 # Storage bucket name for rendered videos
 STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "manim-videos")
 
+
+def _supabase_url() -> str:
+    return os.environ.get("SUPABASE_URL", "").rstrip("/")
+
+
+def _supabase_service_key() -> str:
+    return os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+
 # Headers for service-role requests (bypasses RLS)
 _HEADERS_SR = lambda: {
-    "apikey": SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    "apikey": _supabase_service_key(),
+    "Authorization": f"Bearer {_supabase_service_key()}",
     "Content-Type": "application/json",
     "Prefer": "return=representation",
 }
 
 
 def _base_url() -> str:
-    if not SUPABASE_URL:
+    url = _supabase_url()
+    if not url:
         raise RuntimeError("SUPABASE_URL is not configured")
-    return SUPABASE_URL
+    return url
 
 
 def _postgrest_url(table: str) -> str:
@@ -118,7 +126,7 @@ def get_job(job_id: str) -> dict[str, Any] | None:
     """Fetch a single render job by job_id."""
     resp = requests.get(
         f"{_postgrest_url('render_jobs')}?job_id=eq.{job_id}&limit=1",
-        headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+        headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
     )
     if resp.status_code == 200:
         data = resp.json()
@@ -181,8 +189,8 @@ def upload_video(
     upload_url = _storage_url(f"object/{STORAGE_BUCKET}/{storage_path}")
 
     headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey": _supabase_service_key(),
+        "Authorization": f"Bearer {_supabase_service_key()}",
     }
 
     with open(file_path, "rb") as f:
@@ -212,7 +220,7 @@ def get_public_video_url(video_path: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def is_configured() -> bool:
-    return bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
+    return bool(_supabase_url() and _supabase_service_key())
 
 
 def health_check() -> dict[str, Any]:
@@ -220,9 +228,10 @@ def health_check() -> dict[str, Any]:
     if not is_configured():
         return {"ok": False, "error": "Supabase not configured"}
     try:
+        key = _supabase_service_key()
         resp = requests.get(
             f"{_base_url()}/rest/v1/",
-            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
             timeout=5,
         )
         return {"ok": resp.status_code < 400, "status": resp.status_code}
