@@ -26,7 +26,7 @@ def _supabase_url() -> str:
 
 
 def _supabase_service_key() -> str:
-    return os.environ.get("SUPABASE_SERVICE_KEY", "")
+    return os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 
 
 # Headers for service-role requests (bypasses RLS)
