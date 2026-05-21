@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -50,6 +51,55 @@ VIDEO_CACHE: dict[str, Path] = {}
 VIDEO_CACHE_LOCK = threading.Lock()
 JOB_STORE: dict[str, dict[str, Any]] = {}
 JOB_STORE_LOCK = threading.Lock()
+
+# Local trial plans (auto-detect env keys)
+LOCAL_TRIAL_PLANS = {
+    "trial-kimi-priority": {
+        "name": "免费试用 · Kimi 优先",
+        "description": "本地内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 MiniMax。",
+        "model_label": "Kimi 优先 / MiniMax 备用",
+        "attempts": (
+            {"provider_id": "kimi-code", "env": "KIMI_CODE_API_KEY", "model": "kimi-for-coding"},
+            {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M2.7"},
+        ),
+    },
+    "trial-minimax-direct": {
+        "name": "免费试用 · MiniMax 稳定",
+        "description": "本地内测免费额度：直接使用 MiniMax，适合较长或更稳的教学脚本生成。",
+        "model_label": "MiniMax 稳定试用",
+        "attempts": (
+            {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M2.7"},
+        ),
+    },
+}
+
+
+def build_local_trial_config() -> dict[str, object]:
+    """Build trial provider entries for local web app when env keys are present."""
+    available: dict[str, object] = {}
+    for provider_id, plan in LOCAL_TRIAL_PLANS.items():
+        has_any_key = any(
+            os.getenv(str(att["env"]), "").strip()
+            for att in plan["attempts"]
+        )
+        if not has_any_key:
+            continue
+        available[provider_id] = {
+            "id": provider_id,
+            "name": plan["name"],
+            "region": "trial",
+            "defaultModel": plan["model_label"],
+            "models": [plan["model_label"]],
+            "requiresApiKey": False,
+            "apiKeyPlaceholder": "内测免费试用，不需要填写 Key",
+            "serverManaged": True,
+            "hideApiKey": True,
+            "hideBaseUrl": True,
+            "lockModel": True,
+            "displayProtocol": "免费试用",
+            "description": plan["description"],
+        }
+    return available
 
 
 def ensure_generated_dir() -> None:
@@ -428,6 +478,43 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
     except (TypeError, ValueError):
         temperature = 0.2
     temperature = max(0.0, min(1.0, temperature))
+
+    # Resolve local trial plans (server-managed keys from env)
+    trial_plan = LOCAL_TRIAL_PLANS.get(provider_id)
+    if trial_plan:
+        resolved_trial = None
+        for attempt in trial_plan["attempts"]:
+            env_key = os.getenv(str(attempt["env"]), "").strip()
+            if env_key:
+                resolved_trial = attempt
+                resolved_trial_api_key = env_key
+                break
+        if resolved_trial:
+            provider_id = str(resolved_trial["provider_id"])
+            provider = resolve_provider(provider_id)
+            api_key = resolved_trial_api_key
+            model = str(resolved_trial["model"]) or provider.default_model or DEFAULT_MODEL
+            base_url = ""
+            endpoint = ""
+        else:
+            emit_job_event(
+                job_id,
+                status="failed",
+                stage="validation",
+                student_message="本地试用模型未配置：请设置 KIMI_CODE_API_KEY 或 MINIMAX_API_KEY 环境变量。",
+                technical_message="LOCAL_TRIAL_NO_KEYS_CONFIGURED",
+            )
+            fail_job(
+                job_id,
+                {
+                    "ok": False,
+                    "error": "Local trial keys not configured.",
+                    "detail": "Please set KIMI_CODE_API_KEY or MINIMAX_API_KEY env var.",
+                    "requestId": job_id,
+                },
+                "本地试用模型未配置：请设置 KIMI_CODE_API_KEY 或 MINIMAX_API_KEY 环境变量。",
+            )
+            return
 
     request_context = {
         "provider": provider.id,
@@ -824,7 +911,17 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
 
 
 def make_index_html() -> str:
-    provider_config_json = json.dumps(provider_presets_for_ui(), ensure_ascii=False)
+    provider_config = provider_presets_for_ui()
+    local_trial = build_local_trial_config()
+    if local_trial:
+        provider_config["providers"] = {**local_trial, **provider_config["providers"]}
+        provider_config["regionLabels"] = {
+            "trial": "内测免费试用",
+            **provider_config.get("regionLabels", {}),
+        }
+        if "trial-kimi-priority" in local_trial:
+            provider_config["defaultProvider"] = "trial-kimi-priority"
+    provider_config_json = json.dumps(provider_config, ensure_ascii=False)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2174,6 +2271,122 @@ def make_index_html() -> str:
       }}).join("\\n");
     }}
 
+    // Auto-render configuration
+    const RENDER_BACKEND_URL = "{os.environ.get('RENDER_BACKEND_URL', 'http://localhost:5001')}";
+
+    async function startAutoRender(code, sceneName) {{
+      if (!code) return;
+      setStatus("代码已生成，正在提交渲染任务...", "");
+      const renderPayload = {{ code, scene_name: sceneName }};
+      let renderResponse = null;
+      let renderData = null;
+
+      // Try local render backend first
+      try {{
+        const localResp = await fetch(`${{RENDER_BACKEND_URL}}/render-async`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json", "X-API-Key": "dev-key-change-in-production" }},
+          body: JSON.stringify(renderPayload)
+        }});
+        if (localResp.ok) {{
+          renderResponse = localResp;
+          renderData = await localResp.json();
+        }}
+      }} catch (e) {{
+        // Local backend not available, try via current API proxy
+      }}
+
+      // Fallback to /api/render (Vercel proxy or local web_app proxy)
+      if (!renderResponse) {{
+        try {{
+          const proxyResp = await fetch("/api/render", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ code, sceneName }})
+          }});
+          renderResponse = proxyResp;
+          renderData = await proxyResp.json();
+        }} catch (e) {{
+          setStatus("渲染后端连接失败，已生成代码但无法渲染视频。", "warn");
+          return;
+        }}
+      }}
+
+      if (!renderResponse.ok || !renderData || renderData.error) {{
+        const err = (renderData && renderData.error) || "渲染任务提交失败";
+        setStatus("渲染提交失败: " + err, "error");
+        return;
+      }}
+
+      const jobId = renderData.job_id;
+      const statusUrl = renderData.status_url || `/status/${{jobId}}`;
+      const downloadUrl = renderData.download_url || `/download/${{jobId}}`;
+      setStatus(`渲染任务已创建 (ID: ${{jobId.slice(0,8)}})，正在渲染视频...`, "");
+
+      // Poll render status
+      for (let i = 0; i < 300; i++) {{
+        await new Promise(r => setTimeout(r, 2000));
+        let statusResp;
+        try {{
+          statusResp = await fetch(`${{RENDER_BACKEND_URL}}${{statusUrl}}`, {{
+            headers: {{ "X-API-Key": "dev-key-change-in-production" }}
+          }});
+        }} catch (e) {{
+          try {{
+            statusResp = await fetch(`/api/render/status/${{jobId}}`);
+          }} catch (e2) {{
+            continue;
+          }}
+        }}
+        if (!statusResp.ok) continue;
+        const statusData = await statusResp.json();
+        if (statusData.status === "done" || statusData.status === "completed") {{
+          // Try to get video URL
+          let videoUrl = null;
+          if (statusData.video_url) {{
+            videoUrl = statusData.video_url;
+          }} else {{
+            // Try download endpoint
+            try {{
+              const dlResp = await fetch(`${{RENDER_BACKEND_URL}}${{downloadUrl}}`, {{
+                headers: {{ "X-API-Key": "dev-key-change-in-production" }}
+              }});
+              if (dlResp.ok) {{
+                const dlData = await dlResp.json();
+                videoUrl = dlData.video_url;
+              }}
+            }} catch (e) {{
+              try {{
+                const dlResp2 = await fetch(`/api/render/download/${{jobId}}`);
+                if (dlResp2.ok) {{
+                  const dlData2 = await dlResp2.json();
+                  videoUrl = dlData2.video_url;
+                }}
+              }} catch (e2) {{}}
+            }}
+          }}
+          if (videoUrl) {{
+            videoPlayer.src = videoUrl;
+            videoCard.classList.add("visible");
+            enterLearningMode();
+            setStatus("视频渲染完成！", "success");
+          }} else {{
+            setStatus("渲染完成，但无法获取视频地址。", "warn");
+          }}
+          return;
+        }}
+        if (statusData.status === "failed" || statusData.status === "error") {{
+          const errMsg = statusData.error || statusData.error_message || "渲染失败";
+          setStatus("渲染失败: " + errMsg, "error");
+          if (statusData.stderr) {{
+            console.error("Render stderr:", statusData.stderr);
+          }}
+          return;
+        }}
+      }}
+      setStatus("渲染超时，请稍后手动刷新检查。", "warn");
+    }}
+
     function applyGenerateResult(data, payload, requestId) {{
       codeOutput.textContent = data.code || "# 未返回代码";
       latestCode = data.code || "";
@@ -2203,6 +2416,11 @@ def make_index_html() -> str:
         : "";
       const reqText = requestId && requestId !== "-" ? " | 诊断ID: " + requestId : "";
       setStatus((data.message || "处理完成") + warningText + reqText, "success");
+
+      // Auto-trigger render if code was generated and noRender is not checked
+      if (latestCode && !payload.noRender && !data.videoId) {{
+        startAutoRender(latestCode, latestSceneName);
+      }}
     }}
 
     async function waitForJob(statusUrl, payload) {{
