@@ -1,38 +1,131 @@
-name: Deploy to PinMe
+name: Deploy Pipeline
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: '部署目标'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - vercel
+          - render
 
-permissions:
-  contents: read
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  deploy:
+  # -------------------------------------------------------------------------
+  # Job 1: Deploy Vercel (Frontend + API Gateway)
+  # -------------------------------------------------------------------------
+  deploy-vercel:
+    name: Deploy to Vercel
     runs-on: ubuntu-latest
-
+    if: |
+      github.event_name == 'push' ||
+      github.event.inputs.deploy_target == 'all' ||
+      github.event.inputs.deploy_target == 'vercel'
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.10"
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Install Build Tool Dependencies
-        # We only need python standard lib for the build script, but if we extended it later...
-        run: |
-          echo "No extra python deps needed for build_site.py yet"
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
 
-      - name: Build Static Site
-        run: |
-          python core/build_site.py
+      - name: Pull Vercel Environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
-      - name: Deploy to PinMe
-        # Using npx to run pinme without global install
-        # --yes flag might be needed if it asks for confirmation (though docs say zero config)
-        # We try strict command first.
+      - name: Build Project
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy to Production
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Notify Success
+        if: success()
+        run: echo "Vercel deploy OK"
+
+  # -------------------------------------------------------------------------
+  # Job 2: Deploy Render (Render Backend)
+  # -------------------------------------------------------------------------
+  deploy-render:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    needs: deploy-vercel
+    if: |
+      github.event_name == 'push' ||
+      github.event.inputs.deploy_target == 'all' ||
+      github.event.inputs.deploy_target == 'render'
+    steps:
+      - name: Trigger Render Deploy Hook
         run: |
-          npx pinme upload dist
+          echo "Triggering Render deploy..."
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+          if [ "$RESPONSE" = "200" ] || [ "$RESPONSE" = "201" ]; then
+            echo "Render deploy triggered (HTTP $RESPONSE)"
+          else
+            echo "Render trigger returned HTTP $RESPONSE, check Deploy Hook URL"
+            exit 1
+          fi
+
+      - name: Wait for Render Deploy
+        run: |
+          echo "Waiting for Render deploy (~2-3 min)..."
+          sleep 120
+          echo "Render deploy should be done"
+
+  # -------------------------------------------------------------------------
+  # Job 3: Sync Environment Variables (Optional)
+  # -------------------------------------------------------------------------
+  sync-env:
+    name: Sync Environment Variables
+    runs-on: ubuntu-latest
+    needs: [deploy-vercel, deploy-render]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_target == 'all'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Sync Vercel Env
+        run: |
+          npm install --global vercel@latest
+          echo "${{ secrets.SUPABASE_URL }}" | vercel env add SUPABASE_URL production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
+          echo "${{ secrets.SUPABASE_SERVICE_KEY }}" | vercel env add SUPABASE_SERVICE_KEY production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
+          echo "${{ secrets.RENDER_BACKEND_URL }}" | vercel env add RENDER_BACKEND_URL production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
+          echo "${{ secrets.RENDER_BACKEND_API_KEY }}" | vercel env add RENDER_BACKEND_API_KEY production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
+          echo "${{ secrets.KIMI_CODE_API_KEY }}" | vercel env add KIMI_CODE_API_KEY production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
+          echo "${{ secrets.MINIMAX_API_KEY }}" | vercel env add MINIMAX_API_KEY production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        continue-on-error: true
+
+      - name: Notify Env Sync
+        if: success()
+        run: echo "Env sync done"

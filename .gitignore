@@ -140,3 +140,7 @@ generated/
 logs/bug_trace.jsonl
 .vercel
 .superpowers/
+
+# Render backend runtime dirs
+render_backend/outputs/
+render_backend/temp/
