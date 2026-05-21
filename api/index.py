@@ -10,6 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib import request as urllib_request
 
 APP_VERSION = "vercel_gateway_v20260506_1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,53 @@ PUBLIC_TRIAL_PLANS = {
 CLOUD_ENDPOINT_ERROR = (
     "Vercel 云端只支持公网 HTTPS 模型端点；本机、内网和 http:// 地址请在本地 Aegis Web 使用。"
 )
+
+# Render backend configuration
+RENDER_BACKEND_URL = os.environ.get("RENDER_BACKEND_URL", "").rstrip("/")
+RENDER_BACKEND_API_KEY = os.environ.get("RENDER_BACKEND_API_KEY", "")
+
+
+def _render_backend_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if RENDER_BACKEND_API_KEY:
+        headers["X-API-Key"] = RENDER_BACKEND_API_KEY
+    return headers
+
+
+def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, object] | None = None, timeout: int = 15) -> tuple[int, dict[str, object]]:
+    """Proxy a request to the render backend. Returns (http_status, json_body)."""
+    if not RENDER_BACKEND_URL:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "渲染后端未配置。请设置 RENDER_BACKEND_URL 环境变量。",
+        }
+    url = f"{RENDER_BACKEND_URL}{path}"
+    try:
+        if method == "POST" and payload is not None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib_request.Request(
+                url, data=data, headers=_render_backend_headers(), method="POST"
+            )
+        else:
+            req = urllib_request.Request(
+                url, headers=_render_backend_headers(), method=method
+            )
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            status = resp.status
+    except urllib_request.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        status = exc.code
+    except Exception as exc:
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": f"渲染后端连接失败: {exc}",
+        }
+    try:
+        parsed = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        parsed = {"ok": False, "error": "渲染后端返回非 JSON 响应", "raw": body[:200]}
+    return status, parsed
 
 
 def build_health_payload() -> dict[str, object]:
@@ -401,12 +449,11 @@ def build_index_html() -> str:
         "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。": (
             "这个 Provider 可按网关要求选择是否填写 Key；云端只支持公网可访问服务。"
         ),
-        '<input id="noRender" name="noRender" type="checkbox" />': (
-            '<input id="noRender" name="noRender" type="checkbox" checked disabled />'
-        ),
-        "只生成代码，不渲染视频（调试模式）": "只生成代码，不渲染视频（Vercel 云端模式）",
-        "Generate & Render": "Generate Code",
-        "代码、修复提示、渲染视频统一展示。": "代码与兼容修复提示会在这里展示；视频渲染需要独立后端。",
+        "只生成代码，不渲染视频（调试模式）": "只生成代码，不渲染视频（关闭视频渲染）",
+        "代码、修复提示、渲染视频统一展示。": "代码、修复提示与渲染视频统一展示。",
+    }
+    # Note: Render backend is now deployed at https://aegis-manim.onrender.com
+    # The noRender checkbox is left unchecked by default so users get code + video.
         'fetch("/api/generate/start"': 'fetch("/api/generate"',
         "await waitForJob(data.statusUrl, payload);": (
             'applyGenerateResult(data, payload, data.requestId || "-");'
@@ -463,6 +510,18 @@ class handler(BaseHTTPRequestHandler):
         if route == "/api/health":
             self._send_json(HTTPStatus.OK, build_health_payload())
             return
+        # Render proxy: status
+        if route.startswith("/api/render/status/"):
+            job_id = route.split("/api/render/status/", 1)[-1]
+            status, response = _proxy_to_render_backend(f"/status/{job_id}")
+            self._send_json(HTTPStatus(status), response)
+            return
+        # Render proxy: download (return redirect URL)
+        if route.startswith("/api/render/download/"):
+            job_id = route.split("/api/render/download/", 1)[-1]
+            status, response = _proxy_to_render_backend(f"/download/{job_id}")
+            self._send_json(HTTPStatus(status), response)
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
 
     def do_HEAD(self) -> None:  # noqa: N802
@@ -492,6 +551,27 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
             status, response = generate_manim_code_for_gateway(payload)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/render":
+            try:
+                payload = self._read_json_body()
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            # Validate
+            code = str(payload.get("code", "")).strip()
+            scene_name = str(payload.get("sceneName", "GeneratedScene")).strip()
+            if not code:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
+                return
+            # Proxy to render backend async endpoint
+            status, response = _proxy_to_render_backend(
+                "/render-async",
+                method="POST",
+                payload={"code": code, "scene_name": scene_name},
+                timeout=15,
+            )
             self._send_json(HTTPStatus(status), response)
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
