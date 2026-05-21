@@ -28,8 +28,12 @@ from manim_agent import (  # noqa: E402
     apply_runtime_compatibility_fixes,
     extract_python_only,
     generate_code_with_llm,
+    load_dotenv,
     load_system_prompt,
 )
+
+# Load .env so trial provider keys and RENDER_BACKEND_URL are available
+load_dotenv(PROJECT_ROOT / ".env")
 import web_app as local_web_app  # noqa: E402
 
 SYSTEM_PROMPT = load_system_prompt()
@@ -119,6 +123,35 @@ def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, 
     except json.JSONDecodeError:
         parsed = {"ok": False, "error": "渲染后端返回非 JSON 响应", "raw": body[:200]}
     return status, parsed
+
+
+def _proxy_to_render_backend_raw(path: str, method: str = "GET", payload: dict[str, object] | None = None, timeout: int = 15) -> tuple[int, bytes, dict[str, str]]:
+    """Proxy a request to the render backend and return raw bytes. Returns (http_status, body_bytes, headers_dict)."""
+    if not RENDER_BACKEND_URL:
+        return HTTPStatus.SERVICE_UNAVAILABLE, b"", {}
+    url = f"{RENDER_BACKEND_URL}{path}"
+    try:
+        if method == "POST" and payload is not None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib_request.Request(
+                url, data=data, headers=_render_backend_headers(), method="POST"
+            )
+        else:
+            req = urllib_request.Request(
+                url, headers=_render_backend_headers(), method=method
+            )
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+            status = resp.status
+            headers = dict(resp.headers)
+    except urllib_request.HTTPError as exc:
+        body = exc.read()
+        status = exc.code
+        headers = dict(exc.headers)
+    except Exception as exc:
+        err_body = f"渲染后端连接失败: {exc}".encode("utf-8")
+        return HTTPStatus.BAD_GATEWAY, err_body, {"content-type": "text/plain; charset=utf-8"}
+    return status, body, headers
 
 
 def build_health_payload() -> dict[str, object]:
@@ -519,7 +552,7 @@ class handler(BaseHTTPRequestHandler):
             status, response = _proxy_to_render_backend(f"/download/{job_id}")
             self._send_json(HTTPStatus(status), response)
             return
-        self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+        self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found.", "path": route, "raw_path": self.path, "method": "POST"})
 
     def do_HEAD(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
@@ -541,6 +574,8 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
+        # 诊断：记录所有 POST 请求的路径信息
+        print(f"[DEBUG] POST path={self.path!r} route={route!r}", file=sys.stderr)
         if route == "/api/generate":
             try:
                 payload = self._read_json_body()
@@ -550,7 +585,7 @@ class handler(BaseHTTPRequestHandler):
             status, response = generate_manim_code_for_gateway(payload)
             self._send_json(HTTPStatus(status), response)
             return
-        if route == "/api/render":
+        if route == "/api/render" or route.startswith("/api/render/"):
             try:
                 payload = self._read_json_body()
             except Exception as exc:

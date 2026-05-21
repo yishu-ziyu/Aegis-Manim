@@ -7,6 +7,7 @@ from typing import Any
 from api.index import (
     MAX_PUBLIC_BODY_BYTES,
     _proxy_to_render_backend,
+    _proxy_to_render_backend_raw,
     build_health_payload,
     build_index_html,
     generate_manim_code_for_gateway,
@@ -30,15 +31,19 @@ async def send_response(
     status: HTTPStatus,
     body: bytes,
     content_type: str,
+    extra_headers: list[tuple[bytes, bytes]] | None = None,
 ) -> None:
+    headers: list[tuple[bytes, bytes]] = [
+        (b"content-type", content_type.encode("utf-8")),
+        (b"content-length", str(len(body)).encode("ascii")),
+    ]
+    if extra_headers:
+        headers.extend(extra_headers)
     await send(
         {
             "type": "http.response.start",
             "status": int(status),
-            "headers": [
-                (b"content-type", content_type.encode("utf-8")),
-                (b"content-length", str(len(body)).encode("ascii")),
-            ],
+            "headers": headers,
         }
     )
     await send({"type": "http.response.body", "body": body})
@@ -81,8 +86,14 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
 
     if method == "GET" and path.startswith("/api/render/download/"):
         job_id = path.split("/api/render/download/", 1)[-1]
-        status, response = _proxy_to_render_backend(f"/download/{job_id}")
-        await send_json(send, HTTPStatus(status), response)
+        status_code, body_bytes, resp_headers = _proxy_to_render_backend_raw(f"/download/{job_id}")
+        content_type = resp_headers.get("Content-Type", "video/mp4")
+        extra: list[tuple[bytes, bytes]] = []
+        for key in ("Content-Disposition", "Content-Type"):
+            val = resp_headers.get(key) or resp_headers.get(key.lower())
+            if val:
+                extra.append((key.lower().encode("ascii"), val.encode("utf-8")))
+        await send_response(send, HTTPStatus(status_code), body_bytes, content_type, extra)
         return
 
     if method == "POST" and path == "/api/generate":

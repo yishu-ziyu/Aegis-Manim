@@ -2177,25 +2177,16 @@ def make_index_html() -> str:
           let videoUrl = null;
           if (statusData.video_url) {{
             videoUrl = statusData.video_url;
+          }} else if (statusData.download_url) {{
+            videoUrl = `/api/render/download/${{jobId}}`;
           }} else {{
-            // Try download endpoint
+            // Fallback: try gateway download endpoint directly
             try {{
-              const dlResp = await fetch(`${{RENDER_BACKEND_URL}}${{downloadUrl}}`, {{
-                headers: {{ "X-API-Key": "dev-key-change-in-production" }}
-              }});
+              const dlResp = await fetch(`/api/render/download/${{jobId}}`);
               if (dlResp.ok) {{
-                const dlData = await dlResp.json();
-                videoUrl = dlData.video_url;
+                videoUrl = `/api/render/download/${{jobId}}`;
               }}
-            }} catch (e) {{
-              try {{
-                const dlResp2 = await fetch(`/api/render/download/${{jobId}}`);
-                if (dlResp2.ok) {{
-                  const dlData2 = await dlResp2.json();
-                  videoUrl = dlData2.video_url;
-                }}
-              }} catch (e2) {{}}
-            }}
+            }} catch (e) {{}}
           }}
           if (videoUrl) {{
             videoPlayer.src = videoUrl;
