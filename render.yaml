@@ -1,0 +1,29 @@
+# Render.com Blueprint for Aegis-Manim Render Backend
+# Usage: Connect your GitHub repo to Render and select "New Blueprint"
+services:
+  - type: web
+    name: aegis-manim-render
+    runtime: docker
+    repo: https://github.com/yishu-ziyu/Aegis-Manim
+    branch: main
+    rootDir: render_backend
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: MANIM_API_KEY
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: manim-videos
+      - key: MAX_CODE_SIZE
+        value: 102400
+      - key: DEFAULT_TIMEOUT
+        value: 300
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: 10
+    healthCheckPath: /health
+    autoDeploy: true
