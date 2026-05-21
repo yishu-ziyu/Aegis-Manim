@@ -2,6 +2,9 @@
   "installCommand": "python -m pip install -r requirements.txt",
   "rewrites": [
     { "source": "/api/generate", "destination": "/api/index.py" },
+    { "source": "/api/render", "destination": "/api/index.py" },
+    { "source": "/api/render/status/(.*)", "destination": "/api/index.py" },
+    { "source": "/api/render/download/(.*)", "destination": "/api/index.py" },
     { "source": "/api/health", "destination": "/api/index.py" }
   ]
 }
