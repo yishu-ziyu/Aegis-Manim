@@ -380,6 +380,13 @@ def _validate_render_payload(data: dict) -> tuple[str, str] | tuple[None, str]:
 @app.route("/health", methods=["GET"])
 def health() -> tuple:
     payload = {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    # Debug: check env vars
+    payload["debug_env"] = {
+        "supabase_url_set": bool(os.environ.get("SUPABASE_URL")),
+        "supabase_key_set": bool(os.environ.get("SUPABASE_SERVICE_KEY")),
+        "supabase_url_len": len(os.environ.get("SUPABASE_URL", "")),
+        "supabase_key_len": len(os.environ.get("SUPABASE_SERVICE_KEY", "")),
+    }
     if _use_supabase():
         payload["supabase"] = supa_health()
     else:
