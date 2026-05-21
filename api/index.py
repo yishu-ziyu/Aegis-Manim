@@ -451,9 +451,6 @@ def build_index_html() -> str:
         ),
         "只生成代码，不渲染视频（调试模式）": "只生成代码，不渲染视频（关闭视频渲染）",
         "代码、修复提示、渲染视频统一展示。": "代码、修复提示与渲染视频统一展示。",
-    }
-    # Note: Render backend is now deployed at https://aegis-manim.onrender.com
-    # The noRender checkbox is left unchecked by default so users get code + video.
         'fetch("/api/generate/start"': 'fetch("/api/generate"',
         "await waitForJob(data.statusUrl, payload);": (
             'applyGenerateResult(data, payload, data.requestId || "-");'
