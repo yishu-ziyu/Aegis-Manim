@@ -11,6 +11,9 @@ A lightweight Flask-based API for rendering Manim scenes. Supports synchronous a
 - **GET /health** - Health check
 - API key validation via `X-API-Key` header
 - In-memory rate limiting (10 requests / 60s per IP)
+- Supabase-backed job persistence when `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are configured
+- Supabase Storage video URLs for async renders when persistence is configured
+- Memory-only fallback for local development when Supabase is not configured
 - Max code size: 100 KB
 - CORS enabled for browser requests
 - Automatic temp file cleanup
@@ -139,10 +142,36 @@ curl http://localhost:5000/health
 | `MANIM_API_KEY` | `dev-key-change-in-production` | API key for authentication |
 | `PORT` | `5000` | Server port |
 | `FLASK_DEBUG` | `0` | Enable Flask debug mode |
+| `SUPABASE_URL` | unset | Supabase project URL. When unset, the backend uses memory-only mode |
+| `SUPABASE_SERVICE_KEY` | unset | Supabase service-role key for render job persistence |
+| `SUPABASE_STORAGE_BUCKET` | `manim-videos` | Storage bucket for rendered async videos |
+
+### Supabase Setup
+
+Before enabling `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` in Render, apply
+[supabase/schema.sql](../supabase/schema.sql) to the target Supabase project. The
+backend expects the `render_jobs` and `job_logs` tables to be available through
+PostgREST, and the configured Storage bucket to exist.
+
+Read-only readiness check:
+
+```bash
+python scripts/verify_render_persistence.py --external-read-only --env-file .env.local
+```
+
+Local memory-mode API smoke:
+
+```bash
+python scripts/verify_render_persistence.py --local-memory-smoke
+```
 
 ## Production Notes
 
-- The in-memory rate limiter and job store are not persistent across restarts. For production scale, replace with Redis.
+- When Supabase is configured, `render_jobs` is the authoritative job source and memory is only a cache.
+- On startup, pending/running jobs are recovered from Supabase and stale pending/running jobs are reaped as failed.
+- Async render success requires uploading the video to Supabase Storage; `/download/<job_id>` returns a `video_url` JSON payload for Storage-backed jobs.
+- The in-memory rate limiter is not persistent across restarts. For production scale, replace it with Redis or another shared limiter.
 - The default `gunicorn` config uses 2 workers. Adjust `-w` based on CPU cores and expected load.
 - Manim rendering is CPU-intensive. Consider queue-based workers (Celery + Redis) for high throughput.
-- Output videos are stored in `./outputs/` and are not automatically cleaned up. Set up a cron job or lifecycle policy.
+- Local fallback output videos are stored in `./outputs/` and are not automatically cleaned up. Set up a cron job or lifecycle policy.
+- Supabase Storage videos need their own retention policy to stay within storage limits.

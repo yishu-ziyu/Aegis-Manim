@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from urllib import error, request
 
@@ -83,6 +82,119 @@ def _step(name: str):
     print(f"  {name}")
     print(f"{'='*60}")
 
+
+def split_sql_statements(sql: str) -> list[str]:
+    """Split SQL on statement semicolons while preserving quoted function bodies."""
+    statements: list[str] = []
+    current: list[str] = []
+    single_quote = False
+    double_quote = False
+    line_comment = False
+    block_comment = False
+    dollar_quote: str | None = None
+    i = 0
+
+    while i < len(sql):
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < len(sql) else ""
+
+        if line_comment:
+            current.append(ch)
+            if ch == "\n":
+                line_comment = False
+            i += 1
+            continue
+
+        if block_comment:
+            current.append(ch)
+            if ch == "*" and nxt == "/":
+                current.append(nxt)
+                block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if dollar_quote is not None:
+            if sql.startswith(dollar_quote, i):
+                current.append(dollar_quote)
+                i += len(dollar_quote)
+                dollar_quote = None
+            else:
+                current.append(ch)
+                i += 1
+            continue
+
+        if single_quote:
+            current.append(ch)
+            if ch == "'" and nxt == "'":
+                current.append(nxt)
+                i += 2
+                continue
+            if ch == "'":
+                single_quote = False
+            i += 1
+            continue
+
+        if double_quote:
+            current.append(ch)
+            if ch == '"' and nxt == '"':
+                current.append(nxt)
+                i += 2
+                continue
+            if ch == '"':
+                double_quote = False
+            i += 1
+            continue
+
+        if ch == "-" and nxt == "-":
+            current.append(ch)
+            current.append(nxt)
+            line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            current.append(ch)
+            current.append(nxt)
+            block_comment = True
+            i += 2
+            continue
+        if ch == "'":
+            current.append(ch)
+            single_quote = True
+            i += 1
+            continue
+        if ch == '"':
+            current.append(ch)
+            double_quote = True
+            i += 1
+            continue
+        if ch == "$":
+            end = sql.find("$", i + 1)
+            if end != -1:
+                candidate = sql[i : end + 1]
+                tag = candidate[1:-1]
+                if tag == "" or tag.replace("_", "a").isalnum():
+                    current.append(candidate)
+                    dollar_quote = candidate
+                    i = end + 1
+                    continue
+        if ch == ";":
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            i += 1
+            continue
+
+        current.append(ch)
+        i += 1
+
+    statement = "".join(current).strip()
+    if statement:
+        statements.append(statement)
+    return statements
+
 # ---------------------------------------------------------------------------
 # 1. Supabase Database
 # ---------------------------------------------------------------------------
@@ -112,8 +224,10 @@ def deploy_supabase_schema() -> bool:
             "Authorization": f"Bearer {SUPABASE_ACCESS_TOKEN}",
             "Content-Type": "application/json",
         }
-        # Split SQL into individual statements and execute one by one
-        statements = [s.strip() for s in sql.split(";") if s.strip()]
+        # Split SQL into individual statements and execute one by one.
+        # The schema contains PL/pgSQL function bodies with internal semicolons,
+        # so a plain sql.split(";") would corrupt those statements.
+        statements = split_sql_statements(sql)
         print(f"[INFO] 准备执行 {len(statements)} 条 SQL 语句...")
 
         for i, stmt in enumerate(statements, 1):
@@ -218,7 +332,6 @@ def deploy_render_backend() -> bool:
 
     if existing_service:
         print(f"[INFO] Render 服务 '{service_name}' 已存在")
-        svc_id = existing_service["id"]
         svc_url = existing_service.get("serviceDetails", {}).get("url", "")
     else:
         # Create new service via blueprint or direct API
@@ -227,17 +340,17 @@ def deploy_render_backend() -> bool:
         print("[INFO] Render 服务不存在，需要通过 Blueprint 创建")
         print("[ACTION] 请确认 GitHub 仓库已连接，然后在 Render Dashboard 选择 'New Blueprint'")
         print("[INFO] 或手动创建 Web Service，配置如下：")
-        print(f"  - Build Command: pip install -r render_backend/requirements.txt")
-        print(f"  - Start Command: gunicorn -w 2 -b 0.0.0.0:$PORT render_backend.app:app")
-        print(f"  - 环境变量:")
+        print("  - Build Command: pip install -r render_backend/requirements.txt")
+        print("  - Start Command: gunicorn -w 2 -b 0.0.0.0:$PORT render_backend.app:app")
+        print("  - 环境变量:")
         print(f"    SUPABASE_URL={SUPABASE_URL}")
-        print(f"    SUPABASE_SERVICE_KEY=***")
-        print(f"    MANIM_API_KEY=your-secure-key")
+        print("    SUPABASE_SERVICE_KEY=***")
+        print("    MANIM_API_KEY=your-secure-key")
         return False
 
     if svc_url:
         print(f"[DONE] 渲染后端地址: {svc_url}")
-        print(f"[ACTION] 请将以下环境变量加入 Render 服务：")
+        print("[ACTION] 请将以下环境变量加入 Render 服务：")
         print(f"  RENDER_BACKEND_URL={svc_url}")
     return True
 

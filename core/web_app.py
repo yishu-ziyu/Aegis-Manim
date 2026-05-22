@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from urllib import request as urllib_request
 from uuid import uuid4
 
 from alignment import generate_alignment
@@ -47,6 +48,7 @@ BUG_LOG_PATH = RUNTIME_LOG_DIR / "bug_trace.jsonl"
 APP_VERSION = "web_app_v20260429_1"
 MAX_RENDER_ATTEMPTS = 3
 COMPLEX_PROMPT_MIN_LEN = 600
+AEGIS_CLOUD_GENERATE_URL = os.getenv("AEGIS_CLOUD_GENERATE_URL", "").strip()
 VIDEO_CACHE: dict[str, Path] = {}
 VIDEO_CACHE_LOCK = threading.Lock()
 JOB_STORE: dict[str, dict[str, Any]] = {}
@@ -82,7 +84,7 @@ def build_local_trial_config() -> dict[str, object]:
             os.getenv(str(att["env"]), "").strip()
             for att in plan["attempts"]
         )
-        if not has_any_key:
+        if not has_any_key and not AEGIS_CLOUD_GENERATE_URL:
             continue
         available[provider_id] = {
             "id": provider_id,
@@ -922,7 +924,7 @@ def make_index_html() -> str:
         if "trial-kimi-priority" in local_trial:
             provider_config["defaultProvider"] = "trial-kimi-priority"
     provider_config_json = json.dumps(provider_config, ensure_ascii=False)
-    return f"""<!doctype html>
+    html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -2178,6 +2180,9 @@ def make_index_html() -> str:
           statusResp = await fetch(`${{RENDER_BACKEND_URL}}${{statusUrl}}`, {{
             headers: {{ "X-API-Key": "dev-key-change-in-production" }}
           }});
+          if (!statusResp.ok) {{
+            statusResp = await fetch(`/api/render/status/${{jobId}}`);
+          }}
         }} catch (e) {{
           try {{
             statusResp = await fetch(`/api/render/status/${{jobId}}`);
@@ -2199,7 +2204,13 @@ def make_index_html() -> str:
             try {{
               const dlResp = await fetch(`/api/render/download/${{jobId}}`);
               if (dlResp.ok) {{
-                videoUrl = `/api/render/download/${{jobId}}`;
+                const dlType = dlResp.headers.get("content-type") || "";
+                if (dlType.includes("application/json")) {{
+                  const dlData = await dlResp.json();
+                  videoUrl = dlData.video_url || `/api/render/download/${{jobId}}`;
+                }} else {{
+                  videoUrl = `/api/render/download/${{jobId}}`;
+                }}
               }}
             }} catch (e) {{}}
           }}
@@ -2531,6 +2542,46 @@ def make_index_html() -> str:
 </body>
 </html>
 """
+    if AEGIS_CLOUD_GENERATE_URL:
+        html = html.replace('fetch("/api/generate/start"', 'fetch("/api/generate"')
+        html = html.replace(
+            "await waitForJob(data.statusUrl, payload);",
+            'applyGenerateResult(data, payload, data.requestId || "-");',
+        )
+    return html
+
+
+def proxy_cloud_generate(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    if not AEGIS_CLOUD_GENERATE_URL:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "Cloud generate proxy is not configured.",
+        }
+    allowed_payload = {
+        "prompt": str(payload.get("prompt", "")),
+        "provider": str(payload.get("provider", "trial-kimi-priority")),
+        "sceneName": safe_scene_name(str(payload.get("sceneName", "GeneratedScene"))),
+        "temperature": payload.get("temperature", 0.2),
+        "noRender": bool(payload.get("noRender", False)),
+    }
+    body = json.dumps(allowed_payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(
+        AEGIS_CLOUD_GENERATE_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else {}
+            return resp.status, parsed if isinstance(parsed, dict) else {"ok": False, "error": "Invalid cloud response."}
+    except Exception as exc:
+        append_runtime_log("CLOUD_GENERATE_FAIL", f"error={type(exc).__name__}")
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": "云端生成接口暂不可用，请稍后重试。",
+        }
 
 
 class AegisWebHandler(BaseHTTPRequestHandler):
@@ -2640,6 +2691,16 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if self.path != "/api/generate":
             self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+            return
+
+        if AEGIS_CLOUD_GENERATE_URL:
+            try:
+                payload = self._read_json_body()
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = proxy_cloud_generate(payload)
+            self._send_json(status, response)
             return
 
         request_id = build_request_id()

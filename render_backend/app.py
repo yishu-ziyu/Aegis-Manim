@@ -9,32 +9,50 @@ error handling, rate limiting, and security controls.
 from __future__ import annotations
 
 import functools
-import hashlib
 import os
+import signal
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-from werkzeug.exceptions import RequestEntityTooLarge
-
+from supabase_client import (
+    SupabaseReadUnavailable,
+)
 from supabase_client import (
     get_job as supa_get_job,
+)
+from supabase_client import (
     health_check as supa_health,
+)
+from supabase_client import (
     insert_job as supa_insert_job,
+)
+from supabase_client import (
     insert_log as supa_insert_log,
+)
+from supabase_client import (
     is_configured as supa_is_configured,
+)
+from supabase_client import (
+    list_jobs_by_status as supa_list_jobs_by_status,
+)
+from supabase_client import (
     update_job as supa_update_job,
+)
+from supabase_client import (
     upload_video as supa_upload_video,
 )
+from werkzeug.exceptions import RequestEntityTooLarge
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -42,9 +60,14 @@ from supabase_client import (
 
 API_KEY = os.environ.get("MANIM_API_KEY", "dev-key-change-in-production")
 MAX_CODE_SIZE = 100 * 1024  # 100 KB
-DEFAULT_TIMEOUT = 300  # seconds
+DEFAULT_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT_SECONDS", "180"))
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_REQUESTS = 10
+ORPHAN_JOB_THRESHOLD_SECONDS = int(
+    os.environ.get("ORPHAN_JOB_THRESHOLD_SECONDS", str(DEFAULT_TIMEOUT + 60))
+)
+ORPHAN_JOB_SCAN_SECONDS = 30
+ORPHAN_JOB_MESSAGE = "Render instance restarted unexpectedly. Please resubmit."
 
 # Directories
 BASE_DIR = Path(__file__).parent.resolve()
@@ -142,17 +165,40 @@ class RenderJob:
 
 _jobs: dict[str, RenderJob] = {}
 _jobs_lock = threading.Lock()
+_orphan_reaper_lock = threading.Lock()
+_orphan_reaper_started = False
 
 
 def _use_supabase() -> bool:
     return supa_is_configured()
 
 
+def _row_to_job(row: dict[str, Any]) -> RenderJob:
+    return RenderJob(
+        job_id=row["job_id"],
+        status=JobStatus(row["status"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        code=row["code"],
+        scene_name=row["scene_name"],
+        video_path=row.get("video_path"),
+        error_message=row.get("error_message"),
+        stderr=row.get("stderr"),
+    )
+
+
 def _register_job(code: str, scene_name: str, client_ip: str | None = None) -> str:
     job_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     if _use_supabase():
-        supa_insert_job(job_id=job_id, code=code, scene_name=scene_name, client_ip=client_ip)
+        row = supa_insert_job(
+            job_id=job_id,
+            code=code,
+            scene_name=scene_name,
+            client_ip=client_ip,
+        )
+        if row is None:
+            raise RuntimeError("Failed to persist job to Supabase")
     job = RenderJob(
         job_id=job_id,
         status=JobStatus.PENDING,
@@ -173,18 +219,38 @@ def _update_job(
     error_message: str | None = None,
     stderr: str | None = None,
 ) -> None:
+    row: dict[str, Any] | None = None
     if _use_supabase():
-        supa_update_job(
+        expected_status = None
+        if status in {JobStatus.DONE, JobStatus.FAILED}:
+            expected_status = [JobStatus.PENDING.value, JobStatus.RUNNING.value]
+        row = supa_update_job(
             job_id=job_id,
             status=status.value if status else None,
+            expected_status=expected_status,
             video_path=video_path,
             error_message=error_message,
             stderr=stderr,
         )
+        if row is None:
+            print(f"[update_job] Supabase update failed for {job_id[:8]}")
+            return
     with _jobs_lock:
         job = _jobs.get(job_id)
         if job is None:
-            return
+            if row and row.get("job_id"):
+                job = _row_to_job(row)
+                _jobs[job_id] = job
+            elif _use_supabase():
+                try:
+                    fresh_row = supa_get_job(job_id)
+                except SupabaseReadUnavailable:
+                    fresh_row = None
+                if fresh_row:
+                    job = _row_to_job(fresh_row)
+                    _jobs[job_id] = job
+            if job is None:
+                return
         if status is not None:
             job.status = status
         if video_path is not None:
@@ -193,26 +259,94 @@ def _update_job(
             job.error_message = error_message
         if stderr is not None:
             job.stderr = stderr
-        job.updated_at = datetime.now(timezone.utc).isoformat()
+        job.updated_at = datetime.now(UTC).isoformat()
 
 
 def _get_job(job_id: str) -> RenderJob | None:
     if _use_supabase():
-        row = supa_get_job(job_id)
+        try:
+            row = supa_get_job(job_id)
+        except SupabaseReadUnavailable:
+            with _jobs_lock:
+                return _jobs.get(job_id)
         if row:
-            return RenderJob(
-                job_id=row["job_id"],
-                status=JobStatus(row["status"]),
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-                code=row["code"],
-                scene_name=row["scene_name"],
-                video_path=row.get("video_path"),
-                error_message=row.get("error_message"),
-                stderr=row.get("stderr"),
-            )
+            job = _row_to_job(row)
+            with _jobs_lock:
+                _jobs[job_id] = job
+            return job
+        with _jobs_lock:
+            _jobs.pop(job_id, None)
+        return None
     with _jobs_lock:
         return _jobs.get(job_id)
+
+
+def _recover_jobs_from_supabase() -> None:
+    if not _use_supabase():
+        return
+    rows = supa_list_jobs_by_status(["pending", "running"])
+    with _jobs_lock:
+        for row in rows:
+            try:
+                _jobs[row["job_id"]] = _row_to_job(row)
+            except (KeyError, ValueError) as exc:
+                print(f"[recovery] Skipping invalid job row: {exc}")
+    print(f"[recovery] Restored {len(rows)} jobs from Supabase")
+
+
+def _parse_supabase_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _reap_orphan_jobs() -> None:
+    if not _use_supabase():
+        return
+    now = datetime.now(UTC)
+    rows = supa_list_jobs_by_status(["pending", "running"])
+    for row in rows:
+        try:
+            updated_at = _parse_supabase_datetime(row["updated_at"])
+        except (KeyError, ValueError):
+            continue
+        if (now - updated_at).total_seconds() <= ORPHAN_JOB_THRESHOLD_SECONDS:
+            continue
+        updated = supa_update_job(
+            job_id=row["job_id"],
+            status=JobStatus.FAILED.value,
+            expected_status=row["status"],
+            error_message=ORPHAN_JOB_MESSAGE,
+        )
+        if updated is None:
+            continue
+        with _jobs_lock:
+            job = _jobs.get(row["job_id"])
+            if job:
+                job.status = JobStatus.FAILED
+                job.error_message = ORPHAN_JOB_MESSAGE
+                job.updated_at = datetime.now(UTC).isoformat()
+        print(f"[reaper] Orphan job {row['job_id'][:8]} marked as failed")
+
+
+def _start_orphan_reaper() -> None:
+    global _orphan_reaper_started
+    with _orphan_reaper_lock:
+        if _orphan_reaper_started:
+            return
+        _orphan_reaper_started = True
+
+    def loop() -> None:
+        while True:
+            time.sleep(ORPHAN_JOB_SCAN_SECONDS)
+            try:
+                _reap_orphan_jobs()
+            except Exception as exc:
+                print(f"[reaper] Error: {exc}")
+
+    thread = threading.Thread(target=loop, daemon=True, name="orphan-job-reaper")
+    thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +392,7 @@ def _run_manim_render(
         _update_job(job_id, status=JobStatus.RUNNING)
 
     cmd = [
-        "python",
+        sys.executable,
         "-m",
         "manim",
         "-ql",  # low quality for speed
@@ -269,20 +403,27 @@ def _run_manim_render(
     ]
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=str(workspace),
+            start_new_session=True,
         )
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            proc.kill()
+        stdout, stderr = proc.communicate()
         _cleanup_workspace(workspace)
         return {
             "success": False,
             "video_path": None,
             "error": f"Rendering timed out after {timeout}s",
-            "stderr": exc.stderr if hasattr(exc, "stderr") else None,
+            "stderr": stderr or getattr(exc, "stderr", None),
         }
     except Exception as exc:
         _cleanup_workspace(workspace)
@@ -293,13 +434,13 @@ def _run_manim_render(
             "stderr": None,
         }
 
-    if result.returncode != 0:
+    if proc.returncode != 0:
         _cleanup_workspace(workspace)
         return {
             "success": False,
             "video_path": None,
             "error": "Manim rendering failed",
-            "stderr": result.stderr,
+            "stderr": stderr,
         }
 
     video_path = _find_rendered_video(workspace, scene_name)
@@ -309,7 +450,7 @@ def _run_manim_render(
             "success": False,
             "video_path": None,
             "error": "Video file not found after rendering",
-            "stderr": result.stderr,
+            "stderr": stderr,
         }
 
     # Upload to Supabase Storage if configured, otherwise keep local
@@ -324,19 +465,27 @@ def _run_manim_render(
                 message="Video uploaded to Supabase Storage",
                 detail=f"url={supa_video_url}",
             )
+        else:
+            _cleanup_workspace(workspace)
+            return {
+                "success": False,
+                "video_path": None,
+                "error": "Video rendered but failed to upload to persistent storage",
+                "stderr": stderr,
+            }
 
     # Keep local copy for fallback serving
     output_filename = f"{job_id or uuid.uuid4().hex}_{scene_name}.mp4"
     output_path = OUTPUT_DIR / output_filename
-    shutil.move(str(video_path), str(output_path))
+    shutil.copy(str(video_path), str(output_path))
     _cleanup_workspace(workspace)
 
     return {
         "success": True,
-        "video_path": str(output_path),
+        "video_path": supa_video_url or str(output_path),
         "video_url": supa_video_url,
         "error": None,
-        "stderr": result.stderr,
+        "stderr": stderr,
     }
 
 
@@ -379,7 +528,7 @@ def _validate_render_payload(data: dict) -> tuple[str, str] | tuple[None, str]:
 
 @app.route("/health", methods=["GET"])
 def health() -> tuple:
-    payload = {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    payload = {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
     if _use_supabase():
         payload["supabase"] = supa_health()
     else:
@@ -448,7 +597,10 @@ def render_async() -> tuple:
         return jsonify({"error": error}), 400
 
     code, scene_name = validated
-    job_id = _register_job(code, scene_name, client_ip=client_id)
+    try:
+        job_id = _register_job(code, scene_name, client_ip=client_id)
+    except RuntimeError:
+        return jsonify({"error": "Failed to persist render job. Please try again."}), 500
 
     def _background_render() -> None:
         result = _run_manim_render(code, scene_name, job_id=job_id)
@@ -508,6 +660,10 @@ def get_status(job_id: str) -> tuple:
         resp["error"] = job.error_message
     if job.stderr:
         resp["stderr"] = job.stderr
+    if job.status == JobStatus.DONE and job.video_path:
+        if job.video_path.startswith("http"):
+            resp["video_url"] = job.video_path
+        resp["download_url"] = f"/download/{job_id}"
     return jsonify(resp), 200
 
 
@@ -571,7 +727,24 @@ def handle_server_error(e):
 # Startup
 # ---------------------------------------------------------------------------
 
+def initialize_app() -> None:
+    if _use_supabase():
+        _recover_jobs_from_supabase()
+        _start_orphan_reaper()
+    else:
+        print("[init] Supabase not configured, running in memory-only mode")
+
+
+@app.before_request
+def _initialize_once() -> None:
+    if app.config.get("_PERSISTENCE_INITIALIZED"):
+        return
+    initialize_app()
+    app.config["_PERSISTENCE_INITIALIZED"] = True
+
+
 if __name__ == "__main__":
+    initialize_app()
     port = int(os.environ.get("PORT", "5000"))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug)
