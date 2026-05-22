@@ -262,6 +262,11 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
         notes.append("Converted axes.plot line_config={...} to supported stroke keyword arguments.")
         patched = candidate
 
+    candidate = re.sub(r"\bSector\s*\(([^()\n]*?)\bouter_radius\s*=", r"Sector(\1radius=", patched)
+    if candidate != patched:
+        notes.append("Replaced Sector outer_radius=... with radius=... for the current Manim API.")
+        patched = candidate
+
     candidate = re.sub(
         r"(?m)^([ \t]*)[A-Za-z_][A-Za-z0-9_]*\.set_style\([ \t]*stroke_dash[ \t]*=[ \t]*\[[^\]]*\][ \t]*\)[ \t]*(?:#.*)?$",
         r"\1# Removed unsupported dashed-line style.",

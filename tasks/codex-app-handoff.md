@@ -124,6 +124,36 @@ Verification:
 - Commit `8e3dba6` was pushed to `origin/main`.
 - Render deploy hook was triggered after pushing `8e3dba6`; Render `/health` returned HTTP 200 with `supabase.ok=true` after the trigger.
 
+## Latest Follow-up: Manim Sector Failure and Windows Launcher
+
+Latest screenshot status:
+
+- Production page returned `渲染失败: Manim rendering failed`.
+- Visible request was `20260522-141057-vercel`.
+- Generated scene was `ParetoOptimalityScene`.
+
+Findings:
+
+- Render `/health` and Vercel `/api/health` remained healthy.
+- Supabase job `4c66b30e...` failed with Manim runtime error from generated `Sector(outer_radius=1.5, ...)`.
+- Concrete error: `AnnularSector.__init__() got multiple values for keyword argument 'outer_radius'`.
+- The failing pattern is a current-Manim API compatibility issue: `Sector` should receive `radius=...`, while `AnnularSector` can still receive `outer_radius=...`.
+
+Fixes queued:
+
+- `apply_runtime_compatibility_fixes()` now rewrites `Sector(outer_radius=...)` to `Sector(radius=...)`.
+- Regression coverage verifies `Sector` is rewritten and `AnnularSector` is not changed.
+- Added `scripts/start_aegis_local_windows.bat` for Windows friends: cloud generation plus local Manim rendering, with no Supabase/server secrets embedded.
+
+Verification so far:
+
+- The original failed job code was passed through the local compatibility function: before patch it had `Sector(outer_radius=...)`; after patch it no longer had that pattern and did have `Sector(radius=...)`.
+- `pytest -o addopts='' tests/test_aegis_runtime_compatibility.py tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py -q` passed with `31 passed`.
+- `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py -q` passed with `61 passed`.
+- `python -m py_compile core/manim_agent.py core/web_app.py api/index.py` passed.
+- `git diff --check` passed.
+- `bash -n scripts/start_aegis_local.command` passed.
+
 ## Do Not Reopen These Questions
 
 - Do not create another Supabase project unless the current project is deleted or explicitly rejected.
