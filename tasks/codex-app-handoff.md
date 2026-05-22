@@ -144,12 +144,21 @@ Fixes queued:
 - `apply_runtime_compatibility_fixes()` now rewrites `Sector(outer_radius=...)` to `Sector(radius=...)`.
 - Regression coverage verifies `Sector` is rewritten and `AnnularSector` is not changed.
 - Added `scripts/start_aegis_local_windows.bat` for Windows friends: cloud generation plus local Manim rendering, with no Supabase/server secrets embedded.
+- Local Web now proxies `/api/render`, `/api/render/status/<job_id>`, and `/api/render/download/<job_id>` to the local Render Backend.
+- Browser-side local Render calls now use the configured render API key instead of a hard-coded key.
+- Mac and Windows launchers avoid a stale occupied render port when the user did not explicitly choose one.
+- Generation prompts now require short, cloud-renderable scenes by default: 15-35 seconds, 4-7 `self.play` calls, sparse objects, and no dense/long animation patterns.
 
 Verification so far:
 
 - The original failed job code was passed through the local compatibility function: before patch it had `Sector(outer_radius=...)`; after patch it no longer had that pattern and did have `Sector(radius=...)`.
+- Vercel deployment `dpl_HwgD3JgkQShuV2ZBY2g3Rie3M3LH` reached READY and was aliased to `https://manim-main.vercel.app`.
+- Production `/api/generate` request `20260522-142925-vercel` returned generated code without `Sector(outer_radius=...)`.
+- Production `/api/render` accepted that generated code with HTTP 202 and job `9d35adec...`, but Render failed after 180s with `Rendering timed out after 180s`, showing the remaining cloud risk is scene complexity/runtime budget.
+- Fresh local proxy smoke on ports 8016/5014 submitted a minimal animated scene through `/api/render`, polled to `done`, and downloaded `video/mp4` with 7160 bytes.
 - `pytest -o addopts='' tests/test_aegis_runtime_compatibility.py tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py -q` passed with `31 passed`.
 - `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py -q` passed with `61 passed`.
+- After local proxy and prompt-budget fixes, `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py -q` passed with `62 passed`.
 - `python -m py_compile core/manim_agent.py core/web_app.py api/index.py` passed.
 - `git diff --check` passed.
 - `bash -n scripts/start_aegis_local.command` passed.

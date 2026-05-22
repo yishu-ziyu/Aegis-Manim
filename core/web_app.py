@@ -6,15 +6,18 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from glob import glob
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
 from urllib.parse import parse_qs, urlparse
 from urllib import request as urllib_request
 from uuid import uuid4
@@ -49,6 +52,11 @@ APP_VERSION = "web_app_v20260429_1"
 MAX_RENDER_ATTEMPTS = 3
 COMPLEX_PROMPT_MIN_LEN = 600
 AEGIS_CLOUD_GENERATE_URL = os.getenv("AEGIS_CLOUD_GENERATE_URL", "").strip()
+RENDER_BACKEND_URL = os.getenv("RENDER_BACKEND_URL", "http://127.0.0.1:5001").rstrip("/")
+RENDER_BACKEND_API_KEY = os.getenv(
+    "RENDER_BACKEND_API_KEY",
+    os.getenv("MANIM_API_KEY", "dev-key-change-in-production"),
+).strip()
 VIDEO_CACHE: dict[str, Path] = {}
 VIDEO_CACHE_LOCK = threading.Lock()
 JOB_STORE: dict[str, dict[str, Any]] = {}
@@ -177,6 +185,7 @@ def build_teaching_brief(prompt: str) -> str:
             "语言策略：默认使用中文标题、中文标签、中文阶段说明和中文结论；变量符号可以保留英文缩写，但必须用中文解释含义。",
             "排版策略：所有 Text 都写 font_size；长解释拆成 VGroup 多行短句，先 FadeOut 或 ReplacementTransform 旧讲解再出现新讲解。",
             "Manim 约束：使用 Text，不使用 Tex/MathTex；避免依赖 LaTeX；代码必须能在本地 Manim 版本稳定渲染。",
+            "运行预算：默认生成 15-35 秒短视频，4-7 个 self.play，总对象数少，避免复杂 LaggedStart、密集点阵、长等待和大量扇形/切片。",
         ]
     )
 
@@ -2122,6 +2131,7 @@ def make_index_html() -> str:
 
     // Auto-render configuration
     const RENDER_BACKEND_URL = "{os.environ.get('RENDER_BACKEND_URL', 'http://localhost:5001')}";
+    const RENDER_BACKEND_API_KEY = "{RENDER_BACKEND_API_KEY}";
 
     async function startAutoRender(code, sceneName) {{
       if (!code) return;
@@ -2134,7 +2144,7 @@ def make_index_html() -> str:
       try {{
         const localResp = await fetch(`${{RENDER_BACKEND_URL}}/render-async`, {{
           method: "POST",
-          headers: {{ "Content-Type": "application/json", "X-API-Key": "dev-key-change-in-production" }},
+          headers: {{ "Content-Type": "application/json", "X-API-Key": RENDER_BACKEND_API_KEY }},
           body: JSON.stringify(renderPayload)
         }});
         if (localResp.ok) {{
@@ -2178,7 +2188,7 @@ def make_index_html() -> str:
         let statusResp;
         try {{
           statusResp = await fetch(`${{RENDER_BACKEND_URL}}${{statusUrl}}`, {{
-            headers: {{ "X-API-Key": "dev-key-change-in-production" }}
+            headers: {{ "X-API-Key": RENDER_BACKEND_API_KEY }}
           }});
           if (!statusResp.ok) {{
             statusResp = await fetch(`/api/render/status/${{jobId}}`);
@@ -2584,6 +2594,99 @@ def proxy_cloud_generate(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         }
 
 
+def render_backend_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if RENDER_BACKEND_API_KEY:
+        headers["X-API-Key"] = RENDER_BACKEND_API_KEY
+    return headers
+
+
+def proxy_render_backend(
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    timeout: int = 15,
+) -> tuple[int, dict[str, Any]]:
+    if not RENDER_BACKEND_URL:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "Local render backend is not configured.",
+        }
+
+    def try_once() -> tuple[int, str] | None:
+        url = f"{RENDER_BACKEND_URL}{path}"
+        try:
+            if method == "POST" and payload is not None:
+                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                req = urllib_request.Request(
+                    url,
+                    data=body,
+                    headers=render_backend_headers(),
+                    method="POST",
+                )
+            else:
+                req = urllib_request.Request(
+                    url,
+                    headers=render_backend_headers(),
+                    method=method,
+                )
+            with urllib_request.urlopen(req, timeout=timeout) as resp:
+                return resp.status, resp.read().decode("utf-8")
+        except urllib_error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8")
+        except (urllib_error.URLError, socket.error, TimeoutError, OSError):
+            return None
+
+    result = try_once()
+    if result is None:
+        try:
+            req = urllib_request.Request(
+                f"{RENDER_BACKEND_URL}/health",
+                headers=render_backend_headers(),
+                method="GET",
+            )
+            urllib_request.urlopen(req, timeout=5)
+        except Exception:
+            pass
+        time.sleep(1)
+        result = try_once()
+
+    if result is None:
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": "Local render backend connection failed.",
+        }
+
+    status, body = result
+    try:
+        parsed = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        parsed = {
+            "ok": False,
+            "error": "Render backend returned non-JSON response.",
+            "raw": body[:200],
+        }
+    return status, parsed
+
+
+def proxy_render_backend_raw(path: str, timeout: int = 15) -> tuple[int, bytes, dict[str, str]]:
+    if not RENDER_BACKEND_URL:
+        return HTTPStatus.SERVICE_UNAVAILABLE, b"", {}
+
+    url = f"{RENDER_BACKEND_URL}{path}"
+    try:
+        req = urllib_request.Request(url, headers=render_backend_headers(), method="GET")
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read(), dict(resp.headers)
+    except urllib_error.HTTPError as exc:
+        return exc.code, exc.read(), dict(exc.headers)
+    except (urllib_error.URLError, socket.error, TimeoutError, OSError):
+        return HTTPStatus.BAD_GATEWAY, b"Local render backend connection failed.", {
+            "Content-Type": "text/plain; charset=utf-8",
+        }
+
+
 class AegisWebHandler(BaseHTTPRequestHandler):
     server_version = "AegisWeb/0.1"
 
@@ -2603,6 +2706,14 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_bytes(self, status: int, body: bytes, headers: dict[str, str]) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", headers.get("Content-Type", "application/octet-stream"))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -2661,6 +2772,18 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"ok": True, "count": len(items), "items": items})
             return
 
+        if route.startswith("/api/render/status/"):
+            job_id = route.split("/api/render/status/", 1)[-1]
+            status, response = proxy_render_backend(f"/status/{job_id}")
+            self._send_json(status, response)
+            return
+
+        if route.startswith("/api/render/download/"):
+            job_id = route.split("/api/render/download/", 1)[-1]
+            status, body, headers = proxy_render_backend_raw(f"/download/{job_id}")
+            self._send_bytes(status, body, headers)
+            return
+
         if route.startswith("/api/video/"):
             video_id = route.rsplit("/", 1)[-1]
             with VIDEO_CACHE_LOCK:
@@ -2687,6 +2810,28 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if self.path == "/api/generate/start":
             self._handle_generate_start()
+            return
+
+        if self.path == "/api/render":
+            try:
+                payload = self._read_json_body()
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+
+            code = str(payload.get("code", "")).strip()
+            scene_name = safe_scene_name(str(payload.get("sceneName", payload.get("scene_name", "GeneratedScene"))))
+            if not code:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
+                return
+
+            status, response = proxy_render_backend(
+                "/render-async",
+                method="POST",
+                payload={"code": code, "scene_name": scene_name},
+                timeout=15,
+            )
+            self._send_json(status, response)
             return
 
         if self.path != "/api/generate":
