@@ -15,6 +15,12 @@ RENDER_PORT="${AEGIS_RENDER_PORT:-5001}"
 WEB_URL="http://${WEB_HOST}:${WEB_PORT}"
 
 export MANIM_API_KEY="${MANIM_API_KEY:-dev-key-change-in-production}"
+if [[ -z "${AEGIS_RENDER_PORT:-}" ]]; then
+  while command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$RENDER_PORT" -sTCP:LISTEN >/dev/null 2>&1; do
+    echo "Render port ${RENDER_PORT} is already in use; trying $((RENDER_PORT + 1)) ..."
+    RENDER_PORT=$((RENDER_PORT + 1))
+  done
+fi
 export RENDER_BACKEND_URL="http://127.0.0.1:${RENDER_PORT}"
 export AEGIS_CLOUD_GENERATE_URL="${AEGIS_CLOUD_GENERATE_URL:-https://manim-main.vercel.app/api/generate}"
 export PYTHONUNBUFFERED=1

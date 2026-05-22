@@ -83,6 +83,15 @@ class AegisWebUiTest(unittest.TestCase):
         assert "baseUrl" not in forwarded
         assert "apiKey" not in forwarded
 
+    def test_local_web_server_exposes_render_proxy_routes(self) -> None:
+        assert "if self.path == \"/api/render\":" in Path(web_app.__file__).read_text(encoding="utf-8")
+        html = web_app.make_index_html()
+
+        assert "const RENDER_BACKEND_API_KEY" in html
+        assert '"X-API-Key": RENDER_BACKEND_API_KEY' in html
+        assert '"/api/render/status/' in html
+        assert "/api/render/download/${jobId}" in html
+
     def test_windows_local_launcher_uses_cloud_generation_and_local_rendering(self) -> None:
         launcher = PROJECT_ROOT / "scripts" / "start_aegis_local_windows.bat"
         content = launcher.read_text(encoding="utf-8")
@@ -91,6 +100,7 @@ class AegisWebUiTest(unittest.TestCase):
         assert "RENDER_BACKEND_URL=http://127.0.0.1:%RENDER_PORT%" in content
         assert "render_backend\\requirements.txt" in content
         assert "winget install Gyan.FFmpeg" in content
+        assert "Get-NetTCPConnection -LocalPort %RENDER_PORT%" in content
         assert "SUPABASE" not in content
         assert "SERVICE_KEY" not in content
 
@@ -100,6 +110,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert "默认使用中文标题" in brief
         assert "变量符号可以保留英文缩写" in brief
         assert "不使用 Tex/MathTex" in brief
+        assert "15-35 秒短视频" in brief
+        assert "4-7 个 self.play" in brief
 
 
 if __name__ == "__main__":

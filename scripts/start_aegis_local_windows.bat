@@ -13,7 +13,6 @@ if "%RENDER_PORT%"=="" set "RENDER_PORT=5001"
 set "WEB_URL=http://%WEB_HOST%:%WEB_PORT%"
 
 if "%MANIM_API_KEY%"=="" set "MANIM_API_KEY=dev-key-change-in-production"
-set "RENDER_BACKEND_URL=http://127.0.0.1:%RENDER_PORT%"
 if "%AEGIS_CLOUD_GENERATE_URL%"=="" set "AEGIS_CLOUD_GENERATE_URL=https://manim-main.vercel.app/api/generate"
 set "PYTHONUNBUFFERED=1"
 
@@ -42,6 +41,15 @@ if not %ERRORLEVEL%==0 (
   pause
   exit /b 1
 )
+
+if "%AEGIS_RENDER_PORT%"=="" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "exit [int](Get-NetTCPConnection -LocalPort %RENDER_PORT% -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count" >nul 2>nul
+  if not errorlevel 1 (
+    echo Render port %RENDER_PORT% is already in use; trying 5002 ...
+    set "RENDER_PORT=5002"
+  )
+)
+set "RENDER_BACKEND_URL=http://127.0.0.1:%RENDER_PORT%"
 
 set "VENV_DIR=%AEGIS_LOCAL_VENV%"
 if "%VENV_DIR%"=="" set "VENV_DIR=%ROOT_DIR%\.aegis-local-venv"
