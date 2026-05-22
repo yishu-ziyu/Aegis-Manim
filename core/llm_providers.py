@@ -274,7 +274,8 @@ def read_error_detail(exc: error.HTTPError) -> str:
     return exc.read().decode("utf-8", errors="replace")
 
 
-def read_response_json(req: request.Request, *, timeout: int = 120) -> dict:
+def read_response_json(req: request.Request, *, timeout: int | None = None) -> dict:
+    timeout = timeout or int(os.getenv("LLM_HTTP_TIMEOUT_SECONDS", "120"))
     try:
         with request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
@@ -349,6 +350,7 @@ def call_openai_compatible(
     user_prompt: str,
     temperature: float,
     provider_name: str,
+    timeout: int | None = None,
 ) -> str:
     payload = {
         "model": model,
@@ -373,7 +375,7 @@ def call_openai_compatible(
     )
 
     try:
-        parsed = read_response_json(req)
+        parsed = read_response_json(req, timeout=timeout)
     except error.HTTPError as exc:
         raise RuntimeError(f"{provider_name} HTTP {exc.code}: {read_error_detail(exc)}") from exc
     if "error" in parsed:
@@ -390,6 +392,7 @@ def call_anthropic_compatible(
     user_prompt: str,
     temperature: float,
     provider_name: str,
+    timeout: int | None = None,
 ) -> str:
     payload = {
         "model": model,
@@ -413,7 +416,7 @@ def call_anthropic_compatible(
     )
 
     try:
-        parsed = read_response_json(req)
+        parsed = read_response_json(req, timeout=timeout)
     except error.HTTPError as exc:
         raise RuntimeError(f"{provider_name} HTTP {exc.code}: {read_error_detail(exc)}") from exc
     if "error" in parsed:
@@ -491,6 +494,7 @@ def generate_code_with_provider(
     system_prompt: str,
     user_prompt: str,
     temperature: float,
+    timeout: int | None = None,
 ) -> tuple[str, ProviderPreset, str]:
     preset = resolve_provider(provider_id)
     validate_api_key(api_key, preset)
@@ -534,6 +538,7 @@ def generate_code_with_provider(
                 user_prompt=user_prompt,
                 temperature=temperature,
                 provider_name=preset.name,
+                timeout=timeout,
             ),
             preset,
             openai_chat_completions_url(normalized_base),
@@ -554,6 +559,7 @@ def generate_code_with_provider(
                 user_prompt=user_prompt,
                 temperature=temperature,
                 provider_name=preset.name,
+                timeout=timeout,
             ),
             preset,
             anthropic_messages_url(normalized_base),

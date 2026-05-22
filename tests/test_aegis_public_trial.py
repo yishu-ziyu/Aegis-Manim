@@ -50,7 +50,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         config = gateway.public_provider_config()
         providers = config["providers"]
 
-        assert config["defaultProvider"] == "trial-kimi-priority"
+        assert config["defaultProvider"] == "trial-minimax-direct"
         assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct"}
         assert providers["trial-kimi-priority"]["serverManaged"] is True
         assert providers["trial-kimi-priority"]["requiresApiKey"] is False
@@ -134,7 +134,11 @@ class AegisPublicTrialTest(unittest.TestCase):
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "将帕累托最优的过程可视化。", "sceneName": "GeneratedScene"}
+                {
+                    "prompt": "将帕累托最优的过程可视化。",
+                    "provider": "trial-kimi-priority",
+                    "sceneName": "GeneratedScene",
+                }
             )
         finally:
             gateway.generate_code_with_llm = original
@@ -170,7 +174,11 @@ class AegisPublicTrialTest(unittest.TestCase):
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "将帕累托最优的过程可视化。", "sceneName": "GeneratedScene"}
+                {
+                    "prompt": "将帕累托最优的过程可视化。",
+                    "provider": "trial-kimi-priority",
+                    "sceneName": "GeneratedScene",
+                }
             )
         finally:
             gateway.generate_code_with_llm = original
@@ -181,6 +189,30 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert "Hosted render budget correction" in calls[1]
         assert "at most 24 self.play" in calls[1]
         assert str(response["code"]).count("self.play(") == 1
+
+    def test_trial_returns_stable_template_when_server_models_are_unavailable(self) -> None:
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            raise TimeoutError("provider timed out")
+
+        original = gateway.generate_code_with_llm
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {
+                    "prompt": "解释线性增长为什么会累积差距",
+                    "sceneName": "GeneratedScene",
+                }
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert response["model"] == "stable-template-fallback"
+        assert response["endpoint"] == "server-managed-fallback"
+        assert "class GeneratedScene(Scene)" in str(response["code"])
+        assert "稳定模板" in "\n".join(response["warnings"])
 
     def test_public_gateway_rejects_arbitrary_provider_and_long_prompt(self) -> None:
         status, response = gateway.generate_manim_code_for_gateway(

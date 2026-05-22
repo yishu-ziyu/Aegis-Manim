@@ -59,8 +59,9 @@ class AegisLLMProviderTest(unittest.TestCase):
     def test_kimi_code_provider_uses_official_coding_endpoint(self) -> None:
         provider = resolve_provider("kimi-code")
 
-        assert provider.api_type == "openai-compatible"
+        assert provider.api_type == "anthropic-compatible"
         assert provider.base_url == "https://api.kimi.com/coding/v1"
+        assert anthropic_messages_url(provider.base_url) == "https://api.kimi.com/coding/v1/messages"
         assert provider.default_model == "kimi-for-coding"
         assert provider.requires_api_key
 

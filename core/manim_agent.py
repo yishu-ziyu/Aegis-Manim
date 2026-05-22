@@ -350,6 +350,7 @@ def generate_code_with_llm(
     system_prompt: str,
     user_prompt: str,
     temperature: float,
+    timeout: int | None = None,
 ) -> tuple[str, str, str]:
     code, provider, resolved_endpoint = generate_code_with_provider(
         provider_id=provider_id,
@@ -360,6 +361,7 @@ def generate_code_with_llm(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=temperature,
+        timeout=timeout,
     )
     return code, provider.name, resolved_endpoint
 

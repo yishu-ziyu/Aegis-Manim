@@ -2133,7 +2133,7 @@ def make_index_html() -> str:
     const RENDER_BACKEND_URL = "{os.environ.get('RENDER_BACKEND_URL', 'http://localhost:5001')}";
     const RENDER_BACKEND_API_KEY = "{RENDER_BACKEND_API_KEY}";
 
-    async function startAutoRender(code, sceneName) {{
+    async function startAutoRender(code, sceneName, retryCount = 0) {{
       if (!code) return;
       setStatus("代码已生成，正在提交渲染任务...", "");
       const renderPayload = {{ code, scene_name: sceneName, render_mode: "auto" }};
@@ -2236,6 +2236,11 @@ def make_index_html() -> str:
         }}
         if (statusData.status === "failed" || statusData.status === "error") {{
           const errMsg = statusData.error || statusData.error_message || "渲染失败";
+          const retryableRestart = /restart|resubmit|重启|重新提交/i.test(errMsg);
+          if (retryableRestart && retryCount < 1) {{
+            setStatus("渲染实例刚重启，正在自动重提一次...", "warn");
+            return startAutoRender(code, sceneName, retryCount + 1);
+          }}
           setStatus("渲染失败: " + errMsg, "error");
           if (statusData.stderr) {{
             console.error("Render stderr:", statusData.stderr);

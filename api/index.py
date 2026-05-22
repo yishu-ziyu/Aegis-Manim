@@ -44,7 +44,9 @@ MAX_PUBLIC_BODY_BYTES = 32_000
 MAX_PUBLIC_PROMPT_CHARS = 4_000
 MAX_PUBLIC_RENDER_PLAYS = 24
 MAX_PUBLIC_LAGGED_STARTS = 3
-PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-kimi-priority"
+PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "25"))
+PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "15"))
+PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-minimax-direct"
 PUBLIC_TRIAL_PLANS = {
     "trial-kimi-priority": {
         "name": "免费试用 · Kimi 优先",
@@ -273,7 +275,7 @@ def public_provider_config() -> dict[str, object]:
     return {
         "defaultProvider": PUBLIC_TRIAL_DEFAULT_PROVIDER,
         "regionLabels": {"trial": "内测免费试用"},
-        "providerStorageKey": "aegis.provider.public.v3",
+        "providerStorageKey": "aegis.provider.public.v4",
         "providers": providers,
     }
 
@@ -326,6 +328,45 @@ def hosted_render_budget_prompt(prompt: str, warnings: list[str]) -> str:
             "Target video length: 45-120 seconds. Prefer a clear multi-step explanation over cutting core teaching content.",
         ]
     )
+
+
+def build_fallback_manim_code(prompt: str, scene_name: str) -> str:
+    """Return a deterministic Manim scene when trial model providers are slow/unavailable."""
+    safe_scene_name = local_web_app.safe_scene_name(scene_name)
+    compact = " ".join(prompt.split())[:28] or "抽象概念"
+    title = compact[:12]
+    labels = ["问题", "对象", "关系", "变化", "结论"]
+    title_literal = json.dumps(title, ensure_ascii=False)
+    subtitle_literal = json.dumps(compact, ensure_ascii=False)
+    labels_literal = ", ".join(json.dumps(label, ensure_ascii=False) for label in labels)
+    return f'''from manim import *
+
+class {safe_scene_name}(Scene):
+    def construct(self):
+        self.camera.background_color = "#111827"
+        title = Text({title_literal}, font_size=34, color=YELLOW).to_edge(UP)
+        subtitle = Text({subtitle_literal}, font_size=20, color=GREY_B).next_to(title, DOWN, buff=0.25)
+        axis = NumberLine(x_range=[0, 5, 1], length=7, color=GREY_B).shift(DOWN * 1.5)
+        dot = Dot(axis.n2p(0), color=BLUE)
+        labels = VGroup(*[
+            Text(text, font_size=22, color=WHITE)
+            for text in [{labels_literal}]
+        ]).arrange(RIGHT, buff=0.65).next_to(axis, UP, buff=0.65)
+        arrows = VGroup(*[
+            Arrow(labels[i].get_right(), labels[i + 1].get_left(), buff=0.12, color=TEAL, stroke_width=3)
+            for i in range(len(labels) - 1)
+        ])
+        conclusion = Text("把抽象问题拆成可观察步骤", font_size=24, color=GREEN).to_edge(DOWN)
+
+        self.play(Write(title), FadeIn(subtitle, shift=DOWN), run_time=0.8)
+        self.play(Create(axis), FadeIn(dot), run_time=0.7)
+        for i, label in enumerate(labels):
+            self.play(FadeIn(label, shift=UP * 0.2), dot.animate.move_to(axis.n2p(i)), run_time=0.45)
+            if i < len(arrows):
+                self.play(Create(arrows[i]), run_time=0.3)
+        self.play(Write(conclusion), run_time=0.7)
+        self.wait(0.8)
+'''
 
 
 def is_private_or_local_host(host: str) -> bool:
@@ -412,6 +453,7 @@ def generate_code_with_trial_plan(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=prompt,
                 temperature=temperature,
+                timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
             )
             cleaned_code = extract_python_only(raw_code)
             patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
@@ -426,6 +468,7 @@ def generate_code_with_trial_plan(
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=hosted_render_budget_prompt(prompt, budget_notes),
                     temperature=min(temperature, 0.2),
+                    timeout=PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS,
                 )
                 cleaned_code = extract_python_only(raw_code)
                 patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
@@ -467,10 +510,29 @@ def generate_code_with_trial_plan(
             f"[{request_id}] no trial provider keys configured: {', '.join(skipped)}",
             file=sys.stderr,
         )
-    return HTTPStatus.SERVICE_UNAVAILABLE, {
-        "ok": False,
-        "error": "内测试用模型暂不可用，请稍后再试。",
+    fallback_code = build_fallback_manim_code(prompt, scene_name)
+    fallback_code, compatibility_notes = apply_runtime_compatibility_fixes(fallback_code)
+    warnings = [
+        "内测试用模型响应较慢或暂不可用，已自动切换到稳定模板生成，视频仍会继续渲染。",
+        *compatibility_notes,
+    ]
+    detected_scene_name = local_web_app.detect_scene_name(fallback_code, scene_name)
+    return HTTPStatus.OK, {
+        "ok": True,
+        "provider": trial_provider_id,
+        "providerName": str(plan["name"]),
+        "model": "stable-template-fallback",
+        "endpoint": "server-managed-fallback",
+        "code": fallback_code,
+        "warnings": warnings,
+        "compatibilityNotes": warnings,
+        "sceneName": detected_scene_name,
+        "sceneNameInput": scene_name,
+        "codeFile": "vercel-generated-fallback",
         "requestId": request_id,
+        "rendered": False,
+        "renderBackend": "external-required",
+        "message": "模型接口暂慢，已使用稳定模板生成 Manim 代码并继续云端渲染。",
     }
 
 
@@ -541,6 +603,7 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
             temperature=temperature,
+            timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
         )
         cleaned_code = extract_python_only(raw_code)
         patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
