@@ -70,6 +70,53 @@ def clear_backend_state(monkeypatch):
 
 
 @requires_backend
+def test_font_health_reports_noto_cjk_match(monkeypatch):
+    monkeypatch.setattr(
+        backend.subprocess,
+        "run",
+        lambda *_, **__: SimpleNamespace(
+            returncode=0,
+            stdout='NotoSansCJK-Regular.ttc: "Noto Sans CJK SC" "Regular"\n',
+            stderr="",
+        ),
+    )
+
+    payload = backend._font_health()
+
+    assert payload["configured"] == "Noto Sans CJK SC"
+    assert payload["ok"] is True
+    assert "NotoSansCJK" in payload["matched"]
+
+
+@requires_backend
+def test_health_exposes_safe_render_font_diagnostics(monkeypatch):
+    monkeypatch.setattr(backend, "_use_supabase", lambda: False)
+    monkeypatch.setattr(
+        backend,
+        "_font_health",
+        lambda: {"configured": "Noto Sans CJK SC", "matched": "NotoSansCJK-Regular.ttc", "ok": True},
+    )
+
+    response = backend.app.test_client().get("/health")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["render"]["quality"] == backend.MANIM_RENDER_QUALITY
+    assert payload["render"]["cjk_font"]["ok"] is True
+    assert "api" not in str(payload).lower()
+
+
+def test_root_render_dockerfile_installs_cjk_fonts():
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    content = dockerfile.read_text()
+
+    assert "fontconfig" in content
+    assert "fonts-noto-cjk" in content
+    assert "fc-cache -f" in content
+    assert 'MANIM_CJK_FONT="Noto Sans CJK SC"' in content
+
+
+@requires_backend
 def test_register_job_requires_supabase_insert_before_memory_cache(monkeypatch):
     monkeypatch.setattr(backend, "_use_supabase", lambda: True)
     monkeypatch.setattr(backend, "supa_insert_job", lambda **_: None)
