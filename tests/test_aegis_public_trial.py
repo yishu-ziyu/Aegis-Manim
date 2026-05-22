@@ -212,7 +212,19 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert response["model"] == "stable-template-fallback"
         assert response["endpoint"] == "server-managed-fallback"
         assert "class GeneratedScene(Scene)" in str(response["code"])
+        assert "_AEGIS_CJK_FONT" in str(response["code"])
         assert "稳定模板" in "\n".join(response["warnings"])
+
+    def test_pareto_fallback_uses_topic_specific_teaching_scene(self) -> None:
+        code = gateway.build_fallback_manim_code("可视化帕累托最优过程。", "GeneratedScene")
+        patched, notes = gateway.apply_runtime_compatibility_fixes(code)
+
+        assert "不能让一人更好" in patched
+        assert "Axes(" in patched
+        assert "frontier" in patched
+        assert patched.count("self.play(") >= 6
+        assert "_AEGIS_CJK_FONT" in patched
+        assert any("CJK-capable" in note for note in notes)
 
     def test_public_gateway_rejects_arbitrary_provider_and_long_prompt(self) -> None:
         status, response = gateway.generate_manim_code_for_gateway(
