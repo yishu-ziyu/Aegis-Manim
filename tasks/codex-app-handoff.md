@@ -195,10 +195,17 @@ Verification:
 
 Remaining deployment check:
 
-- Push the segmented-render commit.
-- Confirm Render deploy picks it up and `/health` remains OK.
-- Redeploy Vercel if GitHub auto-deploy does not pick up `api/index.py`.
-- Run one live public render with a >8-play scene and confirm `/api/render/status/<job_id>` reports segmented progress, then a final playable MP4.
+- Completed. Commit `262c14c` was pushed to `origin/main`.
+- Vercel production deployment `dpl_9cQ6oEpkQhgL2v6x5ZWPvvEbkiWy` reached READY and was aliased to `https://manim-main.vercel.app`.
+- Render deploy hook returned HTTP 202.
+- Render `/health` returned HTTP 200 with `supabase.ok=true`.
+- Vercel `/api/render/status/not-a-real-job` returned the expected Render JSON 404.
+- Live segmented public render passed:
+  - job `c91b6fef-5e99-4db1-8025-99978affb6eb`
+  - submit payload used `renderMode=auto`
+  - submit response returned `render_mode=segmented`
+  - status reported `stage=rendering_segment`, progress `0/2`, then `1/2`, then `done 2/2`
+  - download payload contained a final `video_url`
 
 ## Do Not Reopen These Questions
 
