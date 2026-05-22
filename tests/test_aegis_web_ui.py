@@ -91,6 +91,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert '"X-API-Key": RENDER_BACKEND_API_KEY' in html
         assert '"/api/render/status/' in html
         assert "/api/render/download/${jobId}" in html
+        assert "retryCount < 1" in html
+        assert "渲染实例刚重启，正在自动重提一次" in html
 
     def test_windows_local_launcher_uses_cloud_generation_and_local_rendering(self) -> None:
         launcher = PROJECT_ROOT / "scripts" / "start_aegis_local_windows.bat"

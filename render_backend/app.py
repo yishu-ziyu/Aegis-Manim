@@ -177,6 +177,8 @@ class RenderSegment:
 
 _jobs: dict[str, RenderJob] = {}
 _jobs_lock = threading.Lock()
+_active_render_threads: set[str] = set()
+_active_render_threads_lock = threading.Lock()
 _orphan_reaper_lock = threading.Lock()
 _orphan_reaper_started = False
 
@@ -310,13 +312,19 @@ def _recover_jobs_from_supabase() -> None:
     if not _use_supabase():
         return
     rows = supa_list_jobs_by_status(["pending", "running"])
+    recovered_jobs: list[RenderJob] = []
     with _jobs_lock:
         for row in rows:
             try:
-                _jobs[row["job_id"]] = _row_to_job(row)
+                job = _row_to_job(row)
+                _jobs[row["job_id"]] = job
+                recovered_jobs.append(job)
             except (KeyError, ValueError) as exc:
                 print(f"[recovery] Skipping invalid job row: {exc}")
     print(f"[recovery] Restored {len(rows)} jobs from Supabase")
+    for job in recovered_jobs:
+        render_mode = str((job.metadata or {}).get("render_mode") or "auto")
+        _start_render_job_thread(job.job_id, job.code, job.scene_name, render_mode=render_mode)
 
 
 def _parse_supabase_datetime(value: str) -> datetime:
@@ -773,6 +781,52 @@ def _validate_render_payload(data: dict) -> tuple[str, str] | tuple[None, str]:
     return (code, scene_name), ""
 
 
+def _start_render_job_thread(job_id: str, code: str, scene_name: str, render_mode: str = "auto") -> bool:
+    with _active_render_threads_lock:
+        if job_id in _active_render_threads:
+            return False
+        _active_render_threads.add(job_id)
+
+    def _background_render() -> None:
+        try:
+            result = _run_manim_render(code, scene_name, job_id=job_id, render_mode=render_mode)
+            current_job = _get_job(job_id)
+            current_metadata = dict(current_job.metadata if current_job else {})
+            if result["success"]:
+                video_url = result.get("video_url")
+                current_metadata["stage"] = "done"
+                _update_job(
+                    job_id,
+                    status=JobStatus.DONE,
+                    video_path=video_url or result["video_path"],
+                    metadata=current_metadata,
+                )
+            else:
+                current_metadata["stage"] = "failed"
+                _update_job(
+                    job_id,
+                    status=JobStatus.FAILED,
+                    error_message=result["error"],
+                    stderr=result.get("stderr"),
+                    metadata=current_metadata,
+                )
+                if _use_supabase():
+                    supa_insert_log(
+                        job_id=job_id,
+                        level="error",
+                        stage="render",
+                        message="Rendering failed",
+                        detail=result.get("error"),
+                    )
+        finally:
+            with _active_render_threads_lock:
+                _active_render_threads.discard(job_id)
+
+    thread = threading.Thread(target=_background_render, daemon=True)
+    thread.start()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -862,39 +916,7 @@ def render_async() -> tuple:
     except RuntimeError:
         return jsonify({"error": "Failed to persist render job. Please try again."}), 500
 
-    def _background_render() -> None:
-        result = _run_manim_render(code, scene_name, job_id=job_id, render_mode=render_mode)
-        if result["success"]:
-            video_url = result.get("video_url")
-            done_metadata = dict(_get_job(job_id).metadata if _get_job(job_id) else initial_metadata)
-            done_metadata["stage"] = "done"
-            _update_job(
-                job_id,
-                status=JobStatus.DONE,
-                video_path=video_url or result["video_path"],
-                metadata=done_metadata,
-            )
-        else:
-            failed_metadata = dict(_get_job(job_id).metadata if _get_job(job_id) else initial_metadata)
-            failed_metadata["stage"] = "failed"
-            _update_job(
-                job_id,
-                status=JobStatus.FAILED,
-                error_message=result["error"],
-                stderr=result.get("stderr"),
-                metadata=failed_metadata,
-            )
-            if _use_supabase():
-                supa_insert_log(
-                    job_id=job_id,
-                    level="error",
-                    stage="render",
-                    message="Rendering failed",
-                    detail=result.get("error"),
-                )
-
-    thread = threading.Thread(target=_background_render, daemon=True)
-    thread.start()
+    _start_render_job_thread(job_id, code, scene_name, render_mode=render_mode)
 
     return (
         jsonify(

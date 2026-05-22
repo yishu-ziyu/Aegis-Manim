@@ -98,14 +98,24 @@ def test_get_job_reads_supabase_first_and_refreshes_memory_cache(monkeypatch):
 
 @requires_backend
 def test_recover_jobs_from_supabase_restores_pending_and_running_cache(monkeypatch):
-    rows = [_row("pending-job"), _row("running-job", status="running")]
+    rows = [
+        _row("pending-job", metadata={"render_mode": "auto"}),
+        _row("running-job", status="running", metadata={"render_mode": "segmented"}),
+    ]
+    restarted: list[tuple[str, str]] = []
     monkeypatch.setattr(backend, "_use_supabase", lambda: True)
     monkeypatch.setattr(backend, "supa_list_jobs_by_status", lambda statuses: rows)
+    monkeypatch.setattr(
+        backend,
+        "_start_render_job_thread",
+        lambda job_id, code, scene_name, render_mode="auto": restarted.append((job_id, render_mode)) or True,
+    )
 
     backend._recover_jobs_from_supabase()
 
     assert set(backend._jobs) == {"pending-job", "running-job"}
     assert backend._jobs["running-job"].status == backend.JobStatus.RUNNING
+    assert restarted == [("pending-job", "auto"), ("running-job", "segmented")]
 
 
 @requires_backend
