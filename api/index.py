@@ -42,8 +42,9 @@ DISABLED_CLOUD_PROVIDERS = {"codex-cli", "codex-local-proxy"}
 LOCAL_HOSTNAMES = {"localhost"}
 MAX_PUBLIC_BODY_BYTES = 32_000
 MAX_PUBLIC_PROMPT_CHARS = 4_000
-MAX_PUBLIC_RENDER_PLAYS = 24
-MAX_PUBLIC_LAGGED_STARTS = 3
+MAX_PUBLIC_RENDER_PLAYS = 14
+MAX_PUBLIC_RENDER_WAITS = 12
+MAX_PUBLIC_LAGGED_STARTS = 2
 PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "45"))
 PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "25"))
 PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-minimax-direct"
@@ -308,9 +309,12 @@ def clamp_temperature(value: object) -> float:
 def render_budget_warnings(code: str) -> list[str]:
     warnings: list[str] = []
     play_count = code.count("self.play(")
+    wait_count = code.count("self.wait(")
     lagged_count = code.count("LaggedStart(")
     if play_count > MAX_PUBLIC_RENDER_PLAYS:
         warnings.append(f"self.play count {play_count} exceeds hosted budget {MAX_PUBLIC_RENDER_PLAYS}")
+    if wait_count > MAX_PUBLIC_RENDER_WAITS:
+        warnings.append(f"self.wait count {wait_count} exceeds hosted budget {MAX_PUBLIC_RENDER_WAITS}")
     if lagged_count > MAX_PUBLIC_LAGGED_STARTS:
         warnings.append(f"LaggedStart count {lagged_count} exceeds hosted budget {MAX_PUBLIC_LAGGED_STARTS}")
     return warnings
@@ -324,8 +328,9 @@ def hosted_render_budget_prompt(prompt: str, warnings: list[str]) -> str:
             "Hosted render budget correction:",
             "; ".join(warnings),
             "Regenerate the complete Manim Python file as a reliable segmented-render scene.",
-            "Hard limits: at most 24 self.play(...) calls, at most 3 LaggedStart(...), no dense object swarms, no long wait chains.",
-            "Target video length: 45-120 seconds. Prefer a clear multi-step explanation over cutting core teaching content.",
+            "Hard limits: at most 14 self.play(...) calls, at most 12 self.wait(...) calls, at most 2 LaggedStart(...).",
+            "No dense object swarms, no loops containing self.play/self.wait, no long wait chains, no more than 8 visible text labels at once.",
+            "Target video length: 20-45 seconds. Prefer a clear 4-step explanation over a long lecture.",
         ]
     )
 
@@ -532,6 +537,14 @@ def generate_code_with_trial_plan(
                 )
                 cleaned_code = extract_python_only(raw_code)
                 patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
+                budget_notes = render_budget_warnings(patched_code)
+                if budget_notes:
+                    last_error = "budget"
+                    print(
+                        f"[{request_id}] trial provider exceeded render budget after repair: {provider.id}",
+                        file=sys.stderr,
+                    )
+                    continue
             detected_scene_name = local_web_app.detect_scene_name(patched_code, scene_name)
         except Exception as exc:
             last_error = sanitize_upstream_error(exc)

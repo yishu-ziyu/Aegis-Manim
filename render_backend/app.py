@@ -62,8 +62,8 @@ from werkzeug.exceptions import RequestEntityTooLarge
 API_KEY = os.environ.get("MANIM_API_KEY", "dev-key-change-in-production")
 MAX_CODE_SIZE = 100 * 1024  # 100 KB
 DEFAULT_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT_SECONDS", "180"))
-SEGMENT_RENDER_THRESHOLD = int(os.environ.get("MANIM_SEGMENT_RENDER_THRESHOLD", "2"))
-SEGMENT_RENDER_SIZE = int(os.environ.get("MANIM_SEGMENT_RENDER_SIZE", "2"))
+SEGMENT_RENDER_THRESHOLD = int(os.environ.get("MANIM_SEGMENT_RENDER_THRESHOLD", "10"))
+SEGMENT_RENDER_SIZE = int(os.environ.get("MANIM_SEGMENT_RENDER_SIZE", "6"))
 SEGMENT_RENDER_TIMEOUT = int(os.environ.get("MANIM_SEGMENT_RENDER_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT)))
 MANIM_RENDER_QUALITY = os.environ.get("MANIM_RENDER_QUALITY", "-qm").strip() or "-qm"
 RATE_LIMIT_WINDOW = 60  # seconds

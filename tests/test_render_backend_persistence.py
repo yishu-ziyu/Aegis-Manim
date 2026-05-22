@@ -379,8 +379,6 @@ class GeneratedScene(Scene):
         assert [path.name for path in segment_paths] == [
             "segment_1.mp4",
             "segment_2.mp4",
-            "segment_3.mp4",
-            "segment_4.mp4",
         ]
         output_path.write_bytes(b"final")
         return {"success": True, "stderr": ""}
@@ -402,7 +400,7 @@ class GeneratedScene(Scene):
 
     assert result["success"] is True
     assert result["video_path"].startswith("https://example.supabase.co/")
-    assert segment_calls == [(0, 1), (2, 3), (4, 5), (6, 6)]
+    assert segment_calls == [(0, 5), (6, 6)]
     assert uploaded == [uploaded[0]]
     assert uploaded[0].name == "GeneratedScene_segmented.mp4"
 
