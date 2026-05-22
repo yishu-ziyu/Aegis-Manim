@@ -196,3 +196,21 @@ The local launcher failure was a separate path issue. The user's current `127.0.
 ## Review
 
 The Render timeout path is now treated as a worker-budget problem rather than a Supabase schema problem or a reason to permanently cut teaching quality. Async render submissions default to `render_mode=auto`: short scenes still use the existing single Manim render path, while longer scenes are split into Manim animation ranges, rendered in separate subprocesses, concatenated into one MP4 with `ffmpeg`, and then uploaded as a single final video. Segment progress is stored in the existing Supabase `render_jobs.metadata` JSON field, so `/status/<job_id>` can report `render_mode`, `stage`, `progress`, and per-segment state without a schema migration. Vercel and the local Web proxy now explicitly forward `render_mode: auto`. The public generation safety gate was relaxed from a 4-7 play short-preview limit to a segmented-render friendly 24-play hard ceiling, and the prompt now targets 45-120 second multi-step teaching scenes instead of forcing a minimal preview. Verification passed with `68 passed`, `python -m py_compile render_backend/app.py render_backend/supabase_client.py api/index.py core/web_app.py`, `git diff --check`, and a local real segmented render smoke that produced a 15561-byte MP4. Commit `262c14c` was pushed; Vercel production deploy `dpl_9cQ6oEpkQhgL2v6x5ZWPvvEbkiWy` reached READY; Render deploy hook returned HTTP 202; Render `/health` returned HTTP 200 with `supabase.ok=true`; and live public job `c91b6fef-5e99-4db1-8025-99978affb6eb` completed as `render_mode=segmented` with progress `0/2 -> 1/2 -> done 2/2` and a final downloadable video URL.
+
+# Public Cloud Friend-Usable Closure
+
+- [x] Bound server-managed trial model calls so Vercel generation does not hang behind slow providers.
+- [x] Change public default provider to MiniMax direct and reset browser storage key.
+- [x] Add deterministic stable-template fallback when trial providers are slow or unavailable.
+- [x] Remove loop-expanded animations from the fallback template.
+- [x] Restart recovered pending/running Supabase jobs after Render worker startup.
+- [x] Add one automatic browser resubmission for Render restart/resubmit failures.
+- [x] Lower default automatic render segmentation threshold for constrained Render workers.
+- [x] Re-run focused cloud/render/model/provider regression tests.
+- [x] Deploy Vercel production and trigger Render deploy.
+- [x] Run a real production generate -> render -> status -> MP4 HEAD closed-loop.
+- [x] Run a fallback-template production render smoke.
+
+## Review
+
+Closed the public friend-facing cloud path on 2026-05-23 CST. The system now uses bounded model calls, MiniMax direct by default, a loop-free stable fallback, Render startup job recovery, one UI retry after Render restart failures, and more aggressive event segmentation for constrained workers. Regression verification passed with `76 passed`, Python compile checks, and `git diff --check`. Commits `f58fca8` and `d392e1b` were pushed to `origin/main`. Vercel deployment `dpl_7ySJjZppppHrNjhpfDD638JHomqf` is READY and aliased to `https://manim-main.vercel.app`; Render deploy hook returned 202 and `/health` returned HTTP 200 with `supabase.ok=true`. Final live closed-loop passed: `/api/generate` request `20260522-162045-vercel` used `trial-minimax-direct`, generated `LinearGrowthGap`, `/api/render` job `5bbfac97-c75f-4edc-a71c-09f630e4c86c` ran as `render_mode=segmented`, progressed `0/2 -> 1/2 -> concatenating -> done`, and the final Supabase MP4 returned `HEAD 200 video/mp4` with 134467 bytes. The stable fallback template was also submitted to production render as job `4c5e740f-c3cc-4cee-b75a-bea272065034` and returned `HEAD 200 video/mp4` with 37144 bytes. Remaining strategic risk is Render free/small-worker capacity; the next production-grade architecture should move the worker layer to a queue/job platform such as Cloud Run Jobs or Modal while preserving the current async job-status-output contract.
