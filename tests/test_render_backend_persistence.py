@@ -324,6 +324,8 @@ def test_build_manim_command_adds_animation_range_for_segment(tmp_path):
 
     cmd = backend._build_manim_command(scene_file, "GeneratedScene", tmp_path, segment=segment)
 
+    assert "-qm" in cmd
+    assert "-ql" not in cmd
     assert "-n" in cmd
     assert cmd[cmd.index("-n") + 1] == "6,11"
 

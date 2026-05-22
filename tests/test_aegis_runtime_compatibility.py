@@ -64,6 +64,27 @@ class GeneratedScene(Scene):
         assert "self.play(Create(h_line_tax))" in patched
         assert any("stroke_dash" in note for note in notes)
 
+    def test_text_default_font_is_injected_for_cloud_chinese_rendering(self) -> None:
+        code = """
+from manim import *
+
+class GeneratedScene(Scene):
+    def construct(self):
+        title = Text("帕累托最优", font_size=32)
+        self.play(Write(title))
+"""
+
+        patched, notes = manim_agent.apply_runtime_compatibility_fixes(code)
+
+        assert "_AEGIS_CJK_FONT" in patched
+        assert 'Text.set_default(font=_AEGIS_CJK_FONT)' in patched
+        assert 'title = Text("帕累托最优", font_size=32)' in patched
+        assert any("CJK-capable" in note for note in notes)
+
+        patched_again, notes_again = manim_agent.apply_runtime_compatibility_fixes(patched)
+        assert patched_again == patched
+        assert not any("CJK-capable" in note for note in notes_again)
+
     def test_axes_camel_case_line_helpers_are_rewritten(self) -> None:
         code = """
 axes.getHorizontalLine(axes.c2p(3, 4), color=BLUE)

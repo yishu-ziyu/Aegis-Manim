@@ -27,6 +27,7 @@ PLACEHOLDER_KEYS = {
     "<your_api_key>",
     "changeme",
 }
+TEXT_DEFAULT_FONT_PATCH_MARKER = "AEGIS_CJK_FONT"
 
 
 def detect_latex_available() -> bool:
@@ -185,6 +186,26 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
     patched = code
     notes: list[str] = []
 
+    def inject_text_default_font(source: str) -> str:
+        if "Text(" not in source or TEXT_DEFAULT_FONT_PATCH_MARKER in source:
+            return source
+
+        prelude = (
+            "\n"
+            "# Aegis cloud render: pick a CJK-capable font for Chinese labels.\n"
+            "import os as _aegis_os\n"
+            "_AEGIS_CJK_FONT = _aegis_os.environ.get(\"MANIM_CJK_FONT\", \"Noto Sans CJK SC\")\n"
+            "try:\n"
+            "    Text.set_default(font=_AEGIS_CJK_FONT)\n"
+            "except Exception:\n"
+            "    pass\n"
+        )
+        lines = source.splitlines()
+        for index, line in enumerate(lines):
+            if line.strip().startswith("from manim import"):
+                return "\n".join([*lines[: index + 1], prelude, *lines[index + 1 :]])
+        return f"from manim import *{prelude}\n{source}"
+
     def convert_line_config_to_kwargs(match: re.Match[str]) -> str:
         plot_call = match.group(0)
 
@@ -287,6 +308,11 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
         if candidate != patched:
             notes.append(f"Replaced unsupported direction constant {bad} with {good}.")
             patched = candidate
+
+    candidate = inject_text_default_font(patched)
+    if candidate != patched:
+        notes.append("Injected a CJK-capable Text default font for cloud rendering.")
+        patched = candidate
 
     return patched, notes
 

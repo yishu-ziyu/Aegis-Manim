@@ -44,8 +44,8 @@ MAX_PUBLIC_BODY_BYTES = 32_000
 MAX_PUBLIC_PROMPT_CHARS = 4_000
 MAX_PUBLIC_RENDER_PLAYS = 24
 MAX_PUBLIC_LAGGED_STARTS = 3
-PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "25"))
-PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "15"))
+PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "45"))
+PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "25"))
 PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-minimax-direct"
 PUBLIC_TRIAL_PLANS = {
     "trial-kimi-priority": {
@@ -334,8 +334,64 @@ def build_fallback_manim_code(prompt: str, scene_name: str) -> str:
     """Return a deterministic Manim scene when trial model providers are slow/unavailable."""
     safe_scene_name = local_web_app.safe_scene_name(scene_name)
     compact = " ".join(prompt.split())[:28] or "抽象概念"
+    if "帕累托" in prompt or "Pareto" in prompt or "pareto" in prompt:
+        return f'''from manim import *
+
+class {safe_scene_name}(Scene):
+    def construct(self):
+        self.camera.background_color = "#0f172a"
+        title = Text("帕累托最优", font_size=38, color=YELLOW).to_edge(UP)
+        subtitle = Text("不能让一人更好，而不让他人更差", font_size=22, color=GREY_B).next_to(title, DOWN, buff=0.22)
+        axes = Axes(
+            x_range=[0, 5, 1],
+            y_range=[0, 5, 1],
+            x_length=5.8,
+            y_length=4.2,
+            tips=False,
+            axis_config={{"include_numbers": False, "color": GREY_B}},
+        ).shift(DOWN * 0.35)
+        x_label = Text("Alice收益", font_size=18, color=BLUE).next_to(axes.x_axis, RIGHT, buff=0.18)
+        y_label = Text("Bob收益", font_size=18, color=GREEN).next_to(axes.y_axis, UP, buff=0.18)
+        feasible = Polygon(
+            axes.c2p(0.5, 0.7),
+            axes.c2p(4.4, 0.8),
+            axes.c2p(4.1, 2.3),
+            axes.c2p(3.0, 3.5),
+            axes.c2p(1.2, 3.8),
+            axes.c2p(0.5, 0.7),
+            color=TEAL,
+            fill_opacity=0.18,
+            stroke_width=3,
+        )
+        start = Dot(axes.c2p(1.3, 1.2), color=RED)
+        better = Dot(axes.c2p(2.8, 2.6), color=BLUE)
+        frontier = VMobject(color=YELLOW, stroke_width=6).set_points_smoothly([
+            axes.c2p(1.2, 3.8),
+            axes.c2p(2.2, 3.75),
+            axes.c2p(3.0, 3.5),
+            axes.c2p(3.7, 2.95),
+            axes.c2p(4.1, 2.3),
+        ])
+        arrow = Arrow(start.get_center(), better.get_center(), buff=0.18, color=WHITE)
+        note1 = Text("内部点：还能一起变好", font_size=22, color=WHITE).to_edge(DOWN)
+        note2 = Text("前沿点：改进会带来代价", font_size=22, color=YELLOW).to_edge(DOWN)
+        final = Text("最优不是总量最大，而是没有无损改进", font_size=22, color=GREEN).to_edge(DOWN)
+
+        self.play(FadeIn(title), FadeIn(subtitle, shift=DOWN), run_time=0.8)
+        self.wait(0.5)
+        self.play(Create(axes), FadeIn(VGroup(x_label, y_label)), run_time=1.0)
+        self.wait(0.4)
+        self.play(FadeIn(feasible), FadeIn(start), Write(note1), run_time=1.0)
+        self.wait(0.7)
+        self.play(Create(arrow), TransformFromCopy(start, better), run_time=1.1)
+        self.wait(0.5)
+        self.play(FadeOut(note1), Create(frontier), Write(note2), run_time=1.1)
+        self.wait(0.8)
+        self.play(Indicate(frontier), ReplacementTransform(note2, final), run_time=1.0)
+        self.wait(1.2)
+'''
     title = compact[:12]
-    labels = ["问题", "对象", "关系", "变化", "结论"]
+    labels = ["问题", "变量", "关系", "变化", "结论"]
     title_literal = json.dumps(title, ensure_ascii=False)
     subtitle_literal = json.dumps(compact, ensure_ascii=False)
     labels_literal = ", ".join(json.dumps(label, ensure_ascii=False) for label in labels)
@@ -343,26 +399,33 @@ def build_fallback_manim_code(prompt: str, scene_name: str) -> str:
 
 class {safe_scene_name}(Scene):
     def construct(self):
-        self.camera.background_color = "#111827"
-        title = Text({title_literal}, font_size=34, color=YELLOW).to_edge(UP)
+        self.camera.background_color = "#0f172a"
+        title = Text({title_literal}, font_size=36, color=YELLOW).to_edge(UP)
         subtitle = Text({subtitle_literal}, font_size=20, color=GREY_B).next_to(title, DOWN, buff=0.25)
-        axis = NumberLine(x_range=[0, 5, 1], length=7, color=GREY_B).shift(DOWN * 1.5)
+        frame = RoundedRectangle(width=7.4, height=3.0, corner_radius=0.12, color=GREY_B, stroke_opacity=0.55)
+        axis = NumberLine(x_range=[0, 5, 1], length=6.4, color=GREY_B).shift(DOWN * 1.15)
         dot = Dot(axis.n2p(0), color=BLUE)
         labels = VGroup(*[
             Text(text, font_size=22, color=WHITE)
             for text in [{labels_literal}]
-        ]).arrange(RIGHT, buff=0.65).next_to(axis, UP, buff=0.65)
+        ]).arrange(RIGHT, buff=0.58).next_to(axis, UP, buff=0.55)
         arrows = VGroup(*[
             Arrow(labels[i].get_right(), labels[i + 1].get_left(), buff=0.12, color=TEAL, stroke_width=3)
             for i in range(len(labels) - 1)
         ])
+        question = Text("先看什么在变，再看什么不变", font_size=22, color=WHITE).move_to(frame.get_top() + DOWN * 0.65)
         conclusion = Text("把抽象问题拆成可观察步骤", font_size=24, color=GREEN).to_edge(DOWN)
 
         self.play(FadeIn(title), FadeIn(subtitle, shift=DOWN), run_time=0.4)
-        self.play(Create(axis), FadeIn(dot), run_time=0.5)
-        self.play(FadeIn(labels, shift=UP * 0.2), Create(arrows), run_time=0.6)
-        self.play(dot.animate.move_to(axis.n2p(5)), FadeIn(conclusion), run_time=0.8)
         self.wait(0.4)
+        self.play(Create(frame), Write(question), run_time=0.8)
+        self.wait(0.5)
+        self.play(Create(axis), FadeIn(dot), FadeIn(labels, shift=UP * 0.2), run_time=0.9)
+        self.wait(0.5)
+        self.play(Create(arrows), dot.animate.move_to(axis.n2p(5)), run_time=1.0)
+        self.wait(0.6)
+        self.play(FadeIn(conclusion, shift=UP), Indicate(labels[-1]), run_time=0.9)
+        self.wait(1.0)
 '''
 
 
@@ -783,6 +846,8 @@ class handler(BaseHTTPRequestHandler):
             if not code:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
                 return
+            code, _notes = apply_runtime_compatibility_fixes(code)
+            scene_name = local_web_app.detect_scene_name(code, scene_name)
             # Proxy to render backend async endpoint
             status, response = _proxy_to_render_backend(
                 "/render-async",

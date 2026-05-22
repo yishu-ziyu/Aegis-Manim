@@ -10,11 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     pkg-config \
     ffmpeg \
+    fontconfig \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
     sox \
     libsox-fmt-mp3 \
     texlive-latex-base \
     texlive-latex-extra \
     texlive-fonts-extra \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -41,6 +45,8 @@ COPY app.py .
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     MANIM_API_KEY="" \
+    MANIM_CJK_FONT="Noto Sans CJK SC" \
+    MANIM_RENDER_QUALITY="-qm" \
     PORT=5000 \
     FLASK_DEBUG=0
 

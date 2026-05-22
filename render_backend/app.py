@@ -65,6 +65,7 @@ DEFAULT_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT_SECONDS", "180"))
 SEGMENT_RENDER_THRESHOLD = int(os.environ.get("MANIM_SEGMENT_RENDER_THRESHOLD", "2"))
 SEGMENT_RENDER_SIZE = int(os.environ.get("MANIM_SEGMENT_RENDER_SIZE", "2"))
 SEGMENT_RENDER_TIMEOUT = int(os.environ.get("MANIM_SEGMENT_RENDER_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT)))
+MANIM_RENDER_QUALITY = os.environ.get("MANIM_RENDER_QUALITY", "-qm").strip() or "-qm"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_REQUESTS = 10
 ORPHAN_JOB_THRESHOLD_SECONDS = int(
@@ -475,7 +476,7 @@ def _build_manim_command(
         sys.executable,
         "-m",
         "manim",
-        "-ql",
+        MANIM_RENDER_QUALITY,
         "--media_dir",
         str(workspace),
         str(scene_file),
