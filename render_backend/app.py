@@ -66,6 +66,7 @@ SEGMENT_RENDER_THRESHOLD = int(os.environ.get("MANIM_SEGMENT_RENDER_THRESHOLD", 
 SEGMENT_RENDER_SIZE = int(os.environ.get("MANIM_SEGMENT_RENDER_SIZE", "6"))
 SEGMENT_RENDER_TIMEOUT = int(os.environ.get("MANIM_SEGMENT_RENDER_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT)))
 MANIM_RENDER_QUALITY = os.environ.get("MANIM_RENDER_QUALITY", "-ql").strip() or "-ql"
+MANIM_CJK_FONT = os.environ.get("MANIM_CJK_FONT", "Noto Sans CJK SC").strip() or "Noto Sans CJK SC"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_REQUESTS = 10
 ORPHAN_JOB_THRESHOLD_SECONDS = int(
@@ -80,6 +81,32 @@ TEMP_DIR = BASE_DIR / "temp"
 OUTPUT_DIR = BASE_DIR / "outputs"
 TEMP_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+def _font_health() -> dict[str, Any]:
+    """Expose non-sensitive fontconfig status for production render diagnostics."""
+    payload: dict[str, Any] = {"configured": MANIM_CJK_FONT, "ok": False}
+    try:
+        result = subprocess.run(
+            ["fc-match", MANIM_CJK_FONT],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except FileNotFoundError:
+        payload["error"] = "fontconfig unavailable"
+        return payload
+    except Exception as exc:  # pragma: no cover - defensive health diagnostics
+        payload["error"] = type(exc).__name__
+        return payload
+
+    matched = (result.stdout or "").strip()
+    payload["matched"] = matched
+    payload["ok"] = result.returncode == 0 and "noto" in matched.lower() and "cjk" in matched.lower()
+    if not payload["ok"] and result.stderr:
+        payload["error"] = result.stderr.strip()[:200]
+    return payload
 
 # ---------------------------------------------------------------------------
 # Flask App
@@ -850,7 +877,14 @@ def _start_render_job_thread(job_id: str, code: str, scene_name: str, render_mod
 
 @app.route("/health", methods=["GET"])
 def health() -> tuple:
-    payload = {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+    payload = {
+        "status": "ok",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "render": {
+            "quality": MANIM_RENDER_QUALITY,
+            "cjk_font": _font_health(),
+        },
+    }
     if _use_supabase():
         payload["supabase"] = supa_health()
     else:
