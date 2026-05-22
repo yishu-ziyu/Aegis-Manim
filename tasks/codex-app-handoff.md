@@ -276,6 +276,63 @@ Conclusion:
 - As of this check, the public cloud path is usable for the intended friend flow: open `https://manim-main.vercel.app`, use the server-managed trial model, render through Render, and receive a playable Supabase-hosted MP4.
 - Remaining product risk is Render free/small-worker capacity. For stronger production reliability, the next architecture step should be a queue/worker platform such as Cloud Run Jobs or Modal, following the same async job-status-output pattern used by ManimCat-like systems.
 
+## 2026-05-23 Production Quality Fix: Chinese Font Runtime
+
+Problem:
+
+- A later production run technically succeeded, but the MP4 was not acceptable: extracted frames showed Chinese text as missing-glyph boxes/tofu.
+- The generated code already contained the Aegis CJK font patch, so this was not a prompt or Supabase issue.
+
+Root cause:
+
+- Render can build from the repository root `Dockerfile`.
+- The root `Dockerfile` did not install `fontconfig`/`fonts-noto-cjk` or set `MANIM_CJK_FONT`; only `render_backend/Dockerfile` had those packages.
+- Manim/Pango therefore had no CJK glyphs in the live container, even when the code requested a CJK font.
+
+Fix:
+
+- Commit `184295d` pushed to `origin/main`.
+- Root `Dockerfile` now installs:
+  - `fontconfig`
+  - `fonts-noto-cjk`
+  - `fonts-noto-color-emoji`
+  - `fc-cache -f`
+- Root `Dockerfile` now sets:
+  - `MANIM_CJK_FONT=Noto Sans CJK SC`
+  - `MANIM_RENDER_QUALITY=-ql`
+- Render `/health` now includes safe, non-secret render diagnostics:
+  - `render.quality`
+  - `render.cjk_font.configured`
+  - `render.cjk_font.matched`
+  - `render.cjk_font.ok`
+
+Verification:
+
+- Focused tests passed: `pytest -o addopts='' tests/test_render_backend_persistence.py tests/test_aegis_runtime_compatibility.py tests/test_aegis_public_trial.py -q` -> `59 passed`.
+- Compile and diff checks passed:
+  - `python -m py_compile render_backend/app.py api/index.py core/manim_agent.py`
+  - `git diff --check`
+- Render deploy hook returned HTTP 202.
+- Production `/health` returned:
+  - `render.quality=-ql`
+  - `render.cjk_font.ok=true`
+  - `render.cjk_font.matched=NotoSansCJK-Regular.ttc: "Noto Sans CJK SC" "Regular"`
+- Production font probe job `a511d7ab-58d3-41c9-ac6c-b404bfb73b2f` reached `done`; extracted frame `/tmp/aegis-font-probe-fixed/font_probe.png` shows Chinese text readable for default/sans/Noto/serif rows.
+- Full production friend-flow check passed:
+  - prompt: `可视化帕累托最优过程。`
+  - generate request: `20260522-174814-vercel`
+  - model: `stable-template-fallback`
+  - code: 6 `self.play(...)`, 6 `self.wait(...)`, CJK patch present
+  - render job: `2b70b836-e8b6-4756-93b2-584d92464b01`
+  - status: `rendering_segment 0/2 -> rendering_segment 1/2 -> concatenating -> done`
+  - final MP4: HTTP 200, `content-type: video/mp4`, `content-length: 184325`, duration about 10.07s
+  - extracted frames `/tmp/aegis-pareto-fixed/frame_5s.png` and `/tmp/aegis-pareto-fixed/frame_9s.png` show readable Chinese and a clear Pareto feasible-set/frontier explanation.
+
+Current conclusion:
+
+- The cloud site is no longer only "technically successful"; the production video is now visually readable for Chinese text.
+- Render still runs at `-ql` because the small/free worker has repeatedly failed or stalled under heavier quality/scene budgets. Higher-resolution production should move to a stronger worker platform or paid Render capacity rather than hiding the issue by forcing medium quality on the current worker.
+
 ## Do Not Reopen These Questions
 
 - Do not create another Supabase project unless the current project is deleted or explicitly rejected.
