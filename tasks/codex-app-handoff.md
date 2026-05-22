@@ -207,6 +207,75 @@ Remaining deployment check:
   - status reported `stage=rendering_segment`, progress `0/2`, then `1/2`, then `done 2/2`
   - download payload contained a final `video_url`
 
+## 2026-05-23 Production Closure: Friend-Usable Cloud Rendering
+
+User direction:
+
+- Treat the public site as not done until a friend can open it, generate an explanation, render video, and receive a playable MP4 without configuring keys.
+- Compare against ManimCat/community-style architecture and stop relying on one long synchronous request.
+
+Root causes confirmed:
+
+- A previous full closed-loop attempt failed because Render restarted while an async job was running; pending/running Supabase jobs were restored into cache but not restarted.
+- A second attempt showed `/api/generate` could wait too long on a trial model response before render even started.
+- A fallback scene with a Python `for` loop looked short by static `self.play(...)` count but expanded to many runtime animations and timed out after 180 seconds on Render.
+
+Fixes shipped:
+
+- Public trial model calls now use bounded HTTP timeouts:
+  - normal generation: `PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS`, default 25 seconds
+  - budget-repair generation: `PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS`, default 15 seconds
+- Public default provider is now `trial-minimax-direct`; browser provider storage key moved to `aegis.provider.public.v4` so old Kimi-priority browser state does not keep users on the slower path.
+- If all server-managed trial providers are missing/slow/failing, `/api/generate` now returns a deterministic stable Manim template instead of failing the user flow.
+- Stable fallback template is loop-free and uses short `FadeIn/Create` animations, so static event counting matches runtime behavior more closely.
+- Render Backend startup recovery now restarts recovered pending/running Supabase jobs through a deduped background render thread.
+- The Web UI auto-resubmits once when a render job fails with the Render restart/resubmit message.
+- Automatic segmentation defaults were tightened for constrained workers:
+  - `MANIM_SEGMENT_RENDER_THRESHOLD` default: 2 events
+  - `MANIM_SEGMENT_RENDER_SIZE` default: 2 events
+
+Local verification:
+
+- `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py tests/test_aegis_llm_providers.py -q` passed with `76 passed`.
+- `python -m py_compile core/llm_providers.py core/manim_agent.py api/index.py core/web_app.py render_backend/app.py render_backend/supabase_client.py` passed.
+- `python -m py_compile api/index.py render_backend/app.py` passed after the fallback/threshold tightening.
+- `git diff --check` passed.
+
+Deployment:
+
+- Commit `f58fca8` pushed to `origin/main`.
+- Commit `d392e1b` pushed to `origin/main`.
+- Vercel production deployment `dpl_7ySJjZppppHrNjhpfDD638JHomqf` reached READY and was aliased to `https://manim-main.vercel.app`.
+- Render deploy hook returned HTTP 202.
+- Render `/health` returned HTTP 200 with `supabase.ok=true`.
+
+Final live public closed-loop:
+
+- `POST https://manim-main.vercel.app/api/generate`
+  - request `20260522-162045-vercel`
+  - provider `trial-minimax-direct`
+  - model `MiniMax 稳定试用`
+  - generated scene `LinearGrowthGap`
+  - generated code: 2112 chars, 6 `self.play(...)`, 5 `self.wait(...)`, 0 `LaggedStart(...)`
+- `POST https://manim-main.vercel.app/api/render`
+  - job `5bbfac97-c75f-4edc-a71c-09f630e4c86c`
+  - response `render_mode=segmented`
+  - status progressed `rendering_segment 0/2 -> rendering_segment 1/2 -> concatenating 2/2 -> done 2/2`
+  - final MP4 URL: `https://lnbalcskhcnkrtlqpgku.supabase.co/storage/v1/object/public/manim-videos/5bbfac97-c75f-4edc-a71c-09f630e4c86c/LinearGrowthGap_segmented.mp4`
+  - `HEAD` returned HTTP 200, `content-type: video/mp4`, `content-length: 134467`
+
+Fallback live render smoke:
+
+- Submitted the new stable fallback template directly through production `/api/render`.
+- Job `4c5e740f-c3cc-4cee-b75a-bea272065034` reached `done`.
+- Final MP4 URL: `https://lnbalcskhcnkrtlqpgku.supabase.co/storage/v1/object/public/manim-videos/4c5e740f-c3cc-4cee-b75a-bea272065034/GeneratedScene.mp4`
+- `HEAD` returned HTTP 200, `content-type: video/mp4`, `content-length: 37144`
+
+Conclusion:
+
+- As of this check, the public cloud path is usable for the intended friend flow: open `https://manim-main.vercel.app`, use the server-managed trial model, render through Render, and receive a playable Supabase-hosted MP4.
+- Remaining product risk is Render free/small-worker capacity. For stronger production reliability, the next architecture step should be a queue/worker platform such as Cloud Run Jobs or Modal, following the same async job-status-output pattern used by ManimCat-like systems.
+
 ## Do Not Reopen These Questions
 
 - Do not create another Supabase project unless the current project is deleted or explicitly rejected.
