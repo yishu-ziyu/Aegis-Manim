@@ -358,14 +358,11 @@ class {safe_scene_name}(Scene):
         ])
         conclusion = Text("把抽象问题拆成可观察步骤", font_size=24, color=GREEN).to_edge(DOWN)
 
-        self.play(Write(title), FadeIn(subtitle, shift=DOWN), run_time=0.8)
-        self.play(Create(axis), FadeIn(dot), run_time=0.7)
-        for i, label in enumerate(labels):
-            self.play(FadeIn(label, shift=UP * 0.2), dot.animate.move_to(axis.n2p(i)), run_time=0.45)
-            if i < len(arrows):
-                self.play(Create(arrows[i]), run_time=0.3)
-        self.play(Write(conclusion), run_time=0.7)
-        self.wait(0.8)
+        self.play(FadeIn(title), FadeIn(subtitle, shift=DOWN), run_time=0.4)
+        self.play(Create(axis), FadeIn(dot), run_time=0.5)
+        self.play(FadeIn(labels, shift=UP * 0.2), Create(arrows), run_time=0.6)
+        self.play(dot.animate.move_to(axis.n2p(5)), FadeIn(conclusion), run_time=0.8)
+        self.wait(0.4)
 '''
 
 
