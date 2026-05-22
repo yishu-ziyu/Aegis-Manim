@@ -42,6 +42,8 @@ DISABLED_CLOUD_PROVIDERS = {"codex-cli", "codex-local-proxy"}
 LOCAL_HOSTNAMES = {"localhost"}
 MAX_PUBLIC_BODY_BYTES = 32_000
 MAX_PUBLIC_PROMPT_CHARS = 4_000
+MAX_PUBLIC_RENDER_PLAYS = 8
+MAX_PUBLIC_LAGGED_STARTS = 1
 PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-kimi-priority"
 PUBLIC_TRIAL_PLANS = {
     "trial-kimi-priority": {
@@ -301,6 +303,31 @@ def clamp_temperature(value: object) -> float:
     return max(0.0, min(1.0, temperature))
 
 
+def render_budget_warnings(code: str) -> list[str]:
+    warnings: list[str] = []
+    play_count = code.count("self.play(")
+    lagged_count = code.count("LaggedStart(")
+    if play_count > MAX_PUBLIC_RENDER_PLAYS:
+        warnings.append(f"self.play count {play_count} exceeds hosted budget {MAX_PUBLIC_RENDER_PLAYS}")
+    if lagged_count > MAX_PUBLIC_LAGGED_STARTS:
+        warnings.append(f"LaggedStart count {lagged_count} exceeds hosted budget {MAX_PUBLIC_LAGGED_STARTS}")
+    return warnings
+
+
+def hosted_render_budget_prompt(prompt: str, warnings: list[str]) -> str:
+    return "\n".join(
+        [
+            prompt,
+            "",
+            "Hosted render budget correction:",
+            "; ".join(warnings),
+            "Regenerate the complete Manim Python file as a short reliable preview scene.",
+            "Hard limits: at most 7 self.play(...) calls, at most 1 LaggedStart(...), no dense object swarms, no long wait chains.",
+            "Target video length: 15-35 seconds. Prefer one visual metaphor, one mechanism animation, and one summary insight.",
+        ]
+    )
+
+
 def is_private_or_local_host(host: str) -> bool:
     normalized = host.strip("[]").lower().rstrip(".")
     if (
@@ -388,6 +415,20 @@ def generate_code_with_trial_plan(
             )
             cleaned_code = extract_python_only(raw_code)
             patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
+            budget_notes = render_budget_warnings(patched_code)
+            if budget_notes:
+                raw_code, _used_provider_name, _used_endpoint = generate_code_with_llm(
+                    provider_id=provider.id,
+                    api_key=api_key,
+                    base_url="",
+                    endpoint="",
+                    model=model,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=hosted_render_budget_prompt(prompt, budget_notes),
+                    temperature=min(temperature, 0.2),
+                )
+                cleaned_code = extract_python_only(raw_code)
+                patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
             detected_scene_name = local_web_app.detect_scene_name(patched_code, scene_name)
         except Exception as exc:
             last_error = sanitize_upstream_error(exc)
