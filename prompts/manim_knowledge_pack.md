@@ -66,4 +66,4 @@ Refresh sources: local Manim docs under `docs/source`, official Manim Community 
 - Do not create text so large that it leaves the frame; keep most labels between font sizes 18 and 32.
 - Do not output explanations, markdown fences, or extra prose outside the Python code.
 - Do not rely on network, local asset files, fonts, or images unless explicitly provided by the user.
-- Keep generated scenes small enough for hosted rendering: one core visual metaphor, 4-7 animations, no dense object swarms, no long chained waits, and no more than one `LaggedStart` over a small group.
+- Keep generated scenes segmented-render friendly: a clear multi-step visual explanation, 8-20 animations, no dense object swarms, no long chained waits, and no more than three `LaggedStart` calls over small groups.

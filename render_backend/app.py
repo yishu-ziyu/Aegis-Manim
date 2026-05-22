@@ -8,6 +8,7 @@ error handling, rate limiting, and security controls.
 
 from __future__ import annotations
 
+import ast
 import functools
 import os
 import signal
@@ -61,6 +62,9 @@ from werkzeug.exceptions import RequestEntityTooLarge
 API_KEY = os.environ.get("MANIM_API_KEY", "dev-key-change-in-production")
 MAX_CODE_SIZE = 100 * 1024  # 100 KB
 DEFAULT_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT_SECONDS", "180"))
+SEGMENT_RENDER_THRESHOLD = int(os.environ.get("MANIM_SEGMENT_RENDER_THRESHOLD", "8"))
+SEGMENT_RENDER_SIZE = int(os.environ.get("MANIM_SEGMENT_RENDER_SIZE", "6"))
+SEGMENT_RENDER_TIMEOUT = int(os.environ.get("MANIM_SEGMENT_RENDER_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT)))
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_REQUESTS = 10
 ORPHAN_JOB_THRESHOLD_SECONDS = int(
@@ -161,6 +165,14 @@ class RenderJob:
     video_path: str | None = None
     error_message: str | None = None
     stderr: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RenderSegment:
+    index: int
+    start: int
+    end: int
 
 
 _jobs: dict[str, RenderJob] = {}
@@ -184,18 +196,26 @@ def _row_to_job(row: dict[str, Any]) -> RenderJob:
         video_path=row.get("video_path"),
         error_message=row.get("error_message"),
         stderr=row.get("stderr"),
+        metadata=row.get("metadata") or {},
     )
 
 
-def _register_job(code: str, scene_name: str, client_ip: str | None = None) -> str:
+def _register_job(
+    code: str,
+    scene_name: str,
+    client_ip: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> str:
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
+    metadata = metadata or {}
     if _use_supabase():
         row = supa_insert_job(
             job_id=job_id,
             code=code,
             scene_name=scene_name,
             client_ip=client_ip,
+            metadata=metadata,
         )
         if row is None:
             raise RuntimeError("Failed to persist job to Supabase")
@@ -206,6 +226,7 @@ def _register_job(code: str, scene_name: str, client_ip: str | None = None) -> s
         updated_at=now,
         code=code,
         scene_name=scene_name,
+        metadata=metadata,
     )
     with _jobs_lock:
         _jobs[job_id] = job
@@ -218,6 +239,7 @@ def _update_job(
     video_path: str | None = None,
     error_message: str | None = None,
     stderr: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     row: dict[str, Any] | None = None
     if _use_supabase():
@@ -231,6 +253,7 @@ def _update_job(
             video_path=video_path,
             error_message=error_message,
             stderr=stderr,
+            metadata=metadata,
         )
         if row is None:
             print(f"[update_job] Supabase update failed for {job_id[:8]}")
@@ -259,6 +282,8 @@ def _update_job(
             job.error_message = error_message
         if stderr is not None:
             job.stderr = stderr
+        if metadata is not None:
+            job.metadata = metadata
         job.updated_at = datetime.now(UTC).isoformat()
 
 
@@ -353,6 +378,106 @@ def _start_orphan_reaper() -> None:
 # Rendering Logic
 # ---------------------------------------------------------------------------
 
+def _count_render_events(code: str) -> int:
+    """Count self.play/self.wait calls in the first construct() method."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return 0
+
+    for class_node in [node for node in tree.body if isinstance(node, ast.ClassDef)]:
+        for item in class_node.body:
+            if not isinstance(item, ast.FunctionDef) or item.name != "construct":
+                continue
+            count = 0
+            for node in ast.walk(item):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr in {"play", "wait"}
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "self"
+                ):
+                    count += 1
+            return count
+    return 0
+
+
+def _plan_render_segments(
+    code: str,
+    mode: str = "auto",
+    threshold: int = SEGMENT_RENDER_THRESHOLD,
+    segment_size: int = SEGMENT_RENDER_SIZE,
+) -> list[RenderSegment]:
+    event_count = _count_render_events(code)
+    if mode == "single" or event_count <= 0:
+        return []
+    if mode == "auto" and event_count <= threshold:
+        return []
+
+    size = max(1, segment_size)
+    return [
+        RenderSegment(index=index + 1, start=start, end=min(start + size - 1, event_count - 1))
+        for index, start in enumerate(range(0, event_count, size))
+    ]
+
+
+def _render_metadata(
+    mode: str,
+    stage: str,
+    segments: list[RenderSegment],
+    completed: int = 0,
+    current: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "render_mode": mode,
+        "stage": stage,
+        "progress": {
+            "completed": completed,
+            "total": len(segments),
+            "current": current,
+        },
+        "segments": [
+            {
+                "index": segment.index,
+                "start": segment.start,
+                "end": segment.end,
+                "status": (
+                    "done"
+                    if segment.index <= completed
+                    else "running"
+                    if current == segment.index
+                    else "pending"
+                ),
+            }
+            for segment in segments
+        ],
+    }
+
+
+def _build_manim_command(
+    scene_file: Path,
+    scene_name: str,
+    workspace: Path,
+    segment: RenderSegment | None = None,
+) -> list[str]:
+    cmd = [
+        sys.executable,
+        "-m",
+        "manim",
+        "-ql",
+        "--media_dir",
+        str(workspace),
+        str(scene_file),
+        scene_name,
+    ]
+    if segment is not None:
+        cmd.extend(["-n", f"{segment.start},{segment.end}"])
+    return cmd
+
+
 def _find_rendered_video(temp_dir: Path, scene_name: str) -> Path | None:
     """Manim outputs to temp_dir / videos / {scene_name}.mp4 or similar."""
     # Manim default output path: temp_dir / videos / {quality_prefix}{scene_name}.mp4
@@ -368,40 +493,11 @@ def _find_rendered_video(temp_dir: Path, scene_name: str) -> Path | None:
     return None
 
 
-def _run_manim_render(
-    code: str,
-    scene_name: str,
-    job_id: str | None = None,
+def _run_process(
+    cmd: list[str],
+    workspace: Path,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
-    """
-    Execute manim render. Returns dict with keys:
-    - success: bool
-    - video_path: str | None
-    - error: str | None
-    - stderr: str | None
-    """
-    # Create a unique temp workspace
-    workspace = TEMP_DIR / f"render_{uuid.uuid4().hex}"
-    workspace.mkdir(parents=True, exist_ok=True)
-
-    scene_file = workspace / "scene.py"
-    scene_file.write_text(code, encoding="utf-8")
-
-    if job_id:
-        _update_job(job_id, status=JobStatus.RUNNING)
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "manim",
-        "-ql",  # low quality for speed
-        "--media_dir",
-        str(workspace),
-        str(scene_file),
-        scene_name,
-    ]
-
     try:
         proc = subprocess.Popen(
             cmd,
@@ -418,7 +514,6 @@ def _run_manim_render(
         except Exception:
             proc.kill()
         stdout, stderr = proc.communicate()
-        _cleanup_workspace(workspace)
         return {
             "success": False,
             "video_path": None,
@@ -426,7 +521,6 @@ def _run_manim_render(
             "stderr": stderr or getattr(exc, "stderr", None),
         }
     except Exception as exc:
-        _cleanup_workspace(workspace)
         return {
             "success": False,
             "video_path": None,
@@ -435,7 +529,6 @@ def _run_manim_render(
         }
 
     if proc.returncode != 0:
-        _cleanup_workspace(workspace)
         return {
             "success": False,
             "video_path": None,
@@ -443,17 +536,70 @@ def _run_manim_render(
             "stderr": stderr,
         }
 
-    video_path = _find_rendered_video(workspace, scene_name)
-    if video_path is None or not video_path.exists():
-        _cleanup_workspace(workspace)
-        return {
-            "success": False,
-            "video_path": None,
-            "error": "Video file not found after rendering",
-            "stderr": stderr,
-        }
+    return {"success": True, "stderr": stderr}
 
-    # Upload to Supabase Storage if configured, otherwise keep local
+
+def _copy_render_output(video_path: Path, scene_name: str, job_id: str | None) -> Path:
+    output_filename = f"{job_id or uuid.uuid4().hex}_{scene_name}.mp4"
+    output_path = OUTPUT_DIR / output_filename
+    shutil.copy(str(video_path), str(output_path))
+    return output_path
+
+
+def _write_concat_manifest(segment_paths: list[Path], manifest_path: Path) -> None:
+    lines = []
+    for path in segment_paths:
+        safe_path = str(path.resolve()).replace("'", "'\\''")
+        lines.append(f"file '{safe_path}'")
+    manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _concat_segment_videos(segment_paths: list[Path], output_path: Path, workspace: Path) -> dict[str, Any]:
+    manifest = workspace / "segments.txt"
+    _write_concat_manifest(segment_paths, manifest)
+    copy_cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(manifest),
+        "-c",
+        "copy",
+        str(output_path),
+    ]
+    result = _run_process(copy_cmd, workspace, timeout=SEGMENT_RENDER_TIMEOUT)
+    if result["success"] and output_path.exists():
+        return result
+
+    transcode_cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(manifest),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        str(output_path),
+    ]
+    return _run_process(transcode_cmd, workspace, timeout=SEGMENT_RENDER_TIMEOUT)
+
+
+def _upload_or_keep_video(
+    video_path: Path,
+    scene_name: str,
+    job_id: str | None,
+    stderr: str | None,
+) -> dict[str, Any]:
     supa_video_url: str | None = None
     if _use_supabase() and job_id:
         supa_video_url = supa_upload_video(job_id, video_path)
@@ -466,7 +612,6 @@ def _run_manim_render(
                 detail=f"url={supa_video_url}",
             )
         else:
-            _cleanup_workspace(workspace)
             return {
                 "success": False,
                 "video_path": None,
@@ -474,12 +619,7 @@ def _run_manim_render(
                 "stderr": stderr,
             }
 
-    # Keep local copy for fallback serving
-    output_filename = f"{job_id or uuid.uuid4().hex}_{scene_name}.mp4"
-    output_path = OUTPUT_DIR / output_filename
-    shutil.copy(str(video_path), str(output_path))
-    _cleanup_workspace(workspace)
-
+    output_path = _copy_render_output(video_path, scene_name, job_id)
     return {
         "success": True,
         "video_path": supa_video_url or str(output_path),
@@ -487,6 +627,117 @@ def _run_manim_render(
         "error": None,
         "stderr": stderr,
     }
+
+
+def _run_single_manim_render(
+    scene_file: Path,
+    scene_name: str,
+    workspace: Path,
+    timeout: int,
+    segment: RenderSegment | None = None,
+) -> dict[str, Any]:
+    result = _run_process(
+        _build_manim_command(scene_file, scene_name, workspace, segment=segment),
+        workspace,
+        timeout=timeout,
+    )
+    if not result["success"]:
+        return result
+
+    video_path = _find_rendered_video(workspace, scene_name)
+    if video_path is None or not video_path.exists():
+        return {
+            "success": False,
+            "video_path": None,
+            "error": "Video file not found after rendering",
+            "stderr": result.get("stderr"),
+        }
+    return {"success": True, "video_path": str(video_path), "stderr": result.get("stderr")}
+
+
+def _run_manim_render(
+    code: str,
+    scene_name: str,
+    job_id: str | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    render_mode: str = "single",
+) -> dict[str, Any]:
+    """
+    Execute manim render. Returns dict with keys:
+    - success: bool
+    - video_path: str | None
+    - error: str | None
+    - stderr: str | None
+    """
+    workspace = TEMP_DIR / f"render_{uuid.uuid4().hex}"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    scene_file = workspace / "scene.py"
+    scene_file.write_text(code, encoding="utf-8")
+    segments = _plan_render_segments(code, mode=render_mode)
+
+    if job_id:
+        _update_job(
+            job_id,
+            status=JobStatus.RUNNING,
+            metadata=_render_metadata("segmented" if segments else "single", "rendering", segments),
+        )
+
+    try:
+        if not segments:
+            result = _run_single_manim_render(scene_file, scene_name, workspace, timeout)
+            if not result["success"]:
+                return result
+            return _upload_or_keep_video(Path(result["video_path"]), scene_name, job_id, result.get("stderr"))
+
+        segment_paths: list[Path] = []
+        stderr_parts: list[str] = []
+        for segment in segments:
+            if job_id:
+                _update_job(
+                    job_id,
+                    metadata=_render_metadata(
+                        "segmented",
+                        "rendering_segment",
+                        segments,
+                        completed=len(segment_paths),
+                        current=segment.index,
+                    ),
+                )
+            result = _run_single_manim_render(
+                scene_file,
+                scene_name,
+                workspace,
+                timeout=SEGMENT_RENDER_TIMEOUT,
+                segment=segment,
+            )
+            if not result["success"]:
+                return result
+            stable_segment_path = workspace / f"segment_{segment.index}.mp4"
+            shutil.copy(str(result["video_path"]), str(stable_segment_path))
+            segment_paths.append(stable_segment_path)
+            if result.get("stderr"):
+                stderr_parts.append(result["stderr"])
+
+        if job_id:
+            _update_job(
+                job_id,
+                metadata=_render_metadata("segmented", "concatenating", segments, completed=len(segment_paths)),
+            )
+        final_path = workspace / f"{scene_name}_segmented.mp4"
+        concat_result = _concat_segment_videos(segment_paths, final_path, workspace)
+        if not concat_result["success"] or not final_path.exists():
+            return {
+                "success": False,
+                "video_path": None,
+                "error": concat_result.get("error") or "Segment concat failed",
+                "stderr": concat_result.get("stderr"),
+            }
+        if concat_result.get("stderr"):
+            stderr_parts.append(concat_result["stderr"])
+        return _upload_or_keep_video(final_path, scene_name, job_id, "\n".join(stderr_parts) or None)
+    finally:
+        _cleanup_workspace(workspace)
 
 
 def _cleanup_workspace(workspace: Path) -> None:
@@ -597,26 +848,41 @@ def render_async() -> tuple:
         return jsonify({"error": error}), 400
 
     code, scene_name = validated
+    render_mode = str(data.get("render_mode", "auto")).strip().lower()
+    if render_mode not in {"auto", "single", "segmented"}:
+        return jsonify({"error": "Field 'render_mode' must be auto, single, or segmented"}), 400
     try:
-        job_id = _register_job(code, scene_name, client_ip=client_id)
+        initial_segments = _plan_render_segments(code, mode=render_mode)
+        initial_metadata = _render_metadata(
+            "segmented" if initial_segments else "single",
+            "pending",
+            initial_segments,
+        )
+        job_id = _register_job(code, scene_name, client_ip=client_id, metadata=initial_metadata)
     except RuntimeError:
         return jsonify({"error": "Failed to persist render job. Please try again."}), 500
 
     def _background_render() -> None:
-        result = _run_manim_render(code, scene_name, job_id=job_id)
+        result = _run_manim_render(code, scene_name, job_id=job_id, render_mode=render_mode)
         if result["success"]:
             video_url = result.get("video_url")
+            done_metadata = dict(_get_job(job_id).metadata if _get_job(job_id) else initial_metadata)
+            done_metadata["stage"] = "done"
             _update_job(
                 job_id,
                 status=JobStatus.DONE,
                 video_path=video_url or result["video_path"],
+                metadata=done_metadata,
             )
         else:
+            failed_metadata = dict(_get_job(job_id).metadata if _get_job(job_id) else initial_metadata)
+            failed_metadata["stage"] = "failed"
             _update_job(
                 job_id,
                 status=JobStatus.FAILED,
                 error_message=result["error"],
                 stderr=result.get("stderr"),
+                metadata=failed_metadata,
             )
             if _use_supabase():
                 supa_insert_log(
@@ -637,6 +903,7 @@ def render_async() -> tuple:
                 "status": JobStatus.PENDING.value,
                 "status_url": f"/status/{job_id}",
                 "download_url": f"/download/{job_id}",
+                "render_mode": initial_metadata["render_mode"],
             }
         ),
         202,
@@ -656,6 +923,11 @@ def get_status(job_id: str) -> tuple:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+    if job.metadata:
+        resp["render_mode"] = job.metadata.get("render_mode")
+        resp["stage"] = job.metadata.get("stage")
+        resp["progress"] = job.metadata.get("progress")
+        resp["segments"] = job.metadata.get("segments")
     if job.error_message:
         resp["error"] = job.error_message
     if job.stderr:

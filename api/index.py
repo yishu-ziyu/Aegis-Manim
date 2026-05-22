@@ -42,8 +42,8 @@ DISABLED_CLOUD_PROVIDERS = {"codex-cli", "codex-local-proxy"}
 LOCAL_HOSTNAMES = {"localhost"}
 MAX_PUBLIC_BODY_BYTES = 32_000
 MAX_PUBLIC_PROMPT_CHARS = 4_000
-MAX_PUBLIC_RENDER_PLAYS = 8
-MAX_PUBLIC_LAGGED_STARTS = 1
+MAX_PUBLIC_RENDER_PLAYS = 24
+MAX_PUBLIC_LAGGED_STARTS = 3
 PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-kimi-priority"
 PUBLIC_TRIAL_PLANS = {
     "trial-kimi-priority": {
@@ -321,9 +321,9 @@ def hosted_render_budget_prompt(prompt: str, warnings: list[str]) -> str:
             "",
             "Hosted render budget correction:",
             "; ".join(warnings),
-            "Regenerate the complete Manim Python file as a short reliable preview scene.",
-            "Hard limits: at most 7 self.play(...) calls, at most 1 LaggedStart(...), no dense object swarms, no long wait chains.",
-            "Target video length: 15-35 seconds. Prefer one visual metaphor, one mechanism animation, and one summary insight.",
+            "Regenerate the complete Manim Python file as a reliable segmented-render scene.",
+            "Hard limits: at most 24 self.play(...) calls, at most 3 LaggedStart(...), no dense object swarms, no long wait chains.",
+            "Target video length: 45-120 seconds. Prefer a clear multi-step explanation over cutting core teaching content.",
         ]
     )
 
@@ -719,6 +719,7 @@ class handler(BaseHTTPRequestHandler):
             # Validate
             code = str(payload.get("code", "")).strip()
             scene_name = str(payload.get("sceneName", "GeneratedScene")).strip()
+            render_mode = str(payload.get("renderMode", payload.get("render_mode", "auto"))).strip() or "auto"
             if not code:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
                 return
@@ -726,7 +727,7 @@ class handler(BaseHTTPRequestHandler):
             status, response = _proxy_to_render_backend(
                 "/render-async",
                 method="POST",
-                payload={"code": code, "scene_name": scene_name},
+                payload={"code": code, "scene_name": scene_name, "render_mode": render_mode},
                 timeout=15,
             )
             self._send_json(HTTPStatus(status), response)

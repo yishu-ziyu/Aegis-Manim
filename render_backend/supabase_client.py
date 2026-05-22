@@ -118,6 +118,7 @@ def update_job(
     video_name: str | None = None,
     error_message: str | None = None,
     stderr: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Update render job fields."""
     payload: dict[str, Any] = {"updated_at": datetime.now(UTC).isoformat()}
@@ -133,6 +134,8 @@ def update_job(
         payload["error_message"] = error_message
     if stderr is not None:
         payload["stderr"] = stderr
+    if metadata is not None:
+        payload["metadata"] = metadata
 
     filters = f"job_id=eq.{job_id}"
     if expected_status is not None:

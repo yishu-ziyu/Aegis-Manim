@@ -137,11 +137,11 @@ Assign consistent colors to conceptual roles:
    - Compress Chinese text — remove filler words. Maximum 8 Chinese characters per line, maximum 2 lines per screen.
    - Chinese text display duration: number of characters × 0.5 seconds + 1 second buffer.
 8. **Runtime Budget**:
-   - Default output must be a short, reliable preview scene that renders on a small cloud CPU in under 120 seconds.
-   - Prefer 4-7 `self.play(...)` calls total. Do not create dozens of slices, dots, labels, arrows, or staggered objects.
+   - Default output should be a clear teaching scene that can render in segmented batches on a small cloud CPU.
+   - Prefer 8-20 `self.play(...)` calls total. Do not create dozens of slices, dots, labels, arrows, or staggered objects.
    - Avoid expensive `LaggedStart` over large groups, dense curves, many `Sector` objects, long `run_time` chains, and complex updaters unless the user explicitly asks for a longer production animation.
-   - Keep the final video around 15-35 seconds. Use `run_time=0.5-1.5` and `self.wait(0.3-1)` unless a key insight genuinely needs more time.
-   - If a concept is complex, show one minimal example and one summary insight instead of a full lecture.
+   - Keep the final video around 45-120 seconds. Use `run_time=0.5-2` and `self.wait(0.3-1.5)` unless a key insight genuinely needs more time.
+   - If a concept is complex, use several simple visual steps rather than one dense overloaded scene.
 
 # Golden Samples (Few-Shot)
 
