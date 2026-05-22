@@ -187,8 +187,38 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert response["ok"] is True
         assert len(calls) == 2
         assert "Hosted render budget correction" in calls[1]
-        assert "at most 24 self.play" in calls[1]
+        assert "at most 14 self.play" in calls[1]
         assert str(response["code"]).count("self.play(") == 1
+
+    def test_trial_uses_stable_template_when_repair_still_exceeds_budget(self) -> None:
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            heavy = "\n".join("        self.play(Write(Text('x', font_size=24)))" for _ in range(30))
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n"
+                + heavy
+                + "\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {
+                    "prompt": "可视化帕累托最优过程。",
+                    "provider": "trial-minimax-direct",
+                    "sceneName": "GeneratedScene",
+                }
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["model"] == "stable-template-fallback"
+        assert "不能让一人更好" in str(response["code"])
 
     def test_trial_returns_stable_template_when_server_models_are_unavailable(self) -> None:
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
