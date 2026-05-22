@@ -165,6 +165,41 @@ Verification so far:
 - `git diff --check` passed.
 - `bash -n scripts/start_aegis_local.command` passed.
 
+## 2026-05-22 Segmented Render Quality Recovery
+
+User direction:
+
+- Do not permanently reduce teaching quality just to fit a small Render worker.
+- Prefer either a better rendering platform later, or split large renders into smaller batches and recombine them.
+
+Implementation queued:
+
+- Render Backend async jobs now accept `render_mode`: `auto`, `single`, or `segmented`.
+- Vercel and local Web proxy now submit `render_mode: auto` by default.
+- `auto` keeps short scenes on the existing single-render path.
+- Longer scenes are split by generated Manim event count (`self.play(...)` / `self.wait(...)`), rendered with Manim `-n start,end`, then concatenated with `ffmpeg` into one final MP4.
+- Only the final MP4 is copied/uploaded; partial segment files remain temporary.
+- Segment state is stored in the existing `render_jobs.metadata` JSON field, so no Supabase schema migration is needed.
+- `/status/<job_id>` now exposes `render_mode`, `stage`, `progress`, and `segments`.
+- Public generation limits were relaxed from short-preview limits to segmented-render friendly limits:
+  - hard gate: at most 24 `self.play(...)`
+  - hard gate: at most 3 `LaggedStart(...)`
+  - target: 45-120 second multi-step teaching scenes
+
+Verification:
+
+- `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py -q` passed with `68 passed`.
+- `python -m py_compile render_backend/app.py render_backend/supabase_client.py api/index.py core/web_app.py` passed.
+- `git diff --check` passed.
+- Local real segmented render smoke passed: a 9-animation scene rendered through `render_mode=segmented`, concatenated successfully, and produced `render_backend/outputs/segmented-smoke_GeneratedScene.mp4` with 15561 bytes.
+
+Remaining deployment check:
+
+- Push the segmented-render commit.
+- Confirm Render deploy picks it up and `/health` remains OK.
+- Redeploy Vercel if GitHub auto-deploy does not pick up `api/index.py`.
+- Run one live public render with a >8-play scene and confirm `/api/render/status/<job_id>` reports segmented progress, then a final playable MP4.
+
 ## Do Not Reopen These Questions
 
 - Do not create another Supabase project unless the current project is deleted or explicitly rejected.

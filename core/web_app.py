@@ -185,7 +185,7 @@ def build_teaching_brief(prompt: str) -> str:
             "语言策略：默认使用中文标题、中文标签、中文阶段说明和中文结论；变量符号可以保留英文缩写，但必须用中文解释含义。",
             "排版策略：所有 Text 都写 font_size；长解释拆成 VGroup 多行短句，先 FadeOut 或 ReplacementTransform 旧讲解再出现新讲解。",
             "Manim 约束：使用 Text，不使用 Tex/MathTex；避免依赖 LaTeX；代码必须能在本地 Manim 版本稳定渲染。",
-            "运行预算：默认生成 15-35 秒短视频，4-7 个 self.play，总对象数少，避免复杂 LaggedStart、密集点阵、长等待和大量扇形/切片。",
+            "运行预算：默认生成 45-120 秒中等复杂度视频，8-20 个 self.play，适合分段渲染；避免复杂 LaggedStart、密集点阵、长等待和大量扇形/切片。",
         ]
     )
 
@@ -2136,7 +2136,7 @@ def make_index_html() -> str:
     async function startAutoRender(code, sceneName) {{
       if (!code) return;
       setStatus("代码已生成，正在提交渲染任务...", "");
-      const renderPayload = {{ code, scene_name: sceneName }};
+      const renderPayload = {{ code, scene_name: sceneName, render_mode: "auto" }};
       let renderResponse = null;
       let renderData = null;
 
@@ -2161,7 +2161,7 @@ def make_index_html() -> str:
           const proxyResp = await fetch("/api/render", {{
             method: "POST",
             headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify({{ code, sceneName }})
+            body: JSON.stringify({{ code, sceneName, renderMode: "auto" }})
           }});
           renderResponse = proxyResp;
           renderData = await proxyResp.json();
@@ -2821,6 +2821,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
             code = str(payload.get("code", "")).strip()
             scene_name = safe_scene_name(str(payload.get("sceneName", payload.get("scene_name", "GeneratedScene"))))
+            render_mode = str(payload.get("renderMode", payload.get("render_mode", "auto"))).strip() or "auto"
             if not code:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
                 return
@@ -2828,7 +2829,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             status, response = proxy_render_backend(
                 "/render-async",
                 method="POST",
-                payload={"code": code, "scene_name": scene_name},
+                payload={"code": code, "scene_name": scene_name, "render_mode": render_mode},
                 timeout=15,
             )
             self._send_json(status, response)

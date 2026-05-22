@@ -29,6 +29,7 @@ def _row(
     updated_at: str | None = None,
     video_path: str | None = None,
     error_message: str | None = None,
+    metadata: dict | None = None,
 ) -> dict[str, str | None]:
     now = datetime.now(UTC).isoformat()
     return {
@@ -41,6 +42,7 @@ def _row(
         "video_path": video_path,
         "error_message": error_message,
         "stderr": None,
+        "metadata": metadata or {},
     }
 
 
@@ -269,6 +271,123 @@ def test_status_completed_supabase_job_exposes_playable_video_url(monkeypatch):
     assert payload["status"] == "done"
     assert payload["video_url"] == storage_url
     assert payload["download_url"] == "/download/job-1"
+
+
+@requires_backend
+def test_plan_render_segments_splits_long_scene_by_render_events():
+    code = """
+from manim import *
+class GeneratedScene(Scene):
+    def construct(self):
+        self.play(Write(Text("1")))
+        self.wait(0.1)
+        self.play(Write(Text("2")))
+        self.wait(0.1)
+        self.play(Write(Text("3")))
+"""
+
+    segments = backend._plan_render_segments(code, mode="segmented", segment_size=2)
+
+    assert [(segment.index, segment.start, segment.end) for segment in segments] == [
+        (1, 0, 1),
+        (2, 2, 3),
+        (3, 4, 4),
+    ]
+
+
+@requires_backend
+def test_auto_render_mode_keeps_short_scene_single():
+    code = """
+from manim import *
+class GeneratedScene(Scene):
+    def construct(self):
+        self.play(Write(Text("short")))
+"""
+
+    assert backend._plan_render_segments(code, mode="auto", threshold=8) == []
+
+
+@requires_backend
+def test_build_manim_command_adds_animation_range_for_segment(tmp_path):
+    scene_file = tmp_path / "scene.py"
+    segment = backend.RenderSegment(index=2, start=6, end=11)
+
+    cmd = backend._build_manim_command(scene_file, "GeneratedScene", tmp_path, segment=segment)
+
+    assert "-n" in cmd
+    assert cmd[cmd.index("-n") + 1] == "6,11"
+
+
+@requires_backend
+def test_write_concat_manifest_preserves_segment_order(tmp_path):
+    segment_paths = [tmp_path / "part one.mp4", tmp_path / "part_two.mp4"]
+    manifest = tmp_path / "segments.txt"
+
+    backend._write_concat_manifest(segment_paths, manifest)
+
+    assert manifest.read_text(encoding="utf-8").splitlines() == [
+        f"file '{segment_paths[0].resolve()}'",
+        f"file '{segment_paths[1].resolve()}'",
+    ]
+
+
+@requires_backend
+def test_segmented_render_concats_then_uploads_only_final_video(monkeypatch, tmp_path):
+    code = """
+from manim import *
+class GeneratedScene(Scene):
+    def construct(self):
+        self.play(Write(Text("1")))
+        self.play(Write(Text("2")))
+        self.play(Write(Text("3")))
+        self.play(Write(Text("4")))
+        self.play(Write(Text("5")))
+        self.play(Write(Text("6")))
+        self.play(Write(Text("7")))
+"""
+    segment_calls: list[tuple[int, int]] = []
+    uploaded: list[Path] = []
+
+    monkeypatch.setattr(backend, "TEMP_DIR", tmp_path / "temp")
+    monkeypatch.setattr(backend, "OUTPUT_DIR", tmp_path / "outputs")
+    backend.TEMP_DIR.mkdir(exist_ok=True)
+    backend.OUTPUT_DIR.mkdir(exist_ok=True)
+    monkeypatch.setattr(backend, "_use_supabase", lambda: True)
+    monkeypatch.setattr(backend, "_update_job", lambda *_, **__: None)
+    monkeypatch.setattr(backend, "supa_insert_log", lambda **_: None)
+
+    def fake_single(scene_file, scene_name, workspace, timeout, segment=None):
+        assert segment is not None
+        segment_calls.append((segment.start, segment.end))
+        video = workspace / f"rendered_segment_{segment.index}.mp4"
+        video.write_bytes(b"segment")
+        return {"success": True, "video_path": str(video), "stderr": ""}
+
+    def fake_concat(segment_paths, output_path, workspace):
+        assert [path.name for path in segment_paths] == ["segment_1.mp4", "segment_2.mp4"]
+        output_path.write_bytes(b"final")
+        return {"success": True, "stderr": ""}
+
+    def fake_upload(job_id, file_path):
+        uploaded.append(Path(file_path))
+        return "https://example.supabase.co/storage/v1/object/public/manim-videos/job-1/final.mp4"
+
+    monkeypatch.setattr(backend, "_run_single_manim_render", fake_single)
+    monkeypatch.setattr(backend, "_concat_segment_videos", fake_concat)
+    monkeypatch.setattr(backend, "supa_upload_video", fake_upload)
+
+    result = backend._run_manim_render(
+        code,
+        "GeneratedScene",
+        job_id="job-1",
+        render_mode="segmented",
+    )
+
+    assert result["success"] is True
+    assert result["video_path"].startswith("https://example.supabase.co/")
+    assert segment_calls == [(0, 5), (6, 6)]
+    assert uploaded == [uploaded[0]]
+    assert uploaded[0].name == "GeneratedScene_segmented.mp4"
 
 
 @requires_backend

@@ -110,8 +110,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert "默认使用中文标题" in brief
         assert "变量符号可以保留英文缩写" in brief
         assert "不使用 Tex/MathTex" in brief
-        assert "15-35 秒短视频" in brief
-        assert "4-7 个 self.play" in brief
+        assert "45-120 秒中等复杂度视频" in brief
+        assert "8-20 个 self.play" in brief
 
 
 if __name__ == "__main__":

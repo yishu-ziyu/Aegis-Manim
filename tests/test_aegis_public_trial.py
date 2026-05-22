@@ -150,7 +150,7 @@ class AegisPublicTrialTest(unittest.TestCase):
             calls.append(str(kwargs["user_prompt"]))
             provider = gateway.resolve_provider(str(kwargs["provider_id"]))
             if len(calls) == 1:
-                heavy = "\n".join("        self.play(Write(Text('x', font_size=24)))" for _ in range(12))
+                heavy = "\n".join("        self.play(Write(Text('x', font_size=24)))" for _ in range(30))
                 return (
                     "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n"
                     + heavy
@@ -179,7 +179,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert response["ok"] is True
         assert len(calls) == 2
         assert "Hosted render budget correction" in calls[1]
-        assert "at most 7 self.play" in calls[1]
+        assert "at most 24 self.play" in calls[1]
         assert str(response["code"]).count("self.play(") == 1
 
     def test_public_gateway_rejects_arbitrary_provider_and_long_prompt(self) -> None:
