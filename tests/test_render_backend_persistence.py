@@ -97,14 +97,16 @@ def test_get_job_reads_supabase_first_and_refreshes_memory_cache(monkeypatch):
 
 
 @requires_backend
-def test_recover_jobs_from_supabase_restores_pending_and_running_cache(monkeypatch):
+def test_recover_jobs_from_supabase_fails_preexisting_jobs_instead_of_restarting(monkeypatch):
     rows = [
         _row("pending-job", metadata={"render_mode": "auto"}),
         _row("running-job", status="running", metadata={"render_mode": "segmented"}),
     ]
     restarted: list[tuple[str, str]] = []
+    updates: list[dict[str, object]] = []
     monkeypatch.setattr(backend, "_use_supabase", lambda: True)
     monkeypatch.setattr(backend, "supa_list_jobs_by_status", lambda statuses: rows)
+    monkeypatch.setattr(backend, "supa_update_job", lambda **kwargs: updates.append(kwargs) or _row(str(kwargs["job_id"]), status="failed"))
     monkeypatch.setattr(
         backend,
         "_start_render_job_thread",
@@ -114,8 +116,12 @@ def test_recover_jobs_from_supabase_restores_pending_and_running_cache(monkeypat
     backend._recover_jobs_from_supabase()
 
     assert set(backend._jobs) == {"pending-job", "running-job"}
-    assert backend._jobs["running-job"].status == backend.JobStatus.RUNNING
-    assert restarted == [("pending-job", "auto"), ("running-job", "segmented")]
+    assert backend._jobs["pending-job"].status == backend.JobStatus.FAILED
+    assert backend._jobs["running-job"].status == backend.JobStatus.FAILED
+    assert "Render instance restarted unexpectedly" in str(backend._jobs["running-job"].error_message)
+    assert restarted == []
+    assert [update["job_id"] for update in updates] == ["pending-job", "running-job"]
+    assert all(update["status"] == "failed" for update in updates)
 
 
 @requires_backend

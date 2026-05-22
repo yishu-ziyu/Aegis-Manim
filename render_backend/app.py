@@ -313,19 +313,35 @@ def _recover_jobs_from_supabase() -> None:
     if not _use_supabase():
         return
     rows = supa_list_jobs_by_status(["pending", "running"])
-    recovered_jobs: list[RenderJob] = []
+    failed_jobs: list[str] = []
     with _jobs_lock:
         for row in rows:
             try:
                 job = _row_to_job(row)
+                job.status = JobStatus.FAILED
+                job.error_message = ORPHAN_JOB_MESSAGE
+                job.metadata = {
+                    **(job.metadata or {}),
+                    "stage": "failed",
+                    "recovered_after_restart": False,
+                }
                 _jobs[row["job_id"]] = job
-                recovered_jobs.append(job)
+                failed_jobs.append(job.job_id)
             except (KeyError, ValueError) as exc:
                 print(f"[recovery] Skipping invalid job row: {exc}")
-    print(f"[recovery] Restored {len(rows)} jobs from Supabase")
-    for job in recovered_jobs:
-        render_mode = str((job.metadata or {}).get("render_mode") or "auto")
-        _start_render_job_thread(job.job_id, job.code, job.scene_name, render_mode=render_mode)
+    for job_id in failed_jobs:
+        supa_update_job(
+            job_id=job_id,
+            status=JobStatus.FAILED.value,
+            expected_status=[JobStatus.PENDING.value, JobStatus.RUNNING.value],
+            error_message=ORPHAN_JOB_MESSAGE,
+            metadata={
+                **(_jobs[job_id].metadata or {}),
+                "stage": "failed",
+                "recovered_after_restart": False,
+            },
+        )
+    print(f"[recovery] Marked {len(failed_jobs)} pre-existing jobs failed after restart")
 
 
 def _parse_supabase_datetime(value: str) -> datetime:
