@@ -83,6 +83,17 @@ class AegisWebUiTest(unittest.TestCase):
         assert "baseUrl" not in forwarded
         assert "apiKey" not in forwarded
 
+    def test_windows_local_launcher_uses_cloud_generation_and_local_rendering(self) -> None:
+        launcher = PROJECT_ROOT / "scripts" / "start_aegis_local_windows.bat"
+        content = launcher.read_text(encoding="utf-8")
+
+        assert "AEGIS_CLOUD_GENERATE_URL=https://manim-main.vercel.app/api/generate" in content
+        assert "RENDER_BACKEND_URL=http://127.0.0.1:%RENDER_PORT%" in content
+        assert "render_backend\\requirements.txt" in content
+        assert "winget install Gyan.FFmpeg" in content
+        assert "SUPABASE" not in content
+        assert "SERVICE_KEY" not in content
+
     def test_teaching_brief_requires_chinese_visible_language(self) -> None:
         brief = web_app.build_teaching_brief("解释 $MP_L < 0$ 的经济含义")
 

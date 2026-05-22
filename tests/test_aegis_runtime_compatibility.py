@@ -96,6 +96,19 @@ supply = axes.plot(lambda x: 2 + x, line_config={"stroke_opacity": 0.5})
         assert "line_config" not in patched
         assert any("line_config" in note for note in notes)
 
+    def test_sector_outer_radius_is_rewritten_to_radius_keyword(self) -> None:
+        code = """
+cake_slice1 = Sector(outer_radius=1.5, angle=PI, color="#E76F51")
+ring = AnnularSector(inner_radius=1, outer_radius=2, angle=PI / 2)
+"""
+
+        patched, notes = manim_agent.apply_runtime_compatibility_fixes(code)
+
+        assert 'Sector(radius=1.5, angle=PI, color="#E76F51")' in patched
+        assert "AnnularSector(inner_radius=1, outer_radius=2, angle=PI / 2)" in patched
+        assert "Sector(outer_radius" not in patched
+        assert any("Sector outer_radius" in note for note in notes)
+
     def test_add_coordinates_is_removed_without_latex(self) -> None:
         code = "axes = Axes()\naxes.add_coordinates()\nself.play(Create(axes))"
 
