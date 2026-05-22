@@ -143,6 +143,45 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert response["sceneName"] == "ParetoOptimalityScene"
         assert response["sceneNameInput"] == "GeneratedScene"
 
+    def test_trial_regenerates_when_generated_code_exceeds_hosted_render_budget(self) -> None:
+        calls: list[str] = []
+
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            calls.append(str(kwargs["user_prompt"]))
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            if len(calls) == 1:
+                heavy = "\n".join("        self.play(Write(Text('x', font_size=24)))" for _ in range(12))
+                return (
+                    "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n"
+                    + heavy
+                    + "\n",
+                    provider,
+                    "hidden",
+                )
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n"
+                "        self.play(Write(Text('短例子', font_size=24)))\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {"prompt": "将帕累托最优的过程可视化。", "sceneName": "GeneratedScene"}
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert len(calls) == 2
+        assert "Hosted render budget correction" in calls[1]
+        assert "at most 7 self.play" in calls[1]
+        assert str(response["code"]).count("self.play(") == 1
+
     def test_public_gateway_rejects_arbitrary_provider_and_long_prompt(self) -> None:
         status, response = gateway.generate_manim_code_for_gateway(
             {"prompt": "解释消费者剩余", "provider": "custom-openai"}

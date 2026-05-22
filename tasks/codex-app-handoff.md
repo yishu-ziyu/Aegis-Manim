@@ -148,6 +148,7 @@ Fixes queued:
 - Browser-side local Render calls now use the configured render API key instead of a hard-coded key.
 - Mac and Windows launchers avoid a stale occupied render port when the user did not explicitly choose one.
 - Generation prompts now require short, cloud-renderable scenes by default: 15-35 seconds, 4-7 `self.play` calls, sparse objects, and no dense/long animation patterns.
+- Vercel public trial generation now checks returned code against hosted-render limits and automatically regenerates if it has too many `self.play(...)` or `LaggedStart(...)` calls.
 
 Verification so far:
 
@@ -159,6 +160,7 @@ Verification so far:
 - `pytest -o addopts='' tests/test_aegis_runtime_compatibility.py tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py -q` passed with `31 passed`.
 - `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py -q` passed with `61 passed`.
 - After local proxy and prompt-budget fixes, `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py -q` passed with `62 passed`.
+- After adding the Vercel budget regeneration gate, `pytest -o addopts='' tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_render_backend_persistence.py tests/test_deploy_cloud_schema.py tests/test_aegis_manim_knowledge.py -q` passed with `63 passed`.
 - `python -m py_compile core/manim_agent.py core/web_app.py api/index.py` passed.
 - `git diff --check` passed.
 - `bash -n scripts/start_aegis_local.command` passed.
