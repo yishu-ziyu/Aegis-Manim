@@ -217,6 +217,16 @@ def _proxy_to_render_backend_raw(path: str, method: str = "GET", payload: dict[s
     return result
 
 
+def _extract_download_video_url(payload: dict[str, object]) -> str | None:
+    video_url = payload.get("video_url")
+    if not isinstance(video_url, str):
+        return None
+    parsed = urlparse(video_url)
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        return None
+    return video_url
+
+
 def build_health_payload() -> dict[str, object]:
     return {
         "ok": True,
@@ -378,6 +388,7 @@ def generate_code_with_trial_plan(
             )
             cleaned_code = extract_python_only(raw_code)
             patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
+            detected_scene_name = local_web_app.detect_scene_name(patched_code, scene_name)
         except Exception as exc:
             last_error = sanitize_upstream_error(exc)
             print(
@@ -401,7 +412,8 @@ def generate_code_with_trial_plan(
             "code": patched_code,
             "warnings": warnings,
             "compatibilityNotes": warnings,
-            "sceneName": scene_name,
+            "sceneName": detected_scene_name,
+            "sceneNameInput": scene_name,
             "codeFile": "vercel-generated-code",
             "requestId": request_id,
             "rendered": False,
@@ -491,6 +503,7 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
         )
         cleaned_code = extract_python_only(raw_code)
         patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
+        detected_scene_name = local_web_app.detect_scene_name(patched_code, scene_name)
     except ValueError as exc:
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
@@ -513,7 +526,8 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
         "code": patched_code,
         "warnings": compatibility_notes,
         "compatibilityNotes": compatibility_notes,
-        "sceneName": scene_name,
+        "sceneName": detected_scene_name,
+        "sceneNameInput": scene_name,
         "codeFile": "vercel-generated-code",
         "requestId": request_id,
         "rendered": False,
@@ -613,6 +627,13 @@ class handler(BaseHTTPRequestHandler):
         if route.startswith("/api/render/download/"):
             job_id = route.split("/api/render/download/", 1)[-1]
             status, response = _proxy_to_render_backend(f"/download/{job_id}")
+            video_url = _extract_download_video_url(response)
+            if status == HTTPStatus.OK and video_url:
+                self.send_response(HTTPStatus.FOUND)
+                self.send_header("Location", video_url)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self._send_json(HTTPStatus(status), response)
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found.", "path": route, "raw_path": self.path, "method": "POST"})

@@ -58,9 +58,8 @@ def main() -> int:
     html = build_index_html()
     assert "Aegis Studio Web" in html
     assert "/api/health" in html
-    assert "Generate Code" in html
-    assert "Vercel 云端模式" in html
-    assert "VERCEL · FREE TRIAL · CODE" in html
+    assert "Generate & Render" in html
+    assert "Vercel 云端只展示能力入口" in html
     assert "内测免费试用：Aegis 后端托管模型额度" in html
     assert "免费试用 · Kimi 优先" in html
     assert "免费试用 · MiniMax 稳定" in html

@@ -8,7 +8,8 @@ No heavy supabase-py client needed.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +19,12 @@ import requests
 STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "manim-videos")
 
 
+class SupabaseReadUnavailable(RuntimeError):
+    """Raised when Supabase cannot answer whether a job exists."""
+
+
 def _supabase_url() -> str:
-    url = os.environ.get("SUPABASE_URL", "")
-    if not url:
-        url = "https://qrmmlolsslnxiamznicf.supabase.co"
-    return url.rstrip("/")
+    return os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 
 
 def _supabase_service_key() -> str:
@@ -30,13 +32,15 @@ def _supabase_service_key() -> str:
     return "".join(os.environ.get("SUPABASE_SERVICE_KEY", "").split())
 
 
-# Headers for service-role requests (bypasses RLS)
-_HEADERS_SR = lambda: {
-    "apikey": _supabase_service_key(),
-    "Authorization": f"Bearer {_supabase_service_key()}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
-}
+def _headers_sr() -> dict[str, str]:
+    """Headers for service-role requests that bypass RLS."""
+    service_key = _supabase_service_key()
+    return {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
 
 
 def _base_url() -> str:
@@ -52,6 +56,20 @@ def _postgrest_url(table: str) -> str:
 
 def _storage_url(path: str) -> str:
     return f"{_base_url()}/storage/v1/{path}"
+
+
+def _request_with_retries(method: str, url: str, **kwargs) -> requests.Response | None:
+    last_error: Exception | None = None
+    timeout = kwargs.pop("timeout", 10)
+    for attempt in range(3):
+        try:
+            return requests.request(method, url, timeout=timeout, **kwargs)
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.2 * (attempt + 1))
+    print(f"[supabase] {method.upper()} failed after retries: {last_error}")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -73,14 +91,17 @@ def insert_job(
         "scene_name": scene_name,
         "client_ip": client_ip,
         "metadata": metadata or {},
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
-    resp = requests.post(
+    resp = _request_with_retries(
+        "post",
         _postgrest_url("render_jobs"),
-        headers=_HEADERS_SR(),
+        headers=_headers_sr(),
         json=payload,
     )
+    if resp is None:
+        return None
     if resp.status_code in (201, 200):
         data = resp.json()
         return data[0] if isinstance(data, list) else data
@@ -91,6 +112,7 @@ def insert_job(
 def update_job(
     job_id: str,
     status: str | None = None,
+    expected_status: str | list[str] | tuple[str, ...] | None = None,
     video_path: str | None = None,
     video_bucket: str | None = None,
     video_name: str | None = None,
@@ -98,7 +120,7 @@ def update_job(
     stderr: str | None = None,
 ) -> dict[str, Any] | None:
     """Update render job fields."""
-    payload: dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    payload: dict[str, Any] = {"updated_at": datetime.now(UTC).isoformat()}
     if status is not None:
         payload["status"] = status
     if video_path is not None:
@@ -112,15 +134,28 @@ def update_job(
     if stderr is not None:
         payload["stderr"] = stderr
 
-    resp = requests.patch(
-        f"{_postgrest_url('render_jobs')}?job_id=eq.{job_id}",
-        headers=_HEADERS_SR(),
+    filters = f"job_id=eq.{job_id}"
+    if expected_status is not None:
+        if isinstance(expected_status, str):
+            filters = f"{filters}&status=eq.{expected_status}"
+        else:
+            status_filter = ",".join(expected_status)
+            filters = f"{filters}&status=in.({status_filter})"
+
+    resp = _request_with_retries(
+        "patch",
+        f"{_postgrest_url('render_jobs')}?{filters}",
+        headers=_headers_sr(),
         json=payload,
     )
+    if resp is None:
+        return None
     if resp.status_code in (200, 204):
         if resp.status_code == 200:
             data = resp.json()
-            return data[0] if isinstance(data, list) else data
+            if isinstance(data, list):
+                return data[0] if data else None
+            return data
         return {"ok": True}
     print(f"[supabase] update_job failed: {resp.status_code} {resp.text[:200]}")
     return None
@@ -128,15 +163,55 @@ def update_job(
 
 def get_job(job_id: str) -> dict[str, Any] | None:
     """Fetch a single render job by job_id."""
-    resp = requests.get(
+    resp = _request_with_retries(
+        "get",
         f"{_postgrest_url('render_jobs')}?job_id=eq.{job_id}&limit=1",
         headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
     )
+    if resp is None:
+        raise SupabaseReadUnavailable(f"Supabase read unavailable for job {job_id}")
     if resp.status_code == 200:
         data = resp.json()
         return data[0] if isinstance(data, list) and data else None
     print(f"[supabase] get_job failed: {resp.status_code} {resp.text[:200]}")
-    return None
+    raise SupabaseReadUnavailable(f"Supabase get_job failed with status {resp.status_code}")
+
+
+def list_jobs_by_status(statuses: list[str]) -> list[dict[str, Any]]:
+    """Fetch all render jobs with any of the given statuses."""
+    if not statuses:
+        return []
+    status_filter = ",".join(statuses)
+    resp = _request_with_retries(
+        "get",
+        f"{_postgrest_url('render_jobs')}?status=in.({status_filter})&order=updated_at.asc",
+        headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
+    )
+    if resp is None:
+        return []
+    if resp.status_code == 200:
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    print(f"[supabase] list_jobs_by_status failed: {resp.status_code} {resp.text[:200]}")
+    return []
+
+
+def job_exists(job_id: str) -> bool:
+    """Return whether a render job exists without fetching its full payload."""
+    resp = _request_with_retries(
+        "get",
+        f"{_postgrest_url('render_jobs')}?job_id=eq.{job_id}&select=job_id&limit=1",
+        headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
+    )
+    if resp is None or resp.status_code != 200:
+        return False
+    data = resp.json()
+    return isinstance(data, list) and bool(data)
+
+
+def update_job_heartbeat(job_id: str) -> bool:
+    """Refresh updated_at for a running job."""
+    return update_job(job_id=job_id) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -159,13 +234,16 @@ def insert_log(
         "message": message,
         "detail": detail,
         "metadata": metadata or {},
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
-    resp = requests.post(
+    resp = _request_with_retries(
+        "post",
         _postgrest_url("job_logs"),
-        headers=_HEADERS_SR(),
+        headers=_headers_sr(),
         json=payload,
     )
+    if resp is None:
+        return None
     if resp.status_code in (201, 200):
         data = resp.json()
         return data[0] if isinstance(data, list) else data
@@ -197,9 +275,13 @@ def upload_video(
         "Authorization": f"Bearer {_supabase_service_key()}",
     }
 
-    with open(file_path, "rb") as f:
-        files = {"file": (file_path.name, f, content_type)}
-        resp = requests.post(upload_url, headers=headers, files=files)
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, content_type)}
+            resp = requests.post(upload_url, headers=headers, files=files, timeout=60)
+    except requests.RequestException as exc:
+        print(f"[supabase] upload_video failed: {exc}")
+        return None
 
     if resp.status_code in (200, 201):
         # Build public URL

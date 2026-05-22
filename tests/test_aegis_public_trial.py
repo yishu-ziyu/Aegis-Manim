@@ -4,12 +4,29 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from urllib.error import URLError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from api import index as gateway  # noqa: E402
+
+
+class FakeUrlopenResponse:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self._body = body
+        self.headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._body
 
 
 class AegisPublicTrialTest(unittest.TestCase):
@@ -103,6 +120,29 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert "MiniMax" in "\n".join(response["warnings"])
         assert "detail" not in response
 
+    def test_trial_response_uses_detected_scene_name(self) -> None:
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            return (
+                "from manim import *\nclass ParetoOptimalityScene(Scene):\n    pass\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {"prompt": "将帕累托最优的过程可视化。", "sceneName": "GeneratedScene"}
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["sceneName"] == "ParetoOptimalityScene"
+        assert response["sceneNameInput"] == "GeneratedScene"
+
     def test_public_gateway_rejects_arbitrary_provider_and_long_prompt(self) -> None:
         status, response = gateway.generate_manim_code_for_gateway(
             {"prompt": "解释消费者剩余", "provider": "custom-openai"}
@@ -115,6 +155,80 @@ class AegisPublicTrialTest(unittest.TestCase):
         )
         assert status == 400
         assert "问题太长" in response["error"]
+
+    def test_public_html_contains_render_poll_and_playback_flow(self) -> None:
+        html = gateway.build_index_html()
+
+        assert 'fetch("/api/render"' in html
+        assert "/api/render/status/" in html
+        assert "/api/render/download/" in html
+        assert "video_url" in html
+        assert 'dlResp.headers.get("content-type")' in html
+        assert "if (!statusResp.ok)" in html
+        assert "渲染失败" in html
+
+    def test_download_proxy_extracts_safe_video_redirect_url(self) -> None:
+        url = "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4"
+
+        assert gateway._extract_download_video_url({"video_url": url}) == url
+        assert gateway._extract_download_video_url({"video_url": "javascript:alert(1)"}) is None
+        assert gateway._extract_download_video_url({"video_url": "/relative/video.mp4"}) is None
+
+    def test_render_proxy_retries_after_cold_start_connection_error(self) -> None:
+        old_url = gateway.RENDER_BACKEND_URL
+        gateway.RENDER_BACKEND_URL = "https://render.example"
+        calls: list[str] = []
+
+        def fake_urlopen(req, timeout=15):
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise URLError("cold")
+            return FakeUrlopenResponse(202, b'{"job_id":"job-1","status":"pending"}')
+
+        original_urlopen = gateway.urllib_request.urlopen
+        original_sleep = gateway.time.sleep
+        gateway.urllib_request.urlopen = fake_urlopen
+        gateway.time.sleep = lambda *_: None
+        try:
+            status, response = gateway._proxy_to_render_backend(
+                "/render-async",
+                method="POST",
+                payload={"code": "from manim import *", "scene_name": "GeneratedScene"},
+            )
+        finally:
+            gateway.urllib_request.urlopen = original_urlopen
+            gateway.time.sleep = original_sleep
+            gateway.RENDER_BACKEND_URL = old_url
+
+        assert status == 202
+        assert response["job_id"] == "job-1"
+        assert calls == [
+            "https://render.example/render-async",
+            "https://render.example/health",
+            "https://render.example/render-async",
+        ]
+
+    def test_render_proxy_returns_friendly_error_when_cold_start_retry_fails(self) -> None:
+        old_url = gateway.RENDER_BACKEND_URL
+        gateway.RENDER_BACKEND_URL = "https://render.example"
+
+        def fail_urlopen(*args, **kwargs):
+            raise URLError("still cold")
+
+        original_urlopen = gateway.urllib_request.urlopen
+        original_sleep = gateway.time.sleep
+        gateway.urllib_request.urlopen = fail_urlopen
+        gateway.time.sleep = lambda *_: None
+        try:
+            status, response = gateway._proxy_to_render_backend("/status/job-1")
+        finally:
+            gateway.urllib_request.urlopen = original_urlopen
+            gateway.time.sleep = original_sleep
+            gateway.RENDER_BACKEND_URL = old_url
+
+        assert status == 502
+        assert response["ok"] is False
+        assert "冷启动" in response["error"]
 
 
 if __name__ == "__main__":
