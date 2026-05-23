@@ -11,6 +11,7 @@ from api.index import (
     build_health_payload,
     build_index_html,
     generate_manim_code_for_gateway,
+    proxy_community_request,
 )
 
 
@@ -78,6 +79,13 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
         await send_json(send, HTTPStatus.OK, build_health_payload())
         return
 
+    if method == "GET" and path == "/api/community/search":
+        raw_query = scope.get("query_string", b"")
+        query = raw_query.decode("utf-8", "replace") if isinstance(raw_query, bytes) else str(raw_query or "")
+        status, response = proxy_community_request(path, query=query)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
     if method == "GET" and path.startswith("/api/render/status/"):
         job_id = path.split("/api/render/status/", 1)[-1]
         status, response = _proxy_to_render_backend(f"/status/{job_id}")
@@ -107,6 +115,20 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             return
 
         status, response = generate_manim_code_for_gateway(payload)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method == "POST" and (path == "/api/community/works" or path.startswith("/api/community/works/")):
+        try:
+            raw_body = await read_body(receive)
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception as exc:
+            await send_json(send, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        status, response = proxy_community_request(path, method="POST", payload=payload)
         await send_json(send, HTTPStatus(status), response)
         return
 

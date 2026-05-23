@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import importlib.util
+import json
 import os
 import sys
 import unittest
@@ -11,6 +14,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from api import index as gateway  # noqa: E402
+
+APP_SPEC = importlib.util.spec_from_file_location("aegis_vercel_asgi_app", PROJECT_ROOT / "app.py")
+assert APP_SPEC and APP_SPEC.loader
+vercel_asgi = importlib.util.module_from_spec(APP_SPEC)
+APP_SPEC.loader.exec_module(vercel_asgi)
 
 
 class FakeUrlopenResponse:
@@ -27,6 +35,37 @@ class FakeUrlopenResponse:
 
     def read(self) -> bytes:
         return self._body
+
+
+async def call_asgi_app(
+    method: str,
+    path: str,
+    *,
+    body: bytes = b"",
+    query_string: bytes = b"",
+) -> tuple[int, dict[str, object]]:
+    messages = [{"type": "http.request", "body": body, "more_body": False}]
+    events: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        events.append(message)
+
+    await vercel_asgi.app(
+        {"type": "http", "method": method, "path": path, "query_string": query_string},
+        receive,
+        send,
+    )
+
+    status = next(event["status"] for event in events if event["type"] == "http.response.start")
+    response_body = b"".join(
+        event.get("body", b"") for event in events if event["type"] == "http.response.body"
+    )
+    return int(status), json.loads(response_body.decode("utf-8")) if response_body else {}
 
 
 class AegisPublicTrialTest(unittest.TestCase):
@@ -343,6 +382,56 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert calls == [
             ("/community/works/work-1/rating", "POST", {"rating": 5, "raterKey": "anon-1"})
         ]
+
+    def test_vercel_asgi_forwards_community_search_query(self) -> None:
+        calls: list[tuple[str, str, str, dict[str, object] | None]] = []
+
+        def fake_community_proxy(route, query="", method="GET", payload=None):
+            calls.append((route, query, method, payload))
+            return 200, {"ok": True, "hit": True, "items": [{"workId": "work-1"}]}
+
+        original = vercel_asgi.proxy_community_request
+        vercel_asgi.proxy_community_request = fake_community_proxy
+        try:
+            status, response = asyncio.run(
+                call_asgi_app(
+                    "GET",
+                    "/api/community/search",
+                    query_string=b"q=%E5%B8%95%E7%B4%AF%E6%89%98&limit=1",
+                )
+            )
+        finally:
+            vercel_asgi.proxy_community_request = original
+
+        assert status == 200
+        assert response["hit"] is True
+        assert calls == [
+            ("/api/community/search", "q=%E5%B8%95%E7%B4%AF%E6%89%98&limit=1", "GET", None)
+        ]
+
+    def test_vercel_asgi_forwards_community_write_payload(self) -> None:
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_community_proxy(route, query="", method="GET", payload=None):
+            calls.append((route, method, payload))
+            return 200, {"ok": True, "reuseCount": 2}
+
+        original = vercel_asgi.proxy_community_request
+        vercel_asgi.proxy_community_request = fake_community_proxy
+        try:
+            status, response = asyncio.run(
+                call_asgi_app(
+                    "POST",
+                    "/api/community/works/work-1/reuse",
+                    body=b'{"userKey":"anon-1"}',
+                )
+            )
+        finally:
+            vercel_asgi.proxy_community_request = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert calls == [("/api/community/works/work-1/reuse", "POST", {"userKey": "anon-1"})]
 
     def test_download_proxy_extracts_safe_video_redirect_url(self) -> None:
         url = "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4"
