@@ -65,6 +65,15 @@ class AegisLLMProviderTest(unittest.TestCase):
         assert provider.default_model == "kimi-for-coding"
         assert provider.requires_api_key
 
+    def test_minimax_coding_cn_provider_uses_anthropic_messages_endpoint(self) -> None:
+        provider = resolve_provider("minimax-coding-cn")
+
+        assert provider.api_type == "anthropic-compatible"
+        assert provider.base_url == "https://api.minimaxi.com/anthropic/v1"
+        assert anthropic_messages_url(provider.base_url) == "https://api.minimaxi.com/anthropic/v1/messages"
+        assert provider.default_model == "MiniMax-M2.7"
+        assert provider.requires_api_key
+
     def test_codex_cli_provider_uses_local_codex_runner(self) -> None:
         calls = []
 

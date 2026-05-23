@@ -77,9 +77,9 @@ def main() -> int:
 
     public_config = public_provider_config()
     providers = public_config["providers"]
-    assert public_config["defaultProvider"] == "trial-kimi-priority"
-    assert public_config["providerStorageKey"] == "aegis.provider.public.v3"
-    assert "aegis.provider.public.v3" in html
+    assert public_config["defaultProvider"] == "trial-minimax-direct"
+    assert public_config["providerStorageKey"] == "aegis.provider.public.v4"
+    assert "aegis.provider.public.v4" in html
     assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct"}
     assert providers["trial-kimi-priority"]["serverManaged"] is True
     assert providers["trial-kimi-priority"]["hideApiKey"] is True
