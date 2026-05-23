@@ -84,15 +84,26 @@ class AegisWebUiTest(unittest.TestCase):
         assert "apiKey" not in forwarded
 
     def test_local_web_server_exposes_render_proxy_routes(self) -> None:
-        assert "if self.path == \"/api/render\":" in Path(web_app.__file__).read_text(encoding="utf-8")
+        assert "if route == \"/api/render\":" in Path(web_app.__file__).read_text(encoding="utf-8")
         html = web_app.make_index_html()
 
-        assert "const RENDER_BACKEND_API_KEY" in html
-        assert '"X-API-Key": RENDER_BACKEND_API_KEY' in html
+        assert "const RENDER_BACKEND_API_KEY" not in html
+        assert '"X-API-Key": RENDER_BACKEND_API_KEY' not in html
         assert '"/api/render/status/' in html
         assert "/api/render/download/${jobId}" in html
         assert "retryCount < 1" in html
         assert "渲染实例刚重启，正在自动重提一次" in html
+
+    def test_web_ui_searches_community_before_generating_and_can_rate_reused_work(self) -> None:
+        html = web_app.make_index_html()
+
+        assert 'fetch("/api/community/search?' in html
+        assert "applyCommunityWork" in html
+        assert "已复用社区高分作品" in html
+        assert 'fetch(`/api/community/works/${communityWorkId}/reuse`' in html
+        assert 'fetch(`/api/community/works/${communityWorkId}/rating`' in html
+        assert 'id="communityActions"' in html
+        assert 'data-rating="5"' in html
 
     def test_local_render_proxy_accepts_snake_case_scene_name_and_detects_code_class(self) -> None:
         render_payload, error_payload = web_app.build_render_backend_submit_payload(

@@ -299,6 +299,51 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert render_payload["scene_name"] == "ParetoOptimalScene"
         assert render_payload["render_mode"] == "auto"
 
+    def test_community_search_proxy_forwards_query_to_render_backend(self) -> None:
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_proxy(path, method="GET", payload=None, timeout=15):
+            calls.append((path, method, payload))
+            return 200, {"ok": True, "hit": False, "items": []}
+
+        original = gateway._proxy_to_render_backend
+        gateway._proxy_to_render_backend = fake_proxy
+        try:
+            status, response = gateway.proxy_community_request(
+                "/api/community/search",
+                query="q=%E5%B8%95%E7%B4%AF%E6%89%98&limit=1",
+            )
+        finally:
+            gateway._proxy_to_render_backend = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert calls == [("/community/search?q=%E5%B8%95%E7%B4%AF%E6%89%98&limit=1", "GET", None)]
+
+    def test_community_write_proxy_forwards_safe_payload_to_render_backend(self) -> None:
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_proxy(path, method="GET", payload=None, timeout=15):
+            calls.append((path, method, payload))
+            return 200, {"ok": True, "work": {"workId": "work-1"}}
+
+        original = gateway._proxy_to_render_backend
+        gateway._proxy_to_render_backend = fake_proxy
+        try:
+            status, response = gateway.proxy_community_request(
+                "/api/community/works/work-1/rating",
+                method="POST",
+                payload={"rating": 5, "raterKey": "anon-1"},
+            )
+        finally:
+            gateway._proxy_to_render_backend = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert calls == [
+            ("/community/works/work-1/rating", "POST", {"rating": 5, "raterKey": "anon-1"})
+        ]
+
     def test_download_proxy_extracts_safe_video_redirect_url(self) -> None:
         url = "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4"
 

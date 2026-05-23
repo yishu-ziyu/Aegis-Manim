@@ -526,6 +526,148 @@ def test_memory_only_mode_keeps_existing_register_and_status_flow():
     assert job.video_path == "/tmp/video.mp4"
 
 
+@requires_backend
+def test_community_search_route_returns_best_published_work(monkeypatch):
+    monkeypatch.setattr(backend, "_use_supabase", lambda: True)
+    monkeypatch.setattr(backend, "supa_list_jobs_by_status", lambda statuses: [])
+    monkeypatch.setattr(
+        backend,
+        "supa_search_community_works",
+        lambda query, limit=5: [
+            {
+                "id": "work-1",
+                "title": "帕累托最优",
+                "prompt": "可视化帕累托最优过程",
+                "scene_name": "ParetoScene",
+                "code": "from manim import *",
+                "video_url": "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4",
+                "rating_avg": 4.8,
+                "rating_count": 7,
+                "reuse_count": 12,
+                "quality_score": 0.91,
+            }
+        ],
+    )
+
+    response = backend.app.test_client().get(
+        "/community/search?q=%E5%B8%95%E7%B4%AF%E6%89%98&limit=1",
+        headers={"X-API-Key": backend.API_KEY},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["hit"] is True
+    assert payload["items"][0]["workId"] == "work-1"
+    assert "service" not in str(payload).lower()
+
+
+@requires_backend
+def test_community_publish_rejects_external_video_urls(monkeypatch):
+    monkeypatch.setattr(backend, "_use_supabase", lambda: True)
+    monkeypatch.setattr(backend, "supa_list_jobs_by_status", lambda statuses: [])
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(
+        backend,
+        "_get_job",
+        lambda job_id: backend.RenderJob(
+            job_id=job_id,
+            status=backend.JobStatus.DONE,
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
+            code="from manim import *",
+            scene_name="GeneratedScene",
+            video_path="https://evil.example/video.mp4",
+        ),
+    )
+
+    response = backend.app.test_client().post(
+        "/community/works",
+        headers={"X-API-Key": backend.API_KEY},
+        json={
+            "title": "外链视频",
+            "prompt": "可视化税收楔子",
+            "sceneName": "GeneratedScene",
+            "code": "from manim import *",
+            "videoUrl": "https://evil.example/video.mp4",
+            "renderJobId": "job-1",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "videoUrl" in response.get_json()["error"]
+
+
+@requires_backend
+def test_community_publish_rate_and_reuse_routes_call_supabase_helpers(monkeypatch):
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(backend, "_use_supabase", lambda: True)
+    monkeypatch.setattr(backend, "supa_list_jobs_by_status", lambda statuses: [])
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(
+        backend,
+        "_get_job",
+        lambda job_id: backend.RenderJob(
+            job_id=job_id,
+            status=backend.JobStatus.DONE,
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
+            code="from manim import *\n# from persisted job",
+            scene_name="PersistedScene",
+            video_path="https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4",
+        ),
+    )
+
+    def fake_insert(**kwargs):
+        calls["insert"] = kwargs
+        return {"id": "work-1", **kwargs}
+
+    def fake_rate(work_id, rating, rater_key=None, comment=None):
+        calls["rate"] = (work_id, rating, rater_key, comment)
+        return {"id": work_id, "rating_avg": 5, "rating_count": 1, "quality_score": 0.7}
+
+    def fake_reuse(work_id, query=None):
+        calls["reuse"] = (work_id, query)
+        return {"id": work_id, "reuse_count": 1, "quality_score": 0.8}
+
+    monkeypatch.setattr(backend, "supa_insert_community_work", fake_insert)
+    monkeypatch.setattr(backend, "supa_rate_community_work", fake_rate)
+    monkeypatch.setattr(backend, "supa_record_community_reuse", fake_reuse)
+
+    client = backend.app.test_client()
+    publish = client.post(
+        "/community/works",
+        headers={"X-API-Key": backend.API_KEY},
+        json={
+            "title": "帕累托最优",
+            "prompt": "可视化帕累托最优",
+            "sceneName": "ParetoScene",
+            "code": "from manim import *",
+            "videoUrl": "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4",
+            "renderJobId": "job-1",
+        },
+    )
+    rating = client.post(
+        "/community/works/work-1/rating",
+        headers={"X-API-Key": backend.API_KEY},
+        json={"rating": 5, "raterKey": "anon-1", "comment": "清楚"},
+    )
+    reuse = client.post(
+        "/community/works/work-1/reuse",
+        headers={"X-API-Key": backend.API_KEY},
+        json={"query": "帕累托"},
+    )
+
+    assert publish.status_code == 201
+    assert publish.get_json()["work"]["workId"] == "work-1"
+    assert calls["insert"]["scene_name"] == "PersistedScene"
+    assert calls["insert"]["code"].endswith("# from persisted job")
+    assert rating.status_code == 200
+    assert calls["rate"] == ("work-1", 5, "anon-1", "清楚")
+    assert reuse.status_code == 200
+    assert calls["reuse"] == ("work-1", "帕累托")
+
+
 def test_supabase_list_jobs_by_status_uses_status_filter(monkeypatch):
     captured: dict[str, str] = {}
 
@@ -542,6 +684,55 @@ def test_supabase_list_jobs_by_status_uses_status_filter(monkeypatch):
 
     assert rows == [{"job_id": "job-1"}]
     assert "status=in.(pending,running)" in captured["url"]
+
+
+def test_supabase_search_community_works_orders_by_quality(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_request(method, url, headers, timeout=None):
+        assert method == "get"
+        captured["url"] = url
+        return SimpleNamespace(status_code=200, json=lambda: [{"id": "work-1"}])
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
+    monkeypatch.setattr(supabase_client.requests, "request", fake_request)
+
+    rows = supabase_client.search_community_works("帕累托 最优", limit=3)
+
+    assert rows == [{"id": "work-1"}]
+    assert "community_works" in captured["url"]
+    assert "status=eq.published" in captured["url"]
+    assert "order=quality_score.desc" in captured["url"]
+    assert "limit=3" in captured["url"]
+
+
+def test_supabase_rate_community_work_upserts_and_refreshes_score(monkeypatch):
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_request(method, url, timeout=None, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "post":
+            return SimpleNamespace(status_code=201, json=lambda: [{"id": "rating-1"}])
+        if "community_work_ratings" in url:
+            return SimpleNamespace(status_code=200, json=lambda: [{"rating": 5}, {"rating": 4}])
+        if "community_works" in url and method == "get":
+            return SimpleNamespace(status_code=200, json=lambda: [{"reuse_count": 3}])
+        if method == "patch":
+            return SimpleNamespace(status_code=200, json=lambda: [{"id": "work-1", "rating_avg": 4.5}])
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
+    monkeypatch.setattr(supabase_client.requests, "request", fake_request)
+
+    result = supabase_client.rate_community_work("work-1", 5, rater_key="anon-1", comment="好")
+
+    assert result["rating_avg"] == 4.5
+    assert calls[0][0] == "post"
+    assert "on_conflict=work_id,rater_key" in calls[0][1]
+    assert calls[0][2]["headers"]["Prefer"] == "resolution=merge-duplicates,return=representation"
+    assert any(call[0] == "patch" and "community_works" in call[1] for call in calls)
 
 
 def test_supabase_is_not_configured_when_url_is_empty(monkeypatch):

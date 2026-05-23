@@ -8,15 +8,17 @@
 - [x] Fix the stale Vercel gateway verifier default-provider assertions.
 - [x] Add MiniMax Coding CN endpoint regression coverage.
 - [x] Record the community works MVP technical specification.
-- [ ] Implement Supabase community work tables in a reviewable migration.
-- [ ] Add Render community search/publish/rate/reuse APIs.
-- [ ] Add Vercel proxy routes for community APIs.
-- [ ] Add frontend search-before-generate, reuse, publish, and rating UI.
+- [x] Implement Supabase community work tables in a reviewable migration.
+- [x] Add Render community search/publish/rate/reuse APIs.
+- [x] Add Vercel proxy routes for community APIs.
+- [x] Add frontend search-before-generate, reuse, publish, and rating UI.
 - [ ] Run production acceptance: cache hit skips generate/render; cache miss still renders; published work can be reused.
 
 ## Review
 
 Provider sampling on 2026-05-23 CST showed MiniMax direct is the safer public default: `trial-minimax-direct` returned 3/3 live successes with latencies about 9s, 33s, and 58s, all through `server-managed-trial` and no stable fallback. `trial-kimi-priority` returned 2/3 live successes and one 90s client timeout; the two successes were slow at about 58s and 89s. The current default should remain MiniMax direct, with Kimi treated as an optional higher-variance path. Added `scripts/measure_trial_provider_stability.py` so future checks can measure HTTP success, true model success, stable fallback rate, latency, and render-budget counts without printing secrets or generated code. Added `docs/TECH_SPEC_COMMUNITY_WORKS.md` for the MVP community works layer: search existing high-quality works first, reuse existing code/video on hit, fall back to current generate/render on miss, and let users publish/rate completed renders.
+
+Implemented the code-side community works MVP on 2026-05-23 CST. Added Supabase `community_works`, `community_work_ratings`, and `community_work_events` schema; Render `/community/search`, `/community/works`, `/community/works/{id}/rating`, and `/community/works/{id}/reuse`; Vercel and local Web proxy routes; and frontend search-before-generate, reuse, publish, and rating controls. Also removed browser-visible Render API key usage: both cloud and local UI now call same-origin `/api/render` and `/api/community/*` proxies. `.env.prod` and `.env.vercel` were removed from Git tracking without deleting local files, `.env.*` is now ignored, and the Vercel env sync workflow no longer pushes Supabase service credentials to Vercel.
 
 - [x] Build a real backend job/event state layer for generation, rendering, retry, and alignment.
 - [x] Translate backend events into student-facing learning-process language.
