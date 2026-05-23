@@ -5,6 +5,9 @@
     { "source": "/api/render", "destination": "/api/index" },
     { "source": "/api/render/status/(.*)", "destination": "/api/index" },
     { "source": "/api/render/download/(.*)", "destination": "/api/index" },
+    { "source": "/api/community/search", "destination": "/api/index" },
+    { "source": "/api/community/works", "destination": "/api/index" },
+    { "source": "/api/community/works/(.*)", "destination": "/api/index" },
     { "source": "/api/health", "destination": "/api/index" }
   ]
 }
