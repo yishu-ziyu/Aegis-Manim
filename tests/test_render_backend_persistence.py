@@ -707,6 +707,105 @@ def test_supabase_search_community_works_orders_by_quality(monkeypatch):
     assert "limit=3" in captured["url"]
 
 
+def test_supabase_search_community_works_falls_back_to_render_job_metadata(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    def fake_request(method, url, headers, timeout=None):
+        calls.append((method, url))
+        if "community_works" in url:
+            return SimpleNamespace(
+                status_code=404,
+                text="Could not find the table 'public.community_works'",
+            )
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: [
+                {
+                    "job_id": "job-1",
+                    "scene_name": "ParetoScene",
+                    "code": "from manim import *",
+                    "video_path": "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4",
+                    "metadata": {
+                        "community_status": "published",
+                        "community_title": "帕累托最优",
+                        "community_prompt": "可视化帕累托最优过程",
+                        "community_prompt_normalized": "可视化帕累托最优过程",
+                        "community_rating_avg": 5,
+                        "community_rating_count": 2,
+                        "community_reuse_count": 3,
+                        "community_quality_score": 0.9,
+                    },
+                    "created_at": "2026-05-23T00:00:00Z",
+                    "updated_at": "2026-05-23T00:00:00Z",
+                }
+            ],
+        )
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
+    monkeypatch.setattr(supabase_client.requests, "request", fake_request)
+
+    rows = supabase_client.search_community_works("帕累托", limit=1)
+
+    assert rows[0]["id"] == "job-1"
+    assert rows[0]["render_job_id"] == "job-1"
+    assert rows[0]["title"] == "帕累托最优"
+    assert any("metadata-%3E%3Ecommunity_status=eq.published" in call[1] for call in calls)
+
+
+def test_supabase_insert_community_work_falls_back_to_render_job_metadata(monkeypatch):
+    calls: list[tuple[str, str, dict]] = []
+    stored_metadata: dict[str, object] = {}
+
+    def fake_request(method, url, timeout=None, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "post" and "community_works" in url:
+            return SimpleNamespace(
+                status_code=404,
+                text="Could not find the table 'public.community_works'",
+            )
+        if method == "get" and "render_jobs" in url:
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [
+                    {
+                        "job_id": "job-1",
+                        "scene_name": "GeneratedScene",
+                        "code": "from manim import *",
+                        "video_path": "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4",
+                        "metadata": stored_metadata,
+                        "created_at": "2026-05-23T00:00:00Z",
+                        "updated_at": "2026-05-23T00:00:00Z",
+                    }
+                ],
+            )
+        if method == "patch" and "render_jobs" in url:
+            stored_metadata.update(kwargs["json"]["metadata"])
+            return SimpleNamespace(status_code=200, json=lambda: [{"job_id": "job-1"}])
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
+    monkeypatch.setattr(supabase_client.requests, "request", fake_request)
+
+    row = supabase_client.insert_community_work(
+        title="帕累托最优",
+        prompt="可视化帕累托最优",
+        scene_name="GeneratedScene",
+        code="ignored",
+        video_url="ignored",
+        render_job_id="job-1",
+        tags=["经济学"],
+    )
+
+    assert row is not None
+    assert row["id"] == "job-1"
+    assert row["prompt"] == "可视化帕累托最优"
+    assert stored_metadata["community_status"] == "published"
+    assert stored_metadata["community_tags"] == ["经济学"]
+    assert any(call[0] == "patch" and "render_jobs" in call[1] for call in calls)
+
+
 def test_supabase_rate_community_work_upserts_and_refreshes_score(monkeypatch):
     calls: list[tuple[str, str, dict]] = []
 

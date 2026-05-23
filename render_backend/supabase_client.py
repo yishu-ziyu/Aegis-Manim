@@ -321,6 +321,153 @@ def _community_score(rating_avg: float = 0.0, rating_count: int = 0, reuse_count
     return round(rating_signal * 0.72 + confidence * 0.16 + reuse_signal * 0.12, 4)
 
 
+def _is_missing_table(resp: requests.Response | None) -> bool:
+    if resp is None or resp.status_code != 404:
+        return False
+    return "could not find the table" in resp.text.lower() or "pgrst205" in resp.text.lower()
+
+
+def _community_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata") or {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _fallback_work_from_render_job(row: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = _community_metadata(row)
+    if metadata.get("community_status") != "published":
+        return None
+    job_id = row.get("job_id")
+    if not job_id:
+        return None
+    rating_count = int(metadata.get("community_rating_count") or 0)
+    rating_avg = float(metadata.get("community_rating_avg") or 0)
+    reuse_count = int(metadata.get("community_reuse_count") or 0)
+    return {
+        "id": job_id,
+        "title": metadata.get("community_title") or metadata.get("community_prompt") or "Aegis community work",
+        "prompt": metadata.get("community_prompt") or "",
+        "prompt_normalized": metadata.get("community_prompt_normalized") or "",
+        "scene_name": row.get("scene_name") or "GeneratedScene",
+        "code": row.get("code") or "",
+        "video_url": row.get("video_path") or get_public_video_url(row.get("video_name") or ""),
+        "render_job_id": job_id,
+        "author_label": metadata.get("community_author_label"),
+        "tags": metadata.get("community_tags") or [],
+        "status": "published",
+        "rating_avg": rating_avg,
+        "rating_count": rating_count,
+        "reuse_count": reuse_count,
+        "quality_score": float(metadata.get("community_quality_score") or _community_score(rating_avg, rating_count, reuse_count)),
+        "created_at": metadata.get("community_published_at") or row.get("created_at"),
+        "updated_at": metadata.get("community_updated_at") or row.get("updated_at"),
+    }
+
+
+def _patch_render_job_metadata(job_id: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    payload = {
+        "metadata": metadata,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    resp = _request_with_retries(
+        "patch",
+        f"{_postgrest_url('render_jobs')}?job_id=eq.{quote(job_id, safe='')}",
+        headers=_headers_sr(),
+        json=payload,
+    )
+    if resp is None or resp.status_code not in (200, 204):
+        if resp is not None:
+            print(f"[supabase] patch render_jobs metadata failed: {resp.status_code} {resp.text[:200]}")
+        return None
+    row = get_job(job_id)
+    return _fallback_work_from_render_job(row) if row else None
+
+
+def _search_community_works_from_render_jobs(query: str, limit: int) -> list[dict[str, Any]]:
+    resp = _request_with_retries(
+        "get",
+        (
+            f"{_postgrest_url('render_jobs')}?"
+            "status=eq.done"
+            "&metadata-%3E%3Ecommunity_status=eq.published"
+            "&select=job_id,scene_name,code,video_path,video_name,metadata,created_at,updated_at"
+            "&order=updated_at.desc"
+            f"&limit={max(limit, 50)}"
+        ),
+        headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
+    )
+    if resp is None or resp.status_code != 200:
+        if resp is not None:
+            print(f"[supabase] fallback community search failed: {resp.status_code} {resp.text[:200]}")
+        return []
+    normalized = normalize_work_prompt(query)
+    rows = resp.json()
+    works = [_fallback_work_from_render_job(row) for row in rows if isinstance(row, dict)]
+    works = [work for work in works if work is not None]
+    if normalized:
+        works = [
+            work
+            for work in works
+            if normalized in normalize_work_prompt(work.get("prompt", ""))
+            or normalized in normalize_work_prompt(work.get("title", ""))
+            or normalized in normalize_work_prompt(" ".join(work.get("tags") or []))
+        ]
+    works.sort(
+        key=lambda work: (
+            float(work.get("quality_score") or 0),
+            float(work.get("rating_avg") or 0),
+            int(work.get("reuse_count") or 0),
+            str(work.get("updated_at") or ""),
+        ),
+        reverse=True,
+    )
+    return works[:limit]
+
+
+def _insert_community_work_in_render_job(
+    *,
+    title: str,
+    prompt: str,
+    render_job_id: str | None,
+    author_label: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not render_job_id:
+        return None
+    row = get_job(render_job_id)
+    if not row:
+        return None
+    existing = _community_metadata(row)
+    now = datetime.now(UTC).isoformat()
+    existing.update(
+        {
+            "community_status": "published",
+            "community_title": title.strip()[:120],
+            "community_prompt": prompt.strip(),
+            "community_prompt_normalized": normalize_work_prompt(prompt),
+            "community_author_label": (author_label or "匿名用户").strip()[:80],
+            "community_tags": tags or [],
+            "community_source": (metadata or {}).get("source", "aegis-web"),
+            "community_published_at": existing.get("community_published_at") or now,
+            "community_updated_at": now,
+            "community_rating_avg": float(existing.get("community_rating_avg") or 0),
+            "community_rating_count": int(existing.get("community_rating_count") or 0),
+            "community_reuse_count": int(existing.get("community_reuse_count") or 0),
+        }
+    )
+    existing["community_quality_score"] = _community_score(
+        float(existing.get("community_rating_avg") or 0),
+        int(existing.get("community_rating_count") or 0),
+        int(existing.get("community_reuse_count") or 0),
+    )
+    return _patch_render_job_metadata(render_job_id, existing)
+
+
+def _get_fallback_community_work(work_id: str) -> dict[str, Any] | None:
+    row = get_job(work_id)
+    return _fallback_work_from_render_job(row) if row else None
+
+
 def search_community_works(query: str, limit: int = 5) -> list[dict[str, Any]]:
     """Search published community works ordered by quality signals."""
     limit = max(1, min(int(limit or 5), 20))
@@ -344,6 +491,8 @@ def search_community_works(query: str, limit: int = 5) -> list[dict[str, Any]]:
     if resp.status_code == 200:
         data = resp.json()
         return data if isinstance(data, list) else []
+    if _is_missing_table(resp):
+        return _search_community_works_from_render_jobs(query, limit)
     print(f"[supabase] search_community_works failed: {resp.status_code} {resp.text[:200]}")
     return []
 
@@ -386,6 +535,15 @@ def insert_community_work(
     if resp.status_code in (200, 201):
         data = resp.json()
         return data[0] if isinstance(data, list) and data else data
+    if _is_missing_table(resp):
+        return _insert_community_work_in_render_job(
+            title=title,
+            prompt=prompt,
+            render_job_id=render_job_id,
+            author_label=author_label,
+            tags=tags,
+            metadata=metadata,
+        )
     print(f"[supabase] insert_community_work failed: {resp.status_code} {resp.text[:200]}")
     return None
 
@@ -397,6 +555,8 @@ def _get_community_work(work_id: str) -> dict[str, Any] | None:
         headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
     )
     if resp is None or resp.status_code != 200:
+        if _is_missing_table(resp):
+            return _get_fallback_community_work(work_id)
         return None
     data = resp.json()
     return data[0] if isinstance(data, list) and data else None
@@ -462,6 +622,34 @@ def rate_community_work(
         json=payload,
     )
     if resp is None or resp.status_code not in (200, 201):
+        if _is_missing_table(resp):
+            work = _get_fallback_community_work(work_id)
+            if not work:
+                return None
+            row = get_job(work_id)
+            if not row:
+                return None
+            metadata = _community_metadata(row)
+            ratings = metadata.get("community_ratings") if isinstance(metadata.get("community_ratings"), dict) else {}
+            rater = (rater_key or "anonymous").strip()[:120]
+            ratings[rater] = {
+                "rating": rating,
+                "comment": (comment or "").strip()[:500] or None,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+            values = [float(item.get("rating", 0)) for item in ratings.values() if isinstance(item, dict)]
+            rating_count = len(values)
+            rating_avg = round(sum(values) / rating_count, 2) if rating_count else 0.0
+            metadata["community_ratings"] = ratings
+            metadata["community_rating_count"] = rating_count
+            metadata["community_rating_avg"] = rating_avg
+            metadata["community_quality_score"] = _community_score(
+                rating_avg,
+                rating_count,
+                int(metadata.get("community_reuse_count") or 0),
+            )
+            metadata["community_updated_at"] = datetime.now(UTC).isoformat()
+            return _patch_render_job_metadata(work_id, metadata)
         if resp is not None:
             print(f"[supabase] rate_community_work failed: {resp.status_code} {resp.text[:200]}")
         return None
@@ -472,6 +660,22 @@ def record_community_reuse(work_id: str, query: str | None = None) -> dict[str, 
     work = _get_community_work(work_id)
     if not work:
         return None
+    if work.get("render_job_id") == work_id and work.get("id") == work_id:
+        row = get_job(work_id)
+        if row:
+            metadata = _community_metadata(row)
+            reuse_count = int(metadata.get("community_reuse_count") or 0) + 1
+            metadata["community_reuse_count"] = reuse_count
+            metadata["community_quality_score"] = _community_score(
+                float(metadata.get("community_rating_avg") or 0),
+                int(metadata.get("community_rating_count") or 0),
+                reuse_count,
+            )
+            metadata["community_last_reuse_query"] = (query or "").strip()[:1000] or None
+            metadata["community_updated_at"] = datetime.now(UTC).isoformat()
+            patched = _patch_render_job_metadata(work_id, metadata)
+            if patched is not None:
+                return patched
     reuse_count = int(work.get("reuse_count") or 0) + 1
     rating_avg = float(work.get("rating_avg") or 0)
     rating_count = int(work.get("rating_count") or 0)
