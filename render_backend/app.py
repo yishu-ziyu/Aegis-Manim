@@ -964,6 +964,10 @@ def health() -> tuple:
         "render": {
             "quality": MANIM_RENDER_QUALITY,
             "cjk_font": _font_health(),
+            "recovery": {
+                "max_restart_attempts": MAX_RECOVERY_RESTARTS,
+                "orphan_threshold_seconds": ORPHAN_JOB_THRESHOLD_SECONDS,
+            },
         },
     }
     if _use_supabase():
