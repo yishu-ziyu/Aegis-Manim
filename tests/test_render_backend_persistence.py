@@ -458,6 +458,19 @@ class GeneratedScene(Scene):
 
 
 @requires_backend
+def test_rendered_video_finder_accepts_scene_name_suffixes_and_ignores_partials(tmp_path):
+    videos_dir = tmp_path / "videos" / "scene" / "480p15"
+    partial_dir = videos_dir / "partial_movie_files" / "ParetoOptimalScene"
+    partial_dir.mkdir(parents=True)
+    partial_video = partial_dir / "ParetoOptimalScene_partial.mp4"
+    partial_video.write_bytes(b"partial")
+    final_video = videos_dir / "ParetoOptimalScene_range_0_4.mp4"
+    final_video.write_bytes(b"final")
+
+    assert backend._find_rendered_video(tmp_path, "ParetoOptimalScene") == final_video
+
+
+@requires_backend
 def test_supabase_upload_failure_makes_render_fail_without_local_path(monkeypatch, tmp_path):
     source_video = tmp_path / "GeneratedScene.mp4"
     source_video.write_bytes(b"mp4")

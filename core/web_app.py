@@ -2606,6 +2606,20 @@ def render_backend_headers() -> dict[str, str]:
     return headers
 
 
+def build_render_backend_submit_payload(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    code = str(payload.get("code", "")).strip()
+    if not code:
+        return None, {"ok": False, "error": "缺少 code 字段"}
+
+    raw_scene_name = payload.get("sceneName", payload.get("scene_name", "GeneratedScene"))
+    scene_name = safe_scene_name(str(raw_scene_name))
+    render_mode = str(payload.get("renderMode", payload.get("render_mode", "auto"))).strip() or "auto"
+
+    code, _notes = apply_runtime_compatibility_fixes(code)
+    scene_name = detect_scene_name(code, scene_name)
+    return {"code": code, "scene_name": scene_name, "render_mode": render_mode}, None
+
+
 def proxy_render_backend(
     path: str,
     *,
@@ -2824,17 +2838,15 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
 
-            code = str(payload.get("code", "")).strip()
-            scene_name = safe_scene_name(str(payload.get("sceneName", payload.get("scene_name", "GeneratedScene"))))
-            render_mode = str(payload.get("renderMode", payload.get("render_mode", "auto"))).strip() or "auto"
-            if not code:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
+            render_payload, error_payload = build_render_backend_submit_payload(payload)
+            if error_payload is not None or render_payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, error_payload or {"ok": False, "error": "Invalid render payload."})
                 return
 
             status, response = proxy_render_backend(
                 "/render-async",
                 method="POST",
-                payload={"code": code, "scene_name": scene_name, "render_mode": render_mode},
+                payload=render_payload,
                 timeout=15,
             )
             self._send_json(status, response)

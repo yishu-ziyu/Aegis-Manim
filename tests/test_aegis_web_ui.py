@@ -94,6 +94,25 @@ class AegisWebUiTest(unittest.TestCase):
         assert "retryCount < 1" in html
         assert "渲染实例刚重启，正在自动重提一次" in html
 
+    def test_local_render_proxy_accepts_snake_case_scene_name_and_detects_code_class(self) -> None:
+        render_payload, error_payload = web_app.build_render_backend_submit_payload(
+            {
+                "code": (
+                    "from manim import *\n"
+                    "class ParetoOptimalScene(Scene):\n"
+                    "    def construct(self):\n"
+                    "        self.play(Write(Text('帕累托最优')))\n"
+                ),
+                "scene_name": "GeneratedScene",
+                "render_mode": "auto",
+            }
+        )
+
+        assert error_payload is None
+        assert render_payload is not None
+        assert render_payload["scene_name"] == "ParetoOptimalScene"
+        assert render_payload["render_mode"] == "auto"
+
     def test_windows_local_launcher_uses_cloud_generation_and_local_rendering(self) -> None:
         launcher = PROJECT_ROOT / "scripts" / "start_aegis_local_windows.bat"
         content = launcher.read_text(encoding="utf-8")

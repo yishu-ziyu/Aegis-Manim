@@ -218,6 +218,15 @@ Closed the public friend-facing cloud path on 2026-05-23 CST. The system now use
 # Production Chinese Font Quality Fix
 
 - [x] Reproduce the reported poor-quality MP4 from production and extract frames.
+
+# Custom Domain Render Closure
+
+- [x] Move `manim.yishuziyu.cn` off the stale `aegis-manim` Vercel project and onto the canonical `manim-main` project.
+- [x] Verify the custom domain reaches `manim-main` health and Render proxy instead of the unconfigured duplicate project.
+- [x] Fix render submission scene-name normalization for both `sceneName` and `scene_name`.
+- [x] Re-run focused regression tests and compile checks.
+- [ ] Deploy production and re-run custom-domain generate -> render -> MP4 closed-loop.
+- [ ] Record final evidence in `tasks/codex-app-handoff.md`.
 - [x] Confirm the bad video was not merely low resolution: Chinese labels rendered as tofu/codepoint boxes.
 - [x] Identify the root cause at the production image boundary: Render was using the repo-root `Dockerfile`, which did not install CJK fonts.
 - [x] Install `fontconfig`, `fonts-noto-cjk`, and `fonts-noto-color-emoji` in the root Render image.

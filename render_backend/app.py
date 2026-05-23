@@ -537,11 +537,21 @@ def _find_rendered_video(temp_dir: Path, scene_name: str) -> Path | None:
     if not videos_dir.exists():
         return None
 
-    # Search recursively for any MP4 matching the scene name
+    # Search recursively for final MP4s matching the scene name. Some Manim
+    # range renders add suffixes to the output filename, so keep this broader
+    # than the default exact `{scene_name}.mp4` path.
     candidates = list(videos_dir.rglob(f"*{scene_name}.mp4"))
+    candidates.extend(p for p in videos_dir.rglob(f"*{scene_name}*.mp4") if p not in candidates)
     if candidates:
-        # Return the most recently modified
         return max(candidates, key=lambda p: p.stat().st_mtime)
+
+    non_partial_candidates = [
+        p
+        for p in videos_dir.rglob("*.mp4")
+        if "partial_movie_files" not in p.relative_to(videos_dir).parts
+    ]
+    if non_partial_candidates:
+        return max(non_partial_candidates, key=lambda p: p.stat().st_mtime)
     return None
 
 
