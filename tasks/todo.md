@@ -276,3 +276,19 @@ Custom-domain closure also passed on 2026-05-23 CST. `manim.yishuziyu.cn` was mo
 The community works MVP now has two persistence paths. The preferred path uses the new `community_works`, `community_work_ratings`, and `community_work_events` tables. The production-safe fallback uses the already-deployed `render_jobs` table by marking completed jobs with `metadata.community_status = "published"` and storing prompt, score, ratings, and reuse counters in metadata. This matters because the live Supabase project currently has `render_jobs` but does not yet expose the new community tables through PostgREST. Focused verification passed with `65 passed`, Python compile checks, frontend JavaScript syntax checks, and `git diff --check`.
 
 Render production closure passed after commit `bfb1af1`: direct Render `/health` returned HTTP 200 with `supabase.ok=true` and CJK font ok, direct Render `/community/works` published completed render job `fd693826-882c-4c88-8cd3-963aa5d61809` with HTTP 201, direct Render `/community/search?q=可视化帕累托最优过程。` returned `hit=true`, and direct Render reuse/rating calls both returned HTTP 200. The remaining cloud blocker is Vercel production deployment, not Render or Supabase: `manim.yishuziyu.cn/api/community/works` still returns the Vercel gateway JSON 404 because `vercel.json` had been missing community rewrites. Commit `2a7274a` adds those rewrites and a regression test, but both local Vercel CLI deploy and GitHub Actions Deploy Pipeline are blocked by an invalid Vercel token/secret. Once the Vercel token is rotated, redeploy production and rerun the same custom-domain publish/search/reuse/rating check.
+
+# Three-Round Production Closure
+
+- [x] Fix custom-domain Vercel ASGI community routes so `/api/community/*` reaches Render.
+- [x] Restart pending/running Render jobs after instance restarts instead of failing immediately.
+- [x] Expose non-sensitive Render recovery/storage diagnostics through `/health`.
+- [x] Retry Supabase Storage upload after completed renders.
+- [x] Add compatibility repairs for generated `Axes(..., x_label=..., y_label=...)` and `.set.stroke(...)`.
+- [x] Redeploy Vercel production and Render production.
+- [x] Run three consecutive production closed-loop tests from `https://manim.yishuziyu.cn`.
+
+## Review
+
+Production closure passed on 2026-05-23 CST after commit `52def3f`. Vercel production deploy `dpl_BbKuDdPCGv5yXKqAdu3ob9XEKxsF` is READY and aliased to `https://manim.yishuziyu.cn`. Render production `/health` confirmed `render.recovery.max_restart_attempts=2`, `render.storage.upload_retries=3`, CJK font OK, and Supabase OK. Local regression verification passed with `91 passed`, Python compile checks, and `git diff --check`.
+
+The required three-round production closed-loop test passed in 481 seconds. Each round called production `/api/health`, `/api/generate` with `trial-kimi-priority`, `/api/render`, polled `/api/render/status` to `done`, verified the produced Supabase MP4 with a byte-range request, published the completed render to the community repository, searched it back by title, recorded reuse, and saved a rating. Passing jobs and works were `33ac63ba-988d-4f2b-b559-14a1f96cbb09`, `aa708609-f8bf-47e2-9f16-e85c4cf25847`, and `21a47b18-14c6-4a1d-b85c-ddc3962f3046`.

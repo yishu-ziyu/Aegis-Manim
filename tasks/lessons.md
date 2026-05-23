@@ -3,3 +3,4 @@
 - 2026-05-19: In the Aegis-Manim dual-coding result UI, rendered video and synchronized script must be a left-right comparison on desktop. Stack them only on narrow or mobile layouts.
 - 2026-05-20: In Chinese-community teaching flows, visible Manim scene text should default to Chinese; keep English symbols only as compact variables and explain them in Chinese.
 - 2026-05-20: Formula-heavy prompts need two layers: the Manim video path stays LaTeX-free with `Text(...)`, while the Web learning-script layer can render Markdown/LaTeX-style formulas for readability.
+- 2026-05-23: Do not declare Aegis-Manim production usable from a single successful render. Run repeated closed-loop tests that include model generation, Render job completion, MP4 byte validation, community publish/search/reuse/rating, and feed every observed generated-code runtime failure into `apply_runtime_compatibility_fixes` with regression coverage before rerunning acceptance.
