@@ -88,6 +88,8 @@ ORPHAN_JOB_THRESHOLD_SECONDS = int(
 ORPHAN_JOB_SCAN_SECONDS = 30
 ORPHAN_JOB_MESSAGE = "Render instance restarted unexpectedly. Please resubmit."
 MAX_RECOVERY_RESTARTS = int(os.environ.get("MANIM_MAX_RECOVERY_RESTARTS", "2"))
+SUPABASE_UPLOAD_RETRIES = int(os.environ.get("SUPABASE_UPLOAD_RETRIES", "3"))
+SUPABASE_UPLOAD_RETRY_DELAY_SECONDS = float(os.environ.get("SUPABASE_UPLOAD_RETRY_DELAY_SECONDS", "2"))
 
 # Directories
 BASE_DIR = Path(__file__).parent.resolve()
@@ -735,7 +737,12 @@ def _upload_or_keep_video(
 ) -> dict[str, Any]:
     supa_video_url: str | None = None
     if _use_supabase() and job_id:
-        supa_video_url = supa_upload_video(job_id, video_path)
+        for attempt in range(1, SUPABASE_UPLOAD_RETRIES + 1):
+            supa_video_url = supa_upload_video(job_id, video_path)
+            if supa_video_url:
+                break
+            if attempt < SUPABASE_UPLOAD_RETRIES:
+                time.sleep(SUPABASE_UPLOAD_RETRY_DELAY_SECONDS * attempt)
         if supa_video_url:
             supa_insert_log(
                 job_id=job_id,
@@ -967,6 +974,9 @@ def health() -> tuple:
             "recovery": {
                 "max_restart_attempts": MAX_RECOVERY_RESTARTS,
                 "orphan_threshold_seconds": ORPHAN_JOB_THRESHOLD_SECONDS,
+            },
+            "storage": {
+                "upload_retries": SUPABASE_UPLOAD_RETRIES,
             },
         },
     }
