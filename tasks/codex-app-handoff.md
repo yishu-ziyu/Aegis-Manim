@@ -333,6 +333,58 @@ Current conclusion:
 - The cloud site is no longer only "technically successful"; the production video is now visually readable for Chinese text.
 - Render still runs at `-ql` because the small/free worker has repeatedly failed or stalled under heavier quality/scene budgets. Higher-resolution production should move to a stronger worker platform or paid Render capacity rather than hiding the issue by forcing medium quality on the current worker.
 
+## 2026-05-23 Custom Domain Production Closure
+
+User-facing goal:
+
+- A friend should be able to open the shared custom domain, submit a natural-language prompt, and receive a playable rendered MP4 without configuring model keys, Supabase, or Render.
+
+Domain finding:
+
+- `manim.yishuziyu.cn` was still attached to a stale/unconfigured Vercel project named `aegis-manim`.
+- The canonical project with the configured production env is `manim-main`.
+- The custom domain was moved onto `manim-main`; do not move it back to `aegis-manim`.
+
+Fixes shipped in this pass:
+
+- Vercel and local proxy render submissions now normalize both `sceneName` and `scene_name`.
+- The gateway detects the actual generated `Scene` subclass before submitting to Render.
+- Render backend MP4 discovery now handles segmented Manim output filenames and falls back to the latest final MP4 outside `partial_movie_files`.
+- Generated `axes.get_axis_labels(x_label="...", y_label="...")` string labels are rewritten to explicit `Text(...)` labels so cloud Manim does not require `dvisvgm`/LaTeX for axis labels.
+
+Deployment:
+
+- Vercel production deploy `dpl_Cq2xGXKESTtx5VbH6CK2djCGzbdA` reached READY.
+- `https://manim.yishuziyu.cn` is aliased to that `manim-main` deployment.
+- Render health is live at `https://aegis-manim.onrender.com/health` with `supabase.ok=true` and CJK font diagnostics healthy.
+
+Final custom-domain closed-loop:
+
+- `GET https://manim.yishuziyu.cn/api/health` returned HTTP 200.
+- `GET https://manim.yishuziyu.cn/api/render/status/not-a-real-job` returned the expected Render JSON 404, proving the proxy reaches Render and authenticates.
+- `POST https://manim.yishuziyu.cn/api/generate`
+  - prompt: `可视化帕累托最优过程。`
+  - request: `20260523-060807-vercel`
+  - provider path: stable fallback after server-managed trial model slowdown/unavailability
+  - scene: `GeneratedScene`
+- `POST https://manim.yishuziyu.cn/api/render`
+  - job: `fd693826-882c-4c88-8cd3-963aa5d61809`
+  - render mode: `segmented`
+  - status progress: `0/2 -> 1/2 -> done 2/2`
+  - final MP4 URL is in the Supabase `manim-videos` bucket under project ref `lnbalcskhcnkrtlqpgku`
+- MP4 verification:
+  - `HEAD` returned HTTP 200
+  - `content-type: video/mp4`
+  - `content-length: 184325`
+  - `ffprobe`: 854x480, duration about 10.07s
+  - extracted frame `/tmp/aegis-fd693826-frame.png` shows readable Chinese title, axis labels, and explanation text.
+
+Current conclusion:
+
+- The custom-domain cloud path is usable now for the intended friend flow.
+- The successful custom-domain run used the stable fallback because the server-managed trial model was slow/unavailable during that request. That is intentional resilience: the user still gets a rendered teaching video instead of a failed flow. Richer model-specific scene quality still depends on provider responsiveness.
+- GitHub Actions deploy forcing is not reliable yet because Vercel and Render deploy-hook secrets are currently missing/empty in GitHub. Local Vercel deploy was used for this closure; Render remains reachable and healthy. If future backend changes must be force-deployed through CI, configure those GitHub secrets or trigger Render from the dashboard.
+
 ## Do Not Reopen These Questions
 
 - Do not create another Supabase project unless the current project is deleted or explicitly rejected.
