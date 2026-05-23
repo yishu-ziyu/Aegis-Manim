@@ -168,6 +168,15 @@ ring = AnnularSector(inner_radius=1, outer_radius=2, angle=PI / 2)
         assert 'axis_config={"include_numbers": False}' in patched
         assert any("Axes" in note for note in notes)
 
+    def test_invalid_set_stroke_chain_is_rewritten(self) -> None:
+        code = "frontier = VMobject()\nfrontier.set.stroke(color=YELLOW, width=3)"
+
+        patched, notes = manim_agent.apply_runtime_compatibility_fixes(code)
+
+        assert "frontier.set_stroke(color=YELLOW, width=3)" in patched
+        assert ".set.stroke" not in patched
+        assert any("set_stroke" in note for note in notes)
+
     def test_brace_label_uses_text_when_latex_is_unavailable(self) -> None:
         code = 'brace = BraceLabel(Line(LEFT, RIGHT), "所有帕累托最优点", brace_direction=UP)'
 

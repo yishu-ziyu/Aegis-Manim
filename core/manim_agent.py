@@ -317,6 +317,11 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
         notes.append("Replaced Axes camelCase line helpers with current Manim snake_case helpers.")
         patched = candidate
 
+    candidate = re.sub(r"\.set\.stroke\s*\(", ".set_stroke(", patched)
+    if candidate != patched:
+        notes.append("Replaced invalid .set.stroke(...) chain with .set_stroke(...).")
+        patched = candidate
+
     candidate = re.sub(r"axes\.plot\([\s\S]*?\)", convert_line_config_to_kwargs, patched)
     if candidate != patched:
         notes.append("Converted axes.plot line_config={...} to supported stroke keyword arguments.")
