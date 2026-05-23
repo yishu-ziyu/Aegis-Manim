@@ -262,3 +262,15 @@ The "successful but terrible quality" result was a real production defect. The p
 Post-deploy live checks passed. The production font probe job `a511d7ab-58d3-41c9-ac6c-b404bfb73b2f` rendered a readable Chinese MP4; frame extraction at `/tmp/aegis-font-probe-fixed/font_probe.png` shows default, sans, Noto, and serif Chinese text all readable. The full friend-flow prompt `可视化帕累托最优过程。` generated request `20260522-174814-vercel`, returned the stable Pareto fallback with 6 `self.play(...)`, 6 `self.wait(...)`, and the CJK patch, then rendered job `2b70b836-e8b6-4756-93b2-584d92464b01` through production as `render_mode=segmented`, progressing `0/2 -> 1/2 -> concatenating -> done`. The final Supabase MP4 returned HTTP 200, `content-type: video/mp4`, `content-length: 184325`, duration about 10.07s, and extracted frames at `/tmp/aegis-pareto-fixed/frame_5s.png` and `/tmp/aegis-pareto-fixed/frame_9s.png` show readable Chinese labels and a clear Pareto feasible-set/frontier explanation.
 
 Custom-domain closure also passed on 2026-05-23 CST. `manim.yishuziyu.cn` was moved from the stale/unconfigured `aegis-manim` Vercel project to the canonical `manim-main` project. Production deploy `dpl_Cq2xGXKESTtx5VbH6CK2djCGzbdA` was aliased to `https://manim.yishuziyu.cn`. Live checks returned `/api/health` HTTP 200 and `/api/render/status/not-a-real-job` HTTP 404 from Render, proving the domain reaches the configured gateway and Render proxy. A full custom-domain prompt `可视化帕累托最优过程。` generated request `20260523-060807-vercel`, submitted render job `fd693826-882c-4c88-8cd3-963aa5d61809` as `render_mode=segmented`, progressed `0/2 -> 1/2 -> done 2/2`, and produced a Supabase MP4 with `HEAD 200`, `content-type: video/mp4`, `content-length: 184325`, duration about 10.07s at 854x480. Extracted frame `/tmp/aegis-fd693826-frame.png` shows readable Chinese title, axis labels, and explanation text.
+
+# Community Works MVP Cloud Closure
+
+- [x] Add community search-before-generate, publish, rating, and reuse APIs.
+- [x] Keep Render credentials server-side by routing community calls through same-origin Vercel/local proxies.
+- [x] Add dedicated Supabase community schema for the target design.
+- [x] Add a compatibility fallback that stores published works in existing `render_jobs.metadata` when the community tables are not migrated yet.
+- [x] Re-run focused backend/frontend/deploy regression tests and syntax checks.
+
+## Review
+
+The community works MVP now has two persistence paths. The preferred path uses the new `community_works`, `community_work_ratings`, and `community_work_events` tables. The production-safe fallback uses the already-deployed `render_jobs` table by marking completed jobs with `metadata.community_status = "published"` and storing prompt, score, ratings, and reuse counters in metadata. This matters because the live Supabase project currently has `render_jobs` but does not yet expose the new community tables through PostgREST. Focused verification passed with `65 passed`, Python compile checks, frontend JavaScript syntax checks, and `git diff --check`.

@@ -11,7 +11,7 @@ When a user submits a prompt, Aegis should first search published community work
 - Vercel is the public gateway and browser UI host.
 - Render owns long-running Manim rendering and Supabase service access.
 - Supabase stores render job state in `render_jobs`, logs in `job_logs`, and MP4 files in the `manim-videos` bucket.
-- Existing render jobs are task records, not reusable works. They do not store search rank, ratings, publish state, or reuse counts.
+- Existing render jobs are task records. The preferred community schema stores reusable works in dedicated `community_*` tables, but the implemented MVP also has a compatibility fallback that stores publish state, ratings, score, and reuse counts in `render_jobs.metadata` when those tables have not been migrated yet.
 
 ## MVP Architecture
 
@@ -26,6 +26,17 @@ User prompt
 ```
 
 Keep Supabase service credentials in Render. Vercel should only proxy community API calls.
+
+## Migration Compatibility
+
+The Render backend first tries the dedicated `community_works`, `community_work_ratings`, and `community_work_events` tables. If Supabase returns a missing-table response, it automatically falls back to the already-deployed `render_jobs` table:
+
+- Published state is stored as `metadata.community_status = "published"`.
+- Search reads completed jobs with `metadata->>community_status = published` and ranks them by metadata quality signals.
+- Publish writes the completed render job's community fields back into `render_jobs.metadata`; browser-supplied code and video URLs are still ignored.
+- Rating and reuse update metadata on the same render job.
+
+This lets the cloud MVP work before the new tables are applied. The dedicated tables remain the target structure for moderation, richer search, and cleaner analytics.
 
 ## Tables
 
