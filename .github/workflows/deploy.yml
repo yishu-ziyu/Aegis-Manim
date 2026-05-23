@@ -112,8 +112,6 @@ jobs:
       - name: Sync Vercel Env
         run: |
           npm install --global vercel@latest
-          echo "${{ secrets.SUPABASE_URL }}" | vercel env add SUPABASE_URL production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
-          echo "${{ secrets.SUPABASE_SERVICE_KEY }}" | vercel env add SUPABASE_SERVICE_KEY production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
           echo "${{ secrets.RENDER_BACKEND_URL }}" | vercel env add RENDER_BACKEND_URL production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
           echo "${{ secrets.RENDER_BACKEND_API_KEY }}" | vercel env add RENDER_BACKEND_API_KEY production --token=${{ secrets.VERCEL_TOKEN }} --yes || true
           echo "${{ secrets.KIMI_CODE_API_KEY }}" | vercel env add KIMI_CODE_API_KEY production --token=${{ secrets.VERCEL_TOKEN }} --yes || true

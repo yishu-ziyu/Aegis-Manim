@@ -28,6 +28,10 @@ from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from supabase_client import (
     SupabaseReadUnavailable,
+    STORAGE_BUCKET,
+)
+from supabase_client import (
+    insert_community_work as supa_insert_community_work,
 )
 from supabase_client import (
     get_job as supa_get_job,
@@ -46,6 +50,15 @@ from supabase_client import (
 )
 from supabase_client import (
     list_jobs_by_status as supa_list_jobs_by_status,
+)
+from supabase_client import (
+    rate_community_work as supa_rate_community_work,
+)
+from supabase_client import (
+    record_community_reuse as supa_record_community_reuse,
+)
+from supabase_client import (
+    search_community_works as supa_search_community_works,
 )
 from supabase_client import (
     update_job as supa_update_job,
@@ -334,6 +347,37 @@ def _get_job(job_id: str) -> RenderJob | None:
         return None
     with _jobs_lock:
         return _jobs.get(job_id)
+
+
+def _community_work_payload(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workId": row.get("id"),
+        "title": row.get("title"),
+        "prompt": row.get("prompt"),
+        "sceneName": row.get("scene_name") or "GeneratedScene",
+        "code": row.get("code") or "",
+        "videoUrl": row.get("video_url"),
+        "renderJobId": row.get("render_job_id"),
+        "tags": row.get("tags") or [],
+        "ratingAvg": row.get("rating_avg") or 0,
+        "ratingCount": row.get("rating_count") or 0,
+        "reuseCount": row.get("reuse_count") or 0,
+        "qualityScore": row.get("quality_score") or 0,
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at"),
+    }
+
+
+def _is_current_storage_video_url(video_url: str) -> bool:
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+    if not supabase_url or not video_url:
+        return False
+    required_prefix = f"{supabase_url}/storage/v1/object/public/{STORAGE_BUCKET}/"
+    return video_url.startswith(required_prefix) and video_url.lower().split("?", 1)[0].endswith(".mp4")
+
+
+def _bounded_text(value: Any, limit: int) -> str:
+    return str(value or "").strip()[:limit]
 
 
 def _recover_jobs_from_supabase() -> None:
@@ -1056,6 +1100,96 @@ def download_video(job_id: str) -> tuple:
         as_attachment=True,
         download_name=f"{job.scene_name}.mp4",
     )
+
+
+@app.route("/community/search", methods=["GET"])
+@require_api_key
+def community_search() -> tuple:
+    if not _use_supabase():
+        return jsonify({"ok": True, "hit": False, "items": [], "mode": "memory-only"}), 200
+    query = _bounded_text(request.args.get("q", ""), 1000)
+    try:
+        limit = int(request.args.get("limit", "5"))
+    except (TypeError, ValueError):
+        limit = 5
+    rows = supa_search_community_works(query, limit=max(1, min(limit, 20)))
+    items = [_community_work_payload(row) for row in rows]
+    return jsonify({"ok": True, "hit": bool(items), "items": items}), 200
+
+
+@app.route("/community/works", methods=["POST"])
+@require_api_key
+def community_publish_work() -> tuple:
+    if not _use_supabase():
+        return jsonify({"ok": False, "error": "Community repository is not configured."}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    title = _bounded_text(data.get("title"), 120)
+    prompt = _bounded_text(data.get("prompt"), 4000)
+    render_job_id = _bounded_text(data.get("renderJobId", data.get("render_job_id")), 120) or None
+    if not title:
+        title = prompt[:60] or "Aegis community work"
+    if not prompt:
+        return jsonify({"ok": False, "error": "prompt is required."}), 400
+    if not render_job_id:
+        return jsonify({"ok": False, "error": "renderJobId is required for publishing."}), 400
+    job = _get_job(render_job_id)
+    if job is None or job.status != JobStatus.DONE or not job.video_path:
+        return jsonify({"ok": False, "error": "renderJobId must reference a completed render job."}), 400
+    code = job.code
+    scene_name = job.scene_name
+    video_url = job.video_path
+    if not _is_current_storage_video_url(video_url):
+        return jsonify({"ok": False, "error": "videoUrl must be a Supabase manim-videos MP4 from this project."}), 400
+    tags_raw = data.get("tags") or []
+    tags = [str(tag).strip()[:40] for tag in tags_raw if str(tag).strip()][:8] if isinstance(tags_raw, list) else []
+    row = supa_insert_community_work(
+        title=title,
+        prompt=prompt,
+        scene_name=scene_name,
+        code=code,
+        video_url=video_url,
+        render_job_id=render_job_id,
+        author_label=_bounded_text(data.get("authorLabel", data.get("author_label")), 80) or None,
+        tags=tags,
+        metadata={"source": "aegis-web", "client_ip": request.remote_addr},
+    )
+    if row is None:
+        return jsonify({"ok": False, "error": "Failed to publish community work."}), 500
+    return jsonify({"ok": True, "work": _community_work_payload(row)}), 201
+
+
+@app.route("/community/works/<work_id>/rating", methods=["POST"])
+@require_api_key
+def community_rate_work(work_id: str) -> tuple:
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        rating = int(data.get("rating"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "rating must be an integer from 1 to 5."}), 400
+    if rating < 1 or rating > 5:
+        return jsonify({"ok": False, "error": "rating must be an integer from 1 to 5."}), 400
+    row = supa_rate_community_work(
+        _bounded_text(work_id, 80),
+        rating,
+        rater_key=_bounded_text(data.get("raterKey", data.get("rater_key")), 120) or None,
+        comment=_bounded_text(data.get("comment"), 500) or None,
+    )
+    if row is None:
+        return jsonify({"ok": False, "error": "Failed to save rating."}), 500
+    return jsonify({"ok": True, "work": _community_work_payload(row)}), 200
+
+
+@app.route("/community/works/<work_id>/reuse", methods=["POST"])
+@require_api_key
+def community_reuse_work(work_id: str) -> tuple:
+    data = request.get_json(force=True, silent=True) or {}
+    row = supa_record_community_reuse(
+        _bounded_text(work_id, 80),
+        query=_bounded_text(data.get("query"), 1000) or None,
+    )
+    if row is None:
+        return jsonify({"ok": False, "error": "Failed to record reuse."}), 500
+    return jsonify({"ok": True, "work": _community_work_payload(row)}), 200
 
 
 # ---------------------------------------------------------------------------

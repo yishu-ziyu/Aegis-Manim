@@ -62,6 +62,17 @@ def test_schema_file_splits_into_executable_function_statements() -> None:
     assert "GET DIAGNOSTICS deleted_count = ROW_COUNT;" in cleanup_function
 
 
+def test_schema_defines_community_work_repository_tables() -> None:
+    sql = (PROJECT_ROOT / "supabase" / "schema.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS community_works" in sql
+    assert "CREATE TABLE IF NOT EXISTS community_work_ratings" in sql
+    assert "CREATE TABLE IF NOT EXISTS community_work_events" in sql
+    assert "idx_community_works_quality" in sql
+    assert "UNIQUE (work_id, rater_key)" in sql
+    assert "ALTER TABLE community_works ENABLE ROW LEVEL SECURITY" in sql
+
+
 def test_deploy_supabase_schema_uses_safe_statement_splitter(monkeypatch) -> None:
     observed_queries: list[str] = []
 

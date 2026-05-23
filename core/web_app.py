@@ -1472,6 +1472,23 @@ def make_index_html() -> str:
     }}
     body.learning-mode video {{ max-height: 640px; }}
 
+    .community-actions {{
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0 2px;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }}
+    .community-actions.visible {{ display: flex; }}
+    .rating-row {{
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }}
+
     /* ── Alignment / Script Panel ── */
     .alignment-panel {{
       display: none;
@@ -1790,6 +1807,16 @@ def make_index_html() -> str:
             <video id="videoPlayer" controls preload="metadata"></video>
           </div>
 
+          <div id="communityActions" class="community-actions">
+            <span id="communitySource">社区作品状态</span>
+            <div class="rating-row">
+              <button id="publishWorkBtn" class="ghost-btn" type="button">发布到社区</button>
+              <button class="ghost-btn rating-btn" type="button" data-rating="5">5分</button>
+              <button class="ghost-btn rating-btn" type="button" data-rating="4">4分</button>
+              <button class="ghost-btn rating-btn" type="button" data-rating="3">3分</button>
+            </div>
+          </div>
+
           <section id="alignmentPanel" class="alignment-panel">
             <div class="alignment-head">
               <div>
@@ -1852,12 +1879,19 @@ def make_index_html() -> str:
     const promptInput = document.getElementById("prompt");
     const promptPreview = document.getElementById("promptPreview");
     const promptPreviewContent = document.getElementById("promptPreviewContent");
+    const communityActions = document.getElementById("communityActions");
+    const communitySource = document.getElementById("communitySource");
+    const publishWorkBtn = document.getElementById("publishWorkBtn");
+    const ratingButtons = Array.from(document.querySelectorAll(".rating-btn"));
 
     let currentAlignment = null;
     let latestPrompt = "";
     let latestCode = "";
     let latestSceneName = "GeneratedScene";
     let latestProviderPayload = null;
+    let latestVideoUrl = "";
+    let latestRenderJobId = "";
+    let communityWorkId = "";
     let processStartedAt = 0;
     let processTimer = null;
 
@@ -2086,6 +2120,121 @@ def make_index_html() -> str:
       techLog.textContent = "";
     }}
 
+    function communityRaterKey() {{
+      const storageKey = "aegis.community.rater";
+      let key = localStorage.getItem(storageKey);
+      if (!key) {{
+        key = "anon-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        localStorage.setItem(storageKey, key);
+      }}
+      return key;
+    }}
+
+    function setCommunityActions(mode = "", message = "") {{
+      if (!mode) {{
+        communityActions.classList.remove("visible");
+        communitySource.textContent = "";
+        publishWorkBtn.style.display = "none";
+        ratingButtons.forEach((button) => button.style.display = "none");
+        return;
+      }}
+      communityActions.classList.add("visible");
+      communitySource.textContent = message || "社区作品状态";
+      publishWorkBtn.style.display = mode === "rendered" ? "" : "none";
+      ratingButtons.forEach((button) => button.style.display = communityWorkId ? "" : "none");
+    }}
+
+    async function searchCommunityWork(payload) {{
+      if (payload.noRender || !payload.prompt) return null;
+      try {{
+        const response = await fetch("/api/community/search?q=" + encodeURIComponent(payload.prompt) + "&limit=1", {{
+          cache: "no-store"
+        }});
+        const data = await response.json();
+        if (!response.ok || !data.ok || !Array.isArray(data.items) || !data.items.length) {{
+          return null;
+        }}
+        return data.items[0];
+      }} catch (e) {{
+        return null;
+      }}
+    }}
+
+    async function applyCommunityWork(item, payload) {{
+      communityWorkId = item.workId || item.id || "";
+      latestCode = item.code || "";
+      latestSceneName = item.sceneName || item.scene_name || payload.sceneName || "GeneratedScene";
+      latestVideoUrl = item.videoUrl || item.video_url || "";
+      latestRenderJobId = item.renderJobId || item.render_job_id || "";
+      codeOutput.textContent = latestCode || "# 社区作品没有返回代码";
+      sceneTag.textContent = "Scene: " + latestSceneName + " · 社区复用";
+      fileTag.textContent = "File: community-work";
+      requestTag.textContent = "Req: community-" + (communityWorkId || "-");
+      setWarnings([]);
+      clearAlignment();
+      if (latestVideoUrl) {{
+        videoPlayer.src = latestVideoUrl;
+        videoCard.classList.add("visible");
+        enterLearningMode();
+      }}
+      setCommunityActions("reused", "已复用社区高分作品，可为它评分。");
+      setStatus("已复用社区高分作品，无需重新生成和渲染。", "success");
+      if (communityWorkId) {{
+        fetch(`/api/community/works/${{communityWorkId}}/reuse`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ query: payload.prompt }})
+        }}).catch(() => undefined);
+      }}
+    }}
+
+    async function publishCommunityWork() {{
+      if (!latestPrompt || !latestCode || !latestVideoUrl) {{
+        setStatus("当前作品缺少可发布的视频地址。", "warn");
+        return;
+      }}
+      publishWorkBtn.disabled = true;
+      try {{
+        const response = await fetch("/api/community/works", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            title: latestPrompt.slice(0, 60),
+            prompt: latestPrompt,
+            sceneName: latestSceneName,
+            code: latestCode,
+            videoUrl: latestVideoUrl,
+            renderJobId: latestRenderJobId
+          }})
+        }});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "发布失败");
+        communityWorkId = data.work && data.work.workId ? data.work.workId : "";
+        setCommunityActions("published", "已发布到社区复用库，可继续评分。");
+        setStatus("已发布到社区复用库。", "success");
+      }} catch (err) {{
+        setStatus(err && err.message ? err.message : "发布失败", "error");
+      }} finally {{
+        publishWorkBtn.disabled = false;
+      }}
+    }}
+
+    async function rateCommunityWork(rating) {{
+      if (!communityWorkId) return;
+      try {{
+        const response = await fetch(`/api/community/works/${{communityWorkId}}/rating`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ rating, raterKey: communityRaterKey() }})
+        }});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "评分失败");
+        setStatus("评分已保存，谢谢反馈。", "success");
+      }} catch (err) {{
+        setStatus(err && err.message ? err.message : "评分失败", "error");
+      }}
+    }}
+
     function enterLearningMode() {{
       document.body.classList.add("learning-mode");
       document.body.classList.remove("show-code");
@@ -2129,46 +2278,22 @@ def make_index_html() -> str:
       }}).join("\\n");
     }}
 
-    // Auto-render configuration
-    const RENDER_BACKEND_URL = "{os.environ.get('RENDER_BACKEND_URL', 'http://localhost:5001')}";
-    const RENDER_BACKEND_API_KEY = "{RENDER_BACKEND_API_KEY}";
-
     async function startAutoRender(code, sceneName, retryCount = 0) {{
       if (!code) return;
       setStatus("代码已生成，正在提交渲染任务...", "");
-      const renderPayload = {{ code, scene_name: sceneName, render_mode: "auto" }};
       let renderResponse = null;
       let renderData = null;
 
-      // Try local render backend first
       try {{
-        const localResp = await fetch(`${{RENDER_BACKEND_URL}}/render-async`, {{
+        renderResponse = await fetch("/api/render", {{
           method: "POST",
-          headers: {{ "Content-Type": "application/json", "X-API-Key": RENDER_BACKEND_API_KEY }},
-          body: JSON.stringify(renderPayload)
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ code, sceneName, renderMode: "auto" }})
         }});
-        if (localResp.ok) {{
-          renderResponse = localResp;
-          renderData = await localResp.json();
-        }}
+        renderData = await renderResponse.json();
       }} catch (e) {{
-        // Local backend not available, try via current API proxy
-      }}
-
-      // Fallback to /api/render (Vercel proxy or local web_app proxy)
-      if (!renderResponse) {{
-        try {{
-          const proxyResp = await fetch("/api/render", {{
-            method: "POST",
-            headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify({{ code, sceneName, renderMode: "auto" }})
-          }});
-          renderResponse = proxyResp;
-          renderData = await proxyResp.json();
-        }} catch (e) {{
-          setStatus("渲染后端连接失败，已生成代码但无法渲染视频。", "warn");
-          return;
-        }}
+        setStatus("渲染后端连接失败，已生成代码但无法渲染视频。", "warn");
+        return;
       }}
 
       if (!renderResponse.ok || !renderData || renderData.error) {{
@@ -2178,6 +2303,7 @@ def make_index_html() -> str:
       }}
 
       const jobId = renderData.job_id;
+      latestRenderJobId = jobId;
       const statusUrl = renderData.status_url || `/status/${{jobId}}`;
       const downloadUrl = renderData.download_url || `/download/${{jobId}}`;
       setStatus(`渲染任务已创建 (ID: ${{jobId.slice(0,8)}})，正在渲染视频...`, "");
@@ -2187,18 +2313,9 @@ def make_index_html() -> str:
         await new Promise(r => setTimeout(r, 2000));
         let statusResp;
         try {{
-          statusResp = await fetch(`${{RENDER_BACKEND_URL}}${{statusUrl}}`, {{
-            headers: {{ "X-API-Key": RENDER_BACKEND_API_KEY }}
-          }});
-          if (!statusResp.ok) {{
-            statusResp = await fetch(`/api/render/status/${{jobId}}`);
-          }}
+          statusResp = await fetch(`/api/render/status/${{jobId}}`);
         }} catch (e) {{
-          try {{
-            statusResp = await fetch(`/api/render/status/${{jobId}}`);
-          }} catch (e2) {{
-            continue;
-          }}
+          continue;
         }}
         if (!statusResp.ok) continue;
         const statusData = await statusResp.json();
@@ -2225,9 +2342,11 @@ def make_index_html() -> str:
             }} catch (e) {{}}
           }}
           if (videoUrl) {{
+            latestVideoUrl = videoUrl;
             videoPlayer.src = videoUrl;
             videoCard.classList.add("visible");
             enterLearningMode();
+            setCommunityActions("rendered", "视频已生成，可发布到社区复用库。");
             setStatus("视频渲染完成！", "success");
           }} else {{
             setStatus("渲染完成，但无法获取视频地址。", "warn");
@@ -2468,11 +2587,15 @@ def make_index_html() -> str:
       latestCode = "";
       latestSceneName = "GeneratedScene";
       latestProviderPayload = null;
+      latestVideoUrl = "";
+      latestRenderJobId = "";
+      communityWorkId = "";
       requestTag.textContent = "Req: -";
       videoCard.classList.remove("visible");
       videoPlayer.removeAttribute("src");
       videoPlayer.load();
       clearAlignment();
+      setCommunityActions();
 
       const payload = {{
         provider: providerSelect.value,
@@ -2494,6 +2617,11 @@ def make_index_html() -> str:
       }}
 
       try {{
+        const communityWork = await searchCommunityWork(payload);
+        if (communityWork) {{
+          await applyCommunityWork(communityWork, payload);
+          return;
+        }}
         const response = await fetch("/api/generate/start", {{
           method: "POST",
           headers: {{ "Content-Type": "application/json" }},
@@ -2517,6 +2645,10 @@ def make_index_html() -> str:
     videoPlayer.addEventListener("timeupdate", updateActiveSegment);
     videoPlayer.addEventListener("loadedmetadata", updateActiveSegment);
     promptInput.addEventListener("input", updatePromptPreview);
+    publishWorkBtn.addEventListener("click", publishCommunityWork);
+    ratingButtons.forEach((button) => {{
+      button.addEventListener("click", () => rateCommunityWork(Number(button.dataset.rating || 0)));
+    }});
 
     realignBtn.addEventListener("click", async () => {{
       if (!latestPrompt || !latestCode || !latestProviderPayload) return;
@@ -2706,6 +2838,34 @@ def proxy_render_backend_raw(path: str, timeout: int = 15) -> tuple[int, bytes, 
         }
 
 
+def proxy_community_request(
+    route: str,
+    *,
+    query: str = "",
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    if route == "/api/community/search" and method == "GET":
+        backend_path = "/community/search" + (f"?{query}" if query else "")
+        return proxy_render_backend(backend_path, method="GET", timeout=15)
+    if method != "POST":
+        return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
+    if route == "/api/community/works":
+        return proxy_render_backend("/community/works", method="POST", payload=payload or {}, timeout=15)
+    prefix = "/api/community/works/"
+    if route.startswith(prefix):
+        suffix = route[len(prefix):]
+        parts = [part for part in suffix.split("/") if part]
+        if len(parts) == 2 and parts[1] in {"rating", "reuse"}:
+            return proxy_render_backend(
+                f"/community/works/{parts[0]}/{parts[1]}",
+                method="POST",
+                payload=payload or {},
+                timeout=15,
+            )
+    return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
+
+
 class AegisWebHandler(BaseHTTPRequestHandler):
     server_version = "AegisWeb/0.1"
 
@@ -2769,6 +2929,11 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/community/search":
+            status, response = proxy_community_request(route, query=parsed.query)
+            self._send_json(status, response)
+            return
+
         if route.startswith("/api/jobs/"):
             job_id = route.rsplit("/", 1)[-1]
             snapshot = job_snapshot(job_id)
@@ -2823,15 +2988,18 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path == "/api/align":
+        parsed = urlparse(self.path)
+        route = parsed.path
+
+        if route == "/api/align":
             self._handle_align()
             return
 
-        if self.path == "/api/generate/start":
+        if route == "/api/generate/start":
             self._handle_generate_start()
             return
 
-        if self.path == "/api/render":
+        if route == "/api/render":
             try:
                 payload = self._read_json_body()
             except ValueError as exc:
@@ -2852,7 +3020,17 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             self._send_json(status, response)
             return
 
-        if self.path != "/api/generate":
+        if route == "/api/community/works" or route.startswith("/api/community/works/"):
+            try:
+                payload = self._read_json_body()
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = proxy_community_request(route, method="POST", payload=payload)
+            self._send_json(status, response)
+            return
+
+        if route != "/api/generate":
             self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
             return
 

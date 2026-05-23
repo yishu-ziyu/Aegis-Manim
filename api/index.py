@@ -764,6 +764,34 @@ def build_render_backend_submit_payload(
     return {"code": code, "scene_name": scene_name, "render_mode": render_mode}, None
 
 
+def proxy_community_request(
+    route: str,
+    *,
+    query: str = "",
+    method: str = "GET",
+    payload: dict[str, object] | None = None,
+) -> tuple[int, dict[str, object]]:
+    if route == "/api/community/search" and method == "GET":
+        backend_path = "/community/search" + (f"?{query}" if query else "")
+        return _proxy_to_render_backend(backend_path, method="GET", timeout=15)
+    if method != "POST":
+        return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
+    if route == "/api/community/works":
+        return _proxy_to_render_backend("/community/works", method="POST", payload=payload or {}, timeout=15)
+    prefix = "/api/community/works/"
+    if route.startswith(prefix):
+        suffix = route[len(prefix):]
+        parts = [part for part in suffix.split("/") if part]
+        if len(parts) == 2 and parts[1] in {"rating", "reuse"}:
+            return _proxy_to_render_backend(
+                f"/community/works/{parts[0]}/{parts[1]}",
+                method="POST",
+                payload=payload or {},
+                timeout=15,
+            )
+    return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
+
+
 class handler(BaseHTTPRequestHandler):
     def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -798,7 +826,8 @@ class handler(BaseHTTPRequestHandler):
         return parsed
 
     def do_GET(self) -> None:  # noqa: N802
-        route = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        route = parsed.path
         if route == "/favicon.ico":
             self.send_response(HTTPStatus.NO_CONTENT)
             self.send_header("Content-Length", "0")
@@ -809,6 +838,10 @@ class handler(BaseHTTPRequestHandler):
             return
         if route == "/api/health":
             self._send_json(HTTPStatus.OK, build_health_payload())
+            return
+        if route == "/api/community/search":
+            status, response = proxy_community_request(route, query=parsed.query)
+            self._send_json(HTTPStatus(status), response)
             return
         # Render proxy: status
         if route.startswith("/api/render/status/"):
@@ -860,6 +893,15 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
             status, response = generate_manim_code_for_gateway(payload)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/community/works" or route.startswith("/api/community/works/"):
+            try:
+                payload = self._read_json_body()
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = proxy_community_request(route, method="POST", payload=payload)
             self._send_json(HTTPStatus(status), response)
             return
         if route == "/api/render" or route.startswith("/api/render/"):

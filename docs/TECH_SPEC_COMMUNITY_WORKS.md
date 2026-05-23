@@ -40,25 +40,24 @@ CREATE TABLE IF NOT EXISTS community_works (
     video_url text NOT NULL,
     render_job_id text REFERENCES render_jobs(job_id) ON DELETE SET NULL,
     author_label text,
+    tags text[] DEFAULT '{}',
     status text NOT NULL DEFAULT 'published'
-        CHECK (status IN ('draft', 'published', 'hidden', 'rejected')),
+        CHECK (status IN ('published', 'hidden', 'rejected')),
     quality_score numeric NOT NULL DEFAULT 0,
     rating_avg numeric NOT NULL DEFAULT 0,
     rating_count int NOT NULL DEFAULT 0,
     reuse_count int NOT NULL DEFAULT 0,
-    tags text[] NOT NULL DEFAULT '{}',
     metadata jsonb NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_community_works_status_score
-    ON community_works(status, quality_score DESC, rating_avg DESC, reuse_count DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_community_works_quality
+    ON community_works (quality_score DESC, rating_avg DESC, reuse_count DESC, created_at DESC)
+    WHERE status = 'published';
 
-CREATE INDEX IF NOT EXISTS idx_community_works_prompt_fts
-    ON community_works USING gin (
-        to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(prompt, '') || ' ' || array_to_string(tags, ' '))
-    );
+CREATE INDEX IF NOT EXISTS idx_community_works_prompt_normalized
+    ON community_works USING gin (prompt_normalized gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS community_work_ratings (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,10 +71,8 @@ CREATE TABLE IF NOT EXISTS community_work_ratings (
 
 CREATE TABLE IF NOT EXISTS community_work_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    work_id uuid REFERENCES community_works(id) ON DELETE SET NULL,
-    event_type text NOT NULL CHECK (
-        event_type IN ('search_impression', 'cache_hit', 'reuse', 'publish', 'rating')
-    ),
+    work_id uuid NOT NULL REFERENCES community_works(id) ON DELETE CASCADE,
+    event_type text NOT NULL CHECK (event_type IN ('reuse')),
     query text,
     metadata jsonb NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now()
@@ -113,7 +110,8 @@ Body:
 Validation:
 
 - `videoUrl` must be an existing public URL from the current Supabase `manim-videos` bucket.
-- `code` must pass existing compatibility and render-budget checks.
+- `renderJobId` is required in the implemented MVP. Render loads the completed job's persisted `code`, `scene_name`, and `video_path` server-side instead of trusting browser-submitted code/video fields.
+- `code` must pass existing compatibility and render-budget checks before the original render job can complete.
 - MVP may publish immediately, but the schema keeps `hidden` and `rejected` states for moderation.
 
 ### Rate
