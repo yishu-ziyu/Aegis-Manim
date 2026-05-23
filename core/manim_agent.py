@@ -224,6 +224,15 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
 
         return re.sub(r"line_config\s*=\s*\{([^{}\n]*)\}", convert_config, plot_call)
 
+    def text_axis_labels(match: re.Match[str]) -> str:
+        receiver = match.group("receiver")
+        args = match.group("args") or ""
+        x_match = re.search(r"x_label\s*=\s*([\"'])(.*?)\1", args)
+        y_match = re.search(r"y_label\s*=\s*([\"'])(.*?)\1", args)
+        x_label = x_match.group(2) if x_match else "x"
+        y_label = y_match.group(2) if y_match else "y"
+        return f"{receiver}.get_axis_labels(Text({x_label!r}, font_size=20), Text({y_label!r}, font_size=20))"
+
     candidate = re.sub(r"\bMathTex\s*\(", "Text(", patched)
     if candidate != patched:
         notes.append("Replaced MathTex(...) with Text(...) for the default LaTeX-free product path.")
@@ -264,6 +273,15 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
     )
     if candidate != patched:
         notes.append("Removed add_coordinates() because numeric axis labels require LaTeX.")
+        patched = candidate
+
+    candidate = re.sub(
+        r"(?P<receiver>[A-Za-z_][A-Za-z0-9_]*)\.get_axis_labels\((?P<args>[^()\n]*)\)",
+        text_axis_labels,
+        patched,
+    )
+    if candidate != patched:
+        notes.append("Forced get_axis_labels(...) to use Text labels for LaTeX-free rendering.")
         patched = candidate
 
     candidate = re.sub(r"\.get_h_line\s*\(", ".get_horizontal_line(", patched)
