@@ -522,6 +522,39 @@ def test_supabase_upload_failure_makes_render_fail_without_local_path(monkeypatc
 
 
 @requires_backend
+def test_supabase_upload_retries_before_failing_render(monkeypatch, tmp_path):
+    source_video = tmp_path / "GeneratedScene.mp4"
+    source_video.write_bytes(b"mp4")
+    calls: list[str] = []
+    monkeypatch.setattr(backend, "_use_supabase", lambda: True)
+    monkeypatch.setattr(backend, "_update_job", lambda *_, **__: None)
+    monkeypatch.setattr(backend, "_find_rendered_video", lambda *_: source_video)
+    monkeypatch.setattr(backend, "supa_insert_log", lambda **_: None)
+    monkeypatch.setattr(backend, "SUPABASE_UPLOAD_RETRIES", 3)
+    monkeypatch.setattr(backend, "SUPABASE_UPLOAD_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(
+        backend,
+        "supa_upload_video",
+        lambda job_id, path: calls.append(job_id) or (
+            "https://example.supabase.co/storage/v1/object/public/manim-videos/job-1/final.mp4"
+            if len(calls) == 3
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        backend.subprocess,
+        "Popen",
+        lambda *_, **__: FakePopen(),
+    )
+
+    result = backend._run_manim_render("code", "GeneratedScene", job_id="job-1")
+
+    assert result["success"] is True
+    assert result["video_url"] == "https://example.supabase.co/storage/v1/object/public/manim-videos/job-1/final.mp4"
+    assert calls == ["job-1", "job-1", "job-1"]
+
+
+@requires_backend
 def test_supabase_upload_success_returns_storage_url_as_video_path(monkeypatch, tmp_path):
     source_video = tmp_path / "GeneratedScene.mp4"
     source_video.write_bytes(b"mp4")
