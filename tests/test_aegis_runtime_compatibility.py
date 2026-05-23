@@ -150,6 +150,24 @@ ring = AnnularSector(inner_radius=1, outer_radius=2, angle=PI / 2)
         assert "y_label=" not in patched
         assert any("get_axis_labels" in note for note in notes)
 
+    def test_axes_constructor_label_kwargs_are_removed(self) -> None:
+        code = """axis = Axes(
+            x_range=[0, 5, 1],
+            y_range=[0, 5, 1],
+            x_length=5,
+            y_length=4.5,
+            axis_config={"include_numbers": False},
+            x_label="Alice收益",
+            y_label="Bob收益",
+        )"""
+
+        patched, notes = manim_agent.apply_runtime_compatibility_fixes(code)
+
+        assert "x_label=" not in patched
+        assert "y_label=" not in patched
+        assert 'axis_config={"include_numbers": False}' in patched
+        assert any("Axes" in note for note in notes)
+
     def test_brace_label_uses_text_when_latex_is_unavailable(self) -> None:
         code = 'brace = BraceLabel(Line(LEFT, RIGHT), "所有帕累托最优点", brace_direction=UP)'
 

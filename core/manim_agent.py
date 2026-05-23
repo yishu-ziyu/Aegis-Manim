@@ -233,6 +233,17 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
         y_label = y_match.group(2) if y_match else "y"
         return f"{receiver}.get_axis_labels(Text({x_label!r}, font_size=20), Text({y_label!r}, font_size=20))"
 
+    def strip_axes_constructor_label_kwargs(match: re.Match[str]) -> str:
+        call = match.group(0)
+        call = re.sub(
+            r",?\s*[xy]_label\s*=\s*(?:[\"'][^\"']*[\"']|Text\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)",
+            "",
+            call,
+        )
+        call = re.sub(r",\s*,", ",", call)
+        call = re.sub(r"\(\s*,", "(", call)
+        return re.sub(r",\s*\)", ")", call)
+
     candidate = re.sub(r"\bMathTex\s*\(", "Text(", patched)
     if candidate != patched:
         notes.append("Replaced MathTex(...) with Text(...) for the default LaTeX-free product path.")
@@ -282,6 +293,16 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
     )
     if candidate != patched:
         notes.append("Forced get_axis_labels(...) to use Text labels for LaTeX-free rendering.")
+        patched = candidate
+
+    candidate = re.sub(
+        r"\bAxes\s*\((?:[^()]|\([^()]*\))*\)",
+        strip_axes_constructor_label_kwargs,
+        patched,
+        flags=re.DOTALL,
+    )
+    if candidate != patched:
+        notes.append("Removed unsupported x_label/y_label kwargs from Axes(...) constructor.")
         patched = candidate
 
     candidate = re.sub(r"\.get_h_line\s*\(", ".get_horizontal_line(", patched)
