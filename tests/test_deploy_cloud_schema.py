@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -71,6 +72,15 @@ def test_schema_defines_community_work_repository_tables() -> None:
     assert "idx_community_works_quality" in sql
     assert "UNIQUE (work_id, rater_key)" in sql
     assert "ALTER TABLE community_works ENABLE ROW LEVEL SECURITY" in sql
+
+
+def test_vercel_rewrites_include_community_proxy_routes() -> None:
+    config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
+    rewrites = {rewrite["source"]: rewrite["destination"] for rewrite in config["rewrites"]}
+
+    assert rewrites["/api/community/search"] == "/api/index"
+    assert rewrites["/api/community/works"] == "/api/index"
+    assert rewrites["/api/community/works/(.*)"] == "/api/index"
 
 
 def test_deploy_supabase_schema_uses_safe_statement_splitter(monkeypatch) -> None:
