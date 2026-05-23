@@ -87,6 +87,7 @@ ORPHAN_JOB_THRESHOLD_SECONDS = int(
 )
 ORPHAN_JOB_SCAN_SECONDS = 30
 ORPHAN_JOB_MESSAGE = "Render instance restarted unexpectedly. Please resubmit."
+MAX_RECOVERY_RESTARTS = int(os.environ.get("MANIM_MAX_RECOVERY_RESTARTS", "2"))
 
 # Directories
 BASE_DIR = Path(__file__).parent.resolve()
@@ -384,35 +385,61 @@ def _recover_jobs_from_supabase() -> None:
     if not _use_supabase():
         return
     rows = supa_list_jobs_by_status(["pending", "running"])
-    failed_jobs: list[str] = []
+    recovered_jobs: list[RenderJob] = []
+    failed_jobs: list[RenderJob] = []
     with _jobs_lock:
         for row in rows:
             try:
                 job = _row_to_job(row)
-                job.status = JobStatus.FAILED
-                job.error_message = ORPHAN_JOB_MESSAGE
-                job.metadata = {
-                    **(job.metadata or {}),
-                    "stage": "failed",
-                    "recovered_after_restart": False,
-                }
+                metadata = dict(job.metadata or {})
+                attempts = int(metadata.get("recovery_restart_attempts") or 0)
+                if attempts >= MAX_RECOVERY_RESTARTS:
+                    job.status = JobStatus.FAILED
+                    job.error_message = ORPHAN_JOB_MESSAGE
+                    job.metadata = {
+                        **metadata,
+                        "stage": "failed",
+                        "recovered_after_restart": False,
+                        "recovery_restart_attempts": attempts,
+                    }
+                    failed_jobs.append(job)
+                else:
+                    job.status = JobStatus.PENDING
+                    job.error_message = None
+                    job.metadata = {
+                        **metadata,
+                        "stage": "queued_after_restart",
+                        "recovered_after_restart": True,
+                        "recovery_restart_attempts": attempts + 1,
+                    }
+                    recovered_jobs.append(job)
                 _jobs[row["job_id"]] = job
-                failed_jobs.append(job.job_id)
             except (KeyError, ValueError) as exc:
                 print(f"[recovery] Skipping invalid job row: {exc}")
-    for job_id in failed_jobs:
+
+    for job in recovered_jobs:
         supa_update_job(
-            job_id=job_id,
+            job_id=job.job_id,
+            status=JobStatus.PENDING.value,
+            expected_status=[JobStatus.PENDING.value, JobStatus.RUNNING.value],
+            error_message=None,
+            metadata=job.metadata,
+        )
+        render_mode = str(job.metadata.get("render_mode") or "auto")
+        _start_render_job_thread(job.job_id, job.code, job.scene_name, render_mode=render_mode)
+
+    for job in failed_jobs:
+        supa_update_job(
+            job_id=job.job_id,
             status=JobStatus.FAILED.value,
             expected_status=[JobStatus.PENDING.value, JobStatus.RUNNING.value],
             error_message=ORPHAN_JOB_MESSAGE,
-            metadata={
-                **(_jobs[job_id].metadata or {}),
-                "stage": "failed",
-                "recovered_after_restart": False,
-            },
+            metadata=job.metadata,
         )
-    print(f"[recovery] Marked {len(failed_jobs)} pre-existing jobs failed after restart")
+    print(
+        f"[recovery] Restarted {len(recovered_jobs)} jobs and marked "
+        f"{len(failed_jobs)} over-limit jobs failed after restart"
+    )
 
 
 def _parse_supabase_datetime(value: str) -> datetime:
