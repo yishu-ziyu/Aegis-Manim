@@ -748,6 +748,22 @@ def build_index_html() -> str:
     return html
 
 
+def build_render_backend_submit_payload(
+    payload: dict[str, object],
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    code = str(payload.get("code", "")).strip()
+    if not code:
+        return None, {"ok": False, "error": "缺少 code 字段"}
+
+    raw_scene_name = payload.get("sceneName", payload.get("scene_name", "GeneratedScene"))
+    scene_name = local_web_app.safe_scene_name(str(raw_scene_name))
+    render_mode = str(payload.get("renderMode", payload.get("render_mode", "auto"))).strip() or "auto"
+
+    code, _notes = apply_runtime_compatibility_fixes(code)
+    scene_name = local_web_app.detect_scene_name(code, scene_name)
+    return {"code": code, "scene_name": scene_name, "render_mode": render_mode}, None
+
+
 class handler(BaseHTTPRequestHandler):
     def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -852,20 +868,15 @@ class handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
-            # Validate
-            code = str(payload.get("code", "")).strip()
-            scene_name = str(payload.get("sceneName", "GeneratedScene")).strip()
-            render_mode = str(payload.get("renderMode", payload.get("render_mode", "auto"))).strip() or "auto"
-            if not code:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "缺少 code 字段"})
+            render_payload, error_payload = build_render_backend_submit_payload(payload)
+            if error_payload is not None or render_payload is None:
+                self._send_json(HTTPStatus.BAD_REQUEST, error_payload or {"ok": False, "error": "Invalid render payload."})
                 return
-            code, _notes = apply_runtime_compatibility_fixes(code)
-            scene_name = local_web_app.detect_scene_name(code, scene_name)
             # Proxy to render backend async endpoint
             status, response = _proxy_to_render_backend(
                 "/render-async",
                 method="POST",
-                payload={"code": code, "scene_name": scene_name, "render_mode": render_mode},
+                payload=render_payload,
                 timeout=15,
             )
             self._send_json(HTTPStatus(status), response)
