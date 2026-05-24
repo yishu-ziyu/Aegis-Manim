@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import hashlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib import error, request
@@ -56,12 +57,12 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     "kimi-code": ProviderPreset(
         id="kimi-code",
         name="Kimi Code API",
-        api_type="anthropic-compatible",
+        api_type="openai-compatible",
         region="cn",
         base_url="https://api.kimi.com/coding/v1",
         default_model="kimi-for-coding",
         models=("kimi-for-coding",),
-        doc="https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html",
+        doc="https://www.kimi.com/coding/docs/",
         api_key_placeholder="KIMI_CODE_API_KEY",
     ),
     "moonshot-kimi": ProviderPreset(
@@ -351,6 +352,8 @@ def call_openai_compatible(
     temperature: float,
     provider_name: str,
     timeout: int | None = None,
+    max_tokens: int | None = None,
+    extra_payload: dict[str, object] | None = None,
 ) -> str:
     payload = {
         "model": model,
@@ -360,9 +363,16 @@ def call_openai_compatible(
         ],
         "temperature": temperature,
     }
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    if extra_payload:
+        payload.update(extra_payload)
+    user_agent = "Aegis-Manim/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)"
+    if "Kimi Code" in provider_name:
+        user_agent = "Aegis-Manim-Coding-Agent/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)"
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "Aegis-Manim/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)",
+        "User-Agent": user_agent,
     }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -393,10 +403,11 @@ def call_anthropic_compatible(
     temperature: float,
     provider_name: str,
     timeout: int | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     payload = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": max_tokens or 4096,
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": temperature,
@@ -404,6 +415,7 @@ def call_anthropic_compatible(
     headers = {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
+        "User-Agent": "Aegis-Manim/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)",
     }
     if api_key:
         headers["x-api-key"] = api_key
@@ -484,6 +496,25 @@ def call_codex_cli(
         return output_file.read_text(encoding="utf-8")
 
 
+def max_tokens_for_provider(provider_id: str, model: str) -> int | None:
+    if provider_id == "kimi-code":
+        return int(os.getenv("KIMI_CODE_MAX_TOKENS", "8192"))
+    if provider_id.startswith("minimax"):
+        return int(os.getenv("MINIMAX_MAX_TOKENS", "8192"))
+    raw = os.getenv("LLM_MAX_TOKENS", "").strip()
+    return int(raw) if raw else None
+
+
+def extra_openai_payload_for_provider(provider_id: str, model: str, user_prompt: str) -> dict[str, object]:
+    if provider_id != "kimi-code":
+        return {}
+    digest = hashlib.sha256(f"{model}\n{user_prompt}".encode("utf-8")).hexdigest()
+    return {
+        "prompt_cache_key": f"aegis-manim-{digest[:24]}",
+        "safety_identifier": f"aegis-public-{digest[24:48]}",
+    }
+
+
 def generate_code_with_provider(
     *,
     provider_id: str | None,
@@ -539,6 +570,12 @@ def generate_code_with_provider(
                 temperature=temperature,
                 provider_name=preset.name,
                 timeout=timeout,
+                max_tokens=max_tokens_for_provider(preset.id, selected_model),
+                extra_payload=extra_openai_payload_for_provider(
+                    preset.id,
+                    selected_model,
+                    user_prompt,
+                ),
             ),
             preset,
             openai_chat_completions_url(normalized_base),
@@ -560,6 +597,7 @@ def generate_code_with_provider(
                 temperature=temperature,
                 provider_name=preset.name,
                 timeout=timeout,
+                max_tokens=max_tokens_for_provider(preset.id, selected_model),
             ),
             preset,
             anthropic_messages_url(normalized_base),

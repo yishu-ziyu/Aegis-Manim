@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import unittest
 from pathlib import Path
 
@@ -59,11 +60,50 @@ class AegisLLMProviderTest(unittest.TestCase):
     def test_kimi_code_provider_uses_official_coding_endpoint(self) -> None:
         provider = resolve_provider("kimi-code")
 
-        assert provider.api_type == "anthropic-compatible"
+        assert provider.api_type == "openai-compatible"
         assert provider.base_url == "https://api.kimi.com/coding/v1"
-        assert anthropic_messages_url(provider.base_url) == "https://api.kimi.com/coding/v1/messages"
+        assert openai_chat_completions_url(provider.base_url) == "https://api.kimi.com/coding/v1/chat/completions"
         assert provider.default_model == "kimi-for-coding"
         assert provider.requires_api_key
+
+    def test_kimi_code_openai_request_adds_cache_and_safety_metadata(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_read_response_json(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.header_items())
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return {"choices": [{"message": {"content": "from manim import *\n"}}]}
+
+        original = llm_providers.read_response_json
+        llm_providers.read_response_json = fake_read_response_json
+        try:
+            code, provider, endpoint = generate_code_with_provider(
+                provider_id="kimi-code",
+                api_key="server-key",
+                base_url="",
+                endpoint=None,
+                model="kimi-for-coding",
+                system_prompt="system",
+                user_prompt="explain tax wedge",
+                temperature=0.2,
+                timeout=12,
+            )
+        finally:
+            llm_providers.read_response_json = original
+
+        payload = captured["payload"]
+        assert code == "from manim import *\n"
+        assert provider.id == "kimi-code"
+        assert endpoint == "https://api.kimi.com/coding/v1/chat/completions"
+        assert captured["url"] == endpoint
+        assert isinstance(payload, dict)
+        assert payload["model"] == "kimi-for-coding"
+        assert payload["max_tokens"] == 8192
+        assert str(payload["prompt_cache_key"]).startswith("aegis-manim-")
+        assert str(payload["safety_identifier"]).startswith("aegis-public-")
+        assert "Coding-Agent" in captured["headers"]["User-agent"]
+        assert "server-key" not in json.dumps(payload)
 
     def test_minimax_coding_cn_provider_uses_anthropic_messages_endpoint(self) -> None:
         provider = resolve_provider("minimax-coding-cn")

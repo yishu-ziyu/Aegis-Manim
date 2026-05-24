@@ -24,8 +24,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import requests
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
+from cloud_run_executor import (
+    CloudRunConfigError,
+    CloudRunDispatchError,
+    cloud_run_health_payload,
+    dispatch_cloud_run_render_job,
+)
 from supabase_client import (
     SupabaseReadUnavailable,
     STORAGE_BUCKET,
@@ -90,6 +97,13 @@ ORPHAN_JOB_MESSAGE = "Render instance restarted unexpectedly. Please resubmit."
 MAX_RECOVERY_RESTARTS = int(os.environ.get("MANIM_MAX_RECOVERY_RESTARTS", "2"))
 SUPABASE_UPLOAD_RETRIES = int(os.environ.get("SUPABASE_UPLOAD_RETRIES", "3"))
 SUPABASE_UPLOAD_RETRY_DELAY_SECONDS = float(os.environ.get("SUPABASE_UPLOAD_RETRY_DELAY_SECONDS", "2"))
+MANIM_EXECUTOR = os.environ.get("MANIM_EXECUTOR", os.environ.get("RENDER_EXECUTOR", "local")).strip().lower()
+if MANIM_EXECUTOR == "render":
+    MANIM_EXECUTOR = "local"
+VALID_EXECUTORS = {"local", "cloud_run"}
+CLOUD_RUN_ORPHAN_JOB_THRESHOLD_SECONDS = int(
+    os.environ.get("CLOUD_RUN_ORPHAN_JOB_THRESHOLD_SECONDS", str(24 * 60 * 60))
+)
 
 # Directories
 BASE_DIR = Path(__file__).parent.resolve()
@@ -229,6 +243,12 @@ _orphan_reaper_started = False
 
 def _use_supabase() -> bool:
     return supa_is_configured()
+
+
+def _selected_executor() -> str:
+    if MANIM_EXECUTOR in VALID_EXECUTORS:
+        return MANIM_EXECUTOR
+    return "local"
 
 
 def _row_to_job(row: dict[str, Any]) -> RenderJob:
@@ -388,12 +408,23 @@ def _recover_jobs_from_supabase() -> None:
         return
     rows = supa_list_jobs_by_status(["pending", "running"])
     recovered_jobs: list[RenderJob] = []
+    in_flight_cloud_run_jobs: list[RenderJob] = []
     failed_jobs: list[RenderJob] = []
     with _jobs_lock:
         for row in rows:
             try:
                 job = _row_to_job(row)
                 metadata = dict(job.metadata or {})
+                if (
+                    metadata.get("executor") == "cloud_run"
+                    and metadata.get("stage")
+                    in {"cloud_run_dispatching", "cloud_run_dispatched", "rendering", "rendering_segment", "concatenating"}
+                ):
+                    job.status = JobStatus.RUNNING
+                    job.metadata = {**metadata, "control_plane_recovered": True}
+                    in_flight_cloud_run_jobs.append(job)
+                    _jobs[row["job_id"]] = job
+                    continue
                 attempts = int(metadata.get("recovery_restart_attempts") or 0)
                 if attempts >= MAX_RECOVERY_RESTARTS:
                     job.status = JobStatus.FAILED
@@ -428,7 +459,15 @@ def _recover_jobs_from_supabase() -> None:
             metadata=job.metadata,
         )
         render_mode = str(job.metadata.get("render_mode") or "auto")
-        _start_render_job_thread(job.job_id, job.code, job.scene_name, render_mode=render_mode)
+        _dispatch_async_render_job(job.job_id, job.code, job.scene_name, render_mode=render_mode)
+
+    for job in in_flight_cloud_run_jobs:
+        supa_update_job(
+            job_id=job.job_id,
+            status=JobStatus.RUNNING.value,
+            expected_status=[JobStatus.PENDING.value, JobStatus.RUNNING.value],
+            metadata=job.metadata,
+        )
 
     for job in failed_jobs:
         supa_update_job(
@@ -439,7 +478,8 @@ def _recover_jobs_from_supabase() -> None:
             metadata=job.metadata,
         )
     print(
-        f"[recovery] Restarted {len(recovered_jobs)} jobs and marked "
+        f"[recovery] Restarted {len(recovered_jobs)} jobs, preserved "
+        f"{len(in_flight_cloud_run_jobs)} Cloud Run jobs, and marked "
         f"{len(failed_jobs)} over-limit jobs failed after restart"
     )
 
@@ -461,7 +501,13 @@ def _reap_orphan_jobs() -> None:
             updated_at = _parse_supabase_datetime(row["updated_at"])
         except (KeyError, ValueError):
             continue
-        if (now - updated_at).total_seconds() <= ORPHAN_JOB_THRESHOLD_SECONDS:
+        metadata = row.get("metadata") or {}
+        threshold = (
+            CLOUD_RUN_ORPHAN_JOB_THRESHOLD_SECONDS
+            if metadata.get("executor") == "cloud_run"
+            else ORPHAN_JOB_THRESHOLD_SECONDS
+        )
+        if (now - updated_at).total_seconds() <= threshold:
             continue
         updated = supa_update_job(
             job_id=row["job_id"],
@@ -913,6 +959,43 @@ def _validate_render_payload(data: dict) -> tuple[str, str] | tuple[None, str]:
     return (code, scene_name), ""
 
 
+def _finish_render_job(job_id: str, result: dict[str, Any]) -> None:
+    current_job = _get_job(job_id)
+    current_metadata = dict(current_job.metadata if current_job else {})
+    if result["success"]:
+        video_url = result.get("video_url")
+        current_metadata["stage"] = "done"
+        _update_job(
+            job_id,
+            status=JobStatus.DONE,
+            video_path=video_url or result["video_path"],
+            metadata=current_metadata,
+        )
+        return
+
+    current_metadata["stage"] = "failed"
+    _update_job(
+        job_id,
+        status=JobStatus.FAILED,
+        error_message=result["error"],
+        stderr=result.get("stderr"),
+        metadata=current_metadata,
+    )
+    if _use_supabase():
+        supa_insert_log(
+            job_id=job_id,
+            level="error",
+            stage="render",
+            message="Rendering failed",
+            detail=result.get("error"),
+        )
+
+
+def _execute_render_job(job_id: str, code: str, scene_name: str, render_mode: str = "auto") -> None:
+    result = _run_manim_render(code, scene_name, job_id=job_id, render_mode=render_mode)
+    _finish_render_job(job_id, result)
+
+
 def _start_render_job_thread(job_id: str, code: str, scene_name: str, render_mode: str = "auto") -> bool:
     with _active_render_threads_lock:
         if job_id in _active_render_threads:
@@ -921,35 +1004,7 @@ def _start_render_job_thread(job_id: str, code: str, scene_name: str, render_mod
 
     def _background_render() -> None:
         try:
-            result = _run_manim_render(code, scene_name, job_id=job_id, render_mode=render_mode)
-            current_job = _get_job(job_id)
-            current_metadata = dict(current_job.metadata if current_job else {})
-            if result["success"]:
-                video_url = result.get("video_url")
-                current_metadata["stage"] = "done"
-                _update_job(
-                    job_id,
-                    status=JobStatus.DONE,
-                    video_path=video_url or result["video_path"],
-                    metadata=current_metadata,
-                )
-            else:
-                current_metadata["stage"] = "failed"
-                _update_job(
-                    job_id,
-                    status=JobStatus.FAILED,
-                    error_message=result["error"],
-                    stderr=result.get("stderr"),
-                    metadata=current_metadata,
-                )
-                if _use_supabase():
-                    supa_insert_log(
-                        job_id=job_id,
-                        level="error",
-                        stage="render",
-                        message="Rendering failed",
-                        detail=result.get("error"),
-                    )
+            _execute_render_job(job_id, code, scene_name, render_mode=render_mode)
         finally:
             with _active_render_threads_lock:
                 _active_render_threads.discard(job_id)
@@ -957,6 +1012,49 @@ def _start_render_job_thread(job_id: str, code: str, scene_name: str, render_mod
     thread = threading.Thread(target=_background_render, daemon=True)
     thread.start()
     return True
+
+
+def _dispatch_cloud_run_render(job_id: str, render_mode: str) -> tuple[bool, str | None]:
+    if not _use_supabase():
+        return False, "Cloud Run executor requires Supabase persistence"
+    current_job = _get_job(job_id)
+    metadata = dict(current_job.metadata if current_job else {})
+    metadata.update({"executor": "cloud_run", "stage": "cloud_run_dispatching"})
+    _update_job(job_id, status=JobStatus.RUNNING, metadata=metadata)
+    try:
+        execution = dispatch_cloud_run_render_job(
+            job_id=job_id,
+            render_mode=render_mode,
+            timeout_seconds=DEFAULT_TIMEOUT,
+        )
+    except (CloudRunConfigError, CloudRunDispatchError, ValueError, requests.RequestException) as exc:
+        metadata["stage"] = "failed"
+        metadata["executor_error"] = type(exc).__name__
+        _update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            error_message=str(exc),
+            metadata=metadata,
+        )
+        return False, str(exc)
+
+    metadata["stage"] = "cloud_run_dispatched"
+    metadata["cloud_run_execution"] = execution.name
+    metadata["cloud_run_execution_uid"] = execution.uid
+    _update_job(job_id, status=JobStatus.RUNNING, metadata=metadata)
+    return True, None
+
+
+def _dispatch_async_render_job(
+    job_id: str,
+    code: str,
+    scene_name: str,
+    render_mode: str = "auto",
+) -> tuple[bool, str | None]:
+    if _selected_executor() == "cloud_run":
+        return _dispatch_cloud_run_render(job_id, render_mode)
+    _start_render_job_thread(job_id, code, scene_name, render_mode=render_mode)
+    return True, None
 
 
 # ---------------------------------------------------------------------------
@@ -971,9 +1069,15 @@ def health() -> tuple:
         "render": {
             "quality": MANIM_RENDER_QUALITY,
             "cjk_font": _font_health(),
+            "executor": {
+                "selected": _selected_executor(),
+                "valid": MANIM_EXECUTOR in VALID_EXECUTORS,
+                "cloud_run": cloud_run_health_payload(),
+            },
             "recovery": {
                 "max_restart_attempts": MAX_RECOVERY_RESTARTS,
                 "orphan_threshold_seconds": ORPHAN_JOB_THRESHOLD_SECONDS,
+                "cloud_run_orphan_threshold_seconds": CLOUD_RUN_ORPHAN_JOB_THRESHOLD_SECONDS,
             },
             "storage": {
                 "upload_retries": SUPABASE_UPLOAD_RETRIES,
@@ -1062,7 +1166,19 @@ def render_async() -> tuple:
     except RuntimeError:
         return jsonify({"error": "Failed to persist render job. Please try again."}), 500
 
-    _start_render_job_thread(job_id, code, scene_name, render_mode=render_mode)
+    dispatched, dispatch_error = _dispatch_async_render_job(job_id, code, scene_name, render_mode=render_mode)
+    if not dispatched:
+        return (
+            jsonify(
+                {
+                    "error": "Failed to dispatch render job",
+                    "detail": dispatch_error,
+                    "job_id": job_id,
+                    "status_url": f"/status/{job_id}",
+                }
+            ),
+            502,
+        )
 
     return (
         jsonify(
@@ -1072,6 +1188,7 @@ def render_async() -> tuple:
                 "status_url": f"/status/{job_id}",
                 "download_url": f"/download/{job_id}",
                 "render_mode": initial_metadata["render_mode"],
+                "executor": _selected_executor(),
             }
         ),
         202,
