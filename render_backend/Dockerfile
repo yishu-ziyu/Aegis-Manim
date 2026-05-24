@@ -40,6 +40,9 @@ RUN mkdir -p /app/temp /app/outputs
 
 # Copy application code
 COPY app.py .
+COPY cloud_run_executor.py .
+COPY cloud_run_worker.py .
+COPY supabase_client.py .
 
 # Environment
 ENV PYTHONDONTWRITEBYTECODE=1 \

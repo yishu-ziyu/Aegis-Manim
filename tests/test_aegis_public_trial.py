@@ -89,7 +89,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         config = gateway.public_provider_config()
         providers = config["providers"]
 
-        assert config["defaultProvider"] == "trial-minimax-direct"
+        assert config["defaultProvider"] == "trial-kimi-priority"
         assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct"}
         assert providers["trial-kimi-priority"]["serverManaged"] is True
         assert providers["trial-kimi-priority"]["requiresApiKey"] is False
@@ -97,13 +97,32 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert "baseURL" not in providers["trial-kimi-priority"]
         assert "apiType" not in providers["trial-kimi-priority"]
 
+    def test_health_exposes_safe_trial_provider_diagnostics(self) -> None:
+        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+
+        payload = gateway.build_health_payload()
+        diagnostics = payload["trialProviders"]
+
+        assert diagnostics["defaultProvider"] == "trial-kimi-priority"
+        assert diagnostics["configured"] == {"kimiCode": True, "miniMax": True}
+        assert diagnostics["timeouts"]["kimi"] == gateway.PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS
+        assert "server-kimi-key" not in json.dumps(payload)
+        assert "server-minimax-key" not in json.dumps(payload)
+
     def test_trial_uses_server_kimi_key_without_client_key(self) -> None:
         calls: list[dict[str, object]] = []
 
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
             calls.append(kwargs)
             provider = gateway.resolve_provider(str(kwargs["provider_id"]))
-            return "from manim import *\nclass GeneratedScene(Scene):\n    pass\n", provider, "hidden"
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                "        self.play(Write(Text('消费者剩余', font_size=28)))\n",
+                provider,
+                "hidden",
+            )
 
         original = gateway.generate_code_with_llm
         os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
@@ -132,15 +151,23 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert calls[0]["endpoint"] == ""
 
     def test_trial_falls_back_to_minimax_when_kimi_fails(self) -> None:
-        calls: list[str] = []
+        calls: list[dict[str, object]] = []
 
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
             provider_id = str(kwargs["provider_id"])
-            calls.append(provider_id)
+            calls.append(kwargs)
             if provider_id == "kimi-code":
                 raise RuntimeError("Kimi Code API HTTP 429: quota exceeded")
             provider = gateway.resolve_provider(provider_id)
-            return "from manim import *\nclass GeneratedScene(Scene):\n    pass\n", provider, "hidden"
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                "        tax_revenue = Polygon(LEFT, RIGHT, UP)\n"
+                "        dwl = Polygon(LEFT, RIGHT, DOWN)\n"
+                "        self.play(Write(Text('税收楔子 无谓损失 税收收入 买方 卖方 需求 供给', font_size=24)))\n",
+                provider,
+                "hidden",
+            )
 
         original = gateway.generate_code_with_llm
         os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
@@ -155,15 +182,86 @@ class AegisPublicTrialTest(unittest.TestCase):
 
         assert status == 200
         assert response["ok"] is True
-        assert calls == ["kimi-code", "minimax-coding-cn"]
+        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "minimax-coding-cn"]
+        assert calls[0]["timeout"] == gateway.PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS
+        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
+        assert "Public hosted quality contract" in str(calls[1]["user_prompt"])
         assert "MiniMax" in "\n".join(response["warnings"])
+        assert "quota" in "\n".join(response["warnings"])
         assert "detail" not in response
+
+    def test_minimax_direct_uses_longer_timeout_and_teaching_contract(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            calls.append(kwargs)
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                "        self.play(Write(Text('税收楔子', font_size=28)))\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {"prompt": "解释税收楔子如何造成无谓损失", "provider": "trial-minimax-direct"}
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert len(calls) == 1
+        assert calls[0]["provider_id"] == "minimax-coding-cn"
+        assert calls[0]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
+        assert "教学 brief" in str(calls[0]["user_prompt"])
+        assert "4-6 visual beats" in str(calls[0]["user_prompt"])
+
+    def test_trial_repairs_static_precheck_errors_before_returning_code(self) -> None:
+        calls: list[str] = []
+
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            calls.append(str(kwargs["user_prompt"]))
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            if len(calls) == 1:
+                return "print('not a manim scene')\n", provider, "hidden"
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                "        self.play(Write(Text('税收楔子', font_size=28)))\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {"prompt": "解释税收楔子", "provider": "trial-minimax-direct"}
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert len(calls) == 2
+        assert "pre-render quality gate" in calls[1]
+        assert "No class inheriting from Scene was found" in calls[1]
+        assert "税收楔子" in str(response["code"])
 
     def test_trial_response_uses_detected_scene_name(self) -> None:
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
             provider = gateway.resolve_provider(str(kwargs["provider_id"]))
             return (
-                "from manim import *\nclass ParetoOptimalityScene(Scene):\n    pass\n",
+                "from manim import *\nclass ParetoOptimalityScene(Scene):\n"
+                "    def construct(self):\n"
+                "        self.play(Write(Text('帕累托最优', font_size=28)))\n",
                 provider,
                 "hidden",
             )
@@ -193,7 +291,7 @@ class AegisPublicTrialTest(unittest.TestCase):
             calls.append(str(kwargs["user_prompt"]))
             provider = gateway.resolve_provider(str(kwargs["provider_id"]))
             if len(calls) == 1:
-                heavy = "\n".join("        self.play(Write(Text('x', font_size=24)))" for _ in range(30))
+                heavy = "\n".join("        self.play(FadeIn(Dot()))" for _ in range(30))
                 return (
                     "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n"
                     + heavy
@@ -226,13 +324,13 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert response["ok"] is True
         assert len(calls) == 2
         assert "Hosted render budget correction" in calls[1]
-        assert "at most 14 self.play" in calls[1]
+        assert f"at most {gateway.MAX_PUBLIC_RENDER_PLAYS} self.play" in calls[1]
         assert str(response["code"]).count("self.play(") == 1
 
     def test_trial_uses_stable_template_when_repair_still_exceeds_budget(self) -> None:
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
             provider = gateway.resolve_provider(str(kwargs["provider_id"]))
-            heavy = "\n".join("        self.play(Write(Text('x', font_size=24)))" for _ in range(30))
+            heavy = "\n".join("        self.play(Write(Text('x', font_size=24)))" for _ in range(45))
             return (
                 "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n"
                 + heavy
@@ -259,6 +357,38 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert response["model"] == "stable-template-fallback"
         assert "不能让一人更好" in str(response["code"])
 
+    def test_trial_accepts_soft_budget_overage_for_segmented_rendering(self) -> None:
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            medium = "\n".join("        self.play(FadeIn(Dot()))" for _ in range(30))
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n"
+                + medium
+                + "\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {
+                    "prompt": "可视化帕累托最优过程。",
+                    "provider": "trial-minimax-direct",
+                    "sceneName": "GeneratedScene",
+                }
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["model"] == "MiniMax 稳定试用"
+        assert response["codeFile"] == "vercel-generated-code"
+        assert str(response["code"]).count("self.play(") == 30
+        assert "略超软预算" in "\n".join(response["warnings"])
+
     def test_trial_returns_stable_template_when_server_models_are_unavailable(self) -> None:
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
             raise TimeoutError("provider timed out")
@@ -283,6 +413,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert "class GeneratedScene(Scene)" in str(response["code"])
         assert "_AEGIS_CJK_FONT" in str(response["code"])
         assert "稳定模板" in "\n".join(response["warnings"])
+        assert "模型失败类别" in "\n".join(response["warnings"])
 
     def test_pareto_fallback_uses_topic_specific_teaching_scene(self) -> None:
         code = gateway.build_fallback_manim_code("可视化帕累托最优过程。", "GeneratedScene")
@@ -294,6 +425,55 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert patched.count("self.play(") >= 6
         assert "_AEGIS_CJK_FONT" in patched
         assert any("CJK-capable" in note for note in notes)
+
+    def test_tax_wedge_fallback_uses_supply_demand_teaching_scene(self) -> None:
+        code = gateway.build_fallback_manim_code(
+            "tax wedge deadweight loss supply demand buyer price seller price",
+            "GeneratedScene",
+        )
+        patched, notes = gateway.apply_runtime_compatibility_fixes(code)
+
+        assert "税收楔子与无谓损失" in patched
+        assert "需求 D" in patched
+        assert "供给 S" in patched
+        assert "税收收入" in patched
+        assert "无谓损失" in patched
+        assert "Polygon(" in patched
+        assert "_AEGIS_CJK_FONT" in patched
+        assert any("CJK-capable" in note for note in notes)
+
+    def test_tax_wedge_trial_falls_back_when_model_misses_required_economics_objects(self) -> None:
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                "        axes = Axes(x_range=[0, 10, 1], y_range=[0, 8, 1])\n"
+                "        self.play(Create(axes))\n"
+                "        self.play(Write(Text('税收楔子与无谓损失', font_size=28)))\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {
+                    "prompt": "解释税收楔子如何造成 deadweight loss，并展示 tax revenue。",
+                    "provider": "trial-minimax-direct",
+                    "sceneName": "GeneratedScene",
+                }
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["model"] == "stable-template-fallback"
+        assert "税收收入" in str(response["code"])
+        assert "买方价上升" in str(response["code"])
+        assert "topic-quality" in "\n".join(response["warnings"])
 
     def test_public_gateway_rejects_arbitrary_provider_and_long_prompt(self) -> None:
         status, response = gateway.generate_manim_code_for_gateway(

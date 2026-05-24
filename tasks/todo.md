@@ -292,3 +292,56 @@ Render production closure passed after commit `bfb1af1`: direct Render `/health`
 Production closure passed on 2026-05-23 CST after commit `52def3f`. Vercel production deploy `dpl_BbKuDdPCGv5yXKqAdu3ob9XEKxsF` is READY and aliased to `https://manim.yishuziyu.cn`. Render production `/health` confirmed `render.recovery.max_restart_attempts=2`, `render.storage.upload_retries=3`, CJK font OK, and Supabase OK. Local regression verification passed with `91 passed`, Python compile checks, and `git diff --check`.
 
 The required three-round production closed-loop test passed in 481 seconds. Each round called production `/api/health`, `/api/generate` with `trial-kimi-priority`, `/api/render`, polled `/api/render/status` to `done`, verified the produced Supabase MP4 with a byte-range request, published the completed render to the community repository, searched it back by title, recorded reuse, and saved a rating. Passing jobs and works were `33ac63ba-988d-4f2b-b559-14a1f96cbb09`, `aa708609-f8bf-47e2-9f16-e85c4cf25847`, and `21a47b18-14c6-4a1d-b85c-ddc3962f3046`.
+
+# Cloud Run Jobs Render Executor
+
+- [x] Add a Cloud Run Jobs executor that preserves the current Vercel/Supabase async render contract.
+- [x] Keep the existing local/Render thread executor as the default fallback.
+- [x] Add a Cloud Run worker entrypoint that pulls a Supabase `render_jobs` row by `job_id`, renders Manim, uploads the MP4, and updates status.
+- [x] Expose non-secret executor diagnostics through `/health`.
+- [x] Document required Cloud Run env vars and deployment flow.
+- [x] Add focused regression tests for dispatch payloads, fallback behavior, and worker completion/failure status.
+- [x] Run focused tests, compile checks, and diff checks.
+
+## Review
+
+The render backend now has a production-shaped Cloud Run Jobs execution path while preserving the existing public contract. `MANIM_EXECUTOR=local` remains the default, so current Render behavior is unchanged unless the env is explicitly switched. With `MANIM_EXECUTOR=cloud_run`, `/render-async` still writes the Supabase `render_jobs` row and returns the same `job_id` / `/status` / `/download` contract, but dispatches an existing Cloud Run Job through the Cloud Run Jobs API. The dispatch payload passes only `AEGIS_RENDER_JOB_ID` and `AEGIS_RENDER_MODE`; generated Manim code stays in Supabase instead of being pushed into env vars. The Cloud Run Job container runs `python cloud_run_worker.py`, fetches the persisted job, renders through the existing Manim path, uploads to Supabase Storage, and updates the same status row.
+
+The current machine does not have `CLOUD_RUN_PROJECT`, `CLOUD_RUN_REGION`, `CLOUD_RUN_JOB_NAME`, or Google credentials configured, so no real Google Cloud job was created from this workstation. Verification covered the code path without touching production credentials: `pytest -o addopts='' tests/test_render_backend_persistence.py -q` passed with `42 passed`; the broader Aegis regression set passed with `109 passed`; `python -m py_compile render_backend/app.py render_backend/cloud_run_executor.py render_backend/cloud_run_worker.py render_backend/supabase_client.py` passed; and `git diff --check` passed.
+
+# Economics Fallback Quality Fix
+
+- [x] Reproduce the poor production quality with a real economics prompt through the visible in-app browser.
+- [x] Verify the old production result completed but used `vercel-generated-fallback` and rendered a generic step-card instead of a supply-demand diagram.
+- [x] Add a tax-wedge/deadweight-loss fallback scene with supply and demand curves, buyer/seller prices, tax revenue rectangle, and deadweight-loss triangle.
+- [x] Add regression coverage for the topic-specific fallback.
+- [x] Render the new fallback locally with Manim and inspect an extracted frame.
+- [x] Deploy Vercel production and rerun the custom-domain browser closed-loop.
+
+## Review
+
+The visible in-app browser production test on 2026-05-24 CST reproduced the real issue: the site could return an MP4, but the generated code fell back to `vercel-generated-fallback` and produced a generic "问题/变量/关系/变化/结论" card. That passed the technical render path but failed the teaching-quality bar for the economics prompt. The production MP4 for job `f58ef980-0ee4-4b30-89dc-d5ef0206f616` was 854x480, about 7.0s, and frame extraction showed the title truncated to "tax wedge de" with no supply-demand diagram.
+
+Commit-in-progress adds a deterministic tax-wedge fallback in `api/index.py`. When the trial model is slow or unavailable and the prompt mentions tax wedge, deadweight loss, supply/demand, buyer price, seller price, or Chinese equivalents, the fallback now renders a real economics diagram: demand curve, supply curve, pre-tax equilibrium, tax wedge, buyer/seller price lines, tax revenue rectangle, and deadweight-loss triangle. Focused verification passed with `tests/test_aegis_public_trial.py` at `19 passed`; `python -m py_compile api/index.py` passed; and a direct local Manim render produced a 854x480, about 10.93s MP4 with a correct extracted frame at `/tmp/aegis-tax-wedge-media/tax_wedge_frame_6s.png`.
+
+Vercel production deploy `dpl_8KnWbkHtk9wNTznrQR3nfCAPEDAR` is READY and aliased to `https://manim.yishuziyu.cn`. Post-deploy production `/api/generate` returned the new fallback code containing "税收楔子与无谓损失", "需求 D", "供给 S", "税收收入", and "无谓损失". The final visible in-app browser test on `https://manim.yishuziyu.cn` submitted the same real economics prompt, generated request `20260523-180319-vercel`, rendered job `6435fc8a-9dc5-4249-9292-cb232e640dc1`, completed in the page, and produced Supabase MP4 `GeneratedScene_segmented.mp4` with HTTP 200, `content-type: video/mp4`, 288202 bytes, 854x480, about 10.93s. Extracted frame `/tmp/aegis-fixed-prod/frame_6s.png` shows the intended supply-demand tax-wedge diagram.
+
+# Kimi/MiniMax Trial Tuning
+
+- [x] Use parallel subagents to research Kimi Coding Plan integration and MiniMax quality tuning.
+- [x] Switch Kimi Coding Plan to the official OpenAI-compatible `https://api.kimi.com/coding/v1/chat/completions` path with `kimi-for-coding`.
+- [x] Add non-sensitive Kimi request cache/safety identifiers.
+- [x] Increase provider output budgets and provider-specific public trial timeouts.
+- [x] Feed every public trial generation through a teaching brief and static precheck/repair before fallback.
+- [x] Keep MiniMax on the documented Anthropic-compatible CN endpoint.
+- [x] Expose safe `/api/health` diagnostics for provider configured state and timeout values.
+- [x] Add regression tests for provider endpoints, Kimi metadata, timeout routing, precheck repair, and safe diagnostics.
+- [x] Deploy production and run API plus in-app browser closed-loop tests with a real economics prompt.
+
+## Review
+
+Kimi Coding Plan and MiniMax are now separated as two explicit reliability lanes. Kimi Code uses the official OpenAI-compatible coding endpoint and model ID, with non-secret `prompt_cache_key` and `safety_identifier`; MiniMax remains on the Anthropic-compatible `https://api.minimaxi.com/anthropic/v1/messages` endpoint and gets a larger default output budget. Public trial prompts now always include the local teaching brief, plus a hosted-quality contract requiring a real teaching scene instead of placeholder animation. Generated code is checked with the existing Manim static precheck and a topic-quality gate for tax-wedge prompts; blocking issues trigger a repair request before the system drops to fallback. The fallback remains necessary as the final safety net because production diagnostics after deploy `dpl_7gxrvHXVoCs3wBTeWd1g3mzM6hdX` showed both keys configured, while repeated live Kimi attempts still returned `access`.
+
+Focused verification passed with `41 passed` across provider, public trial, Manim knowledge, and prompt-context tests; `python -m py_compile core/llm_providers.py api/index.py` passed; and `git diff --check` passed. A full `pytest -o addopts='' -q` run was intentionally stopped after entering broad Manim upstream tests with many unrelated failures and slow cases. Production `/api/health` now reports `trialProviders.configured.kimiCode=true`, `trialProviders.configured.miniMax=true`, and timeouts `{kimi:55, kimiRepair:35, miniMax:120, miniMaxRepair:90}` without exposing secrets. Public soft render budget is now 24 `self.play` calls, with a 40-play hard gate for extreme scripts.
+
+Closed-loop production acceptance passed through both paths. The durable fallback-quality path passed with API render job `d1f53c4a-2963-43e9-aeaa-de349fb090c6`, which completed as segmented `0/2 -> 1/2 -> done 2/2`, produced a Supabase MP4 with 288202 bytes, 854x480, about 10.93s, and extracted frame `/tmp/aegis-model-tuned-frame-6s.png` shows the intended tax-wedge supply/demand diagram. The visible in-app browser test on `https://manim.yishuziyu.cn` also passed: request `20260524-042530-vercel` rendered video URL `https://lnbalcskhcnkrtlqpgku.supabase.co/storage/v1/object/public/manim-videos/17b56d24-281c-4eb6-b860-d8db7d743171/GeneratedScene_segmented.mp4`, duration about 10.93s, and extracted frame `/tmp/aegis-browser-frame-6s.png` shows readable Chinese labels and the correct economics diagram. After relaxing MiniMax timeout and soft budget, live request `20260524-050844-vercel` showed Kimi failing with `access` but MiniMax backup returning `server-managed-trial` / `vercel-generated-code` with 24 `self.play` calls and all required tax-wedge objects. A later repeat still fell back after `kimi-code:access, minimax-coding-cn:timeout`, so the friend-facing experience is usable, but Kimi remains an upstream access problem and MiniMax remains variable under live latency.

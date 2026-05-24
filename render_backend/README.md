@@ -14,6 +14,7 @@ A lightweight Flask-based API for rendering Manim scenes. Supports synchronous a
 - Supabase-backed job persistence when `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are configured
 - Supabase Storage video URLs for async renders when persistence is configured
 - Memory-only fallback for local development when Supabase is not configured
+- Optional Cloud Run Jobs executor for long-running production renders
 - Max code size: 100 KB
 - CORS enabled for browser requests
 - Automatic temp file cleanup
@@ -145,6 +146,15 @@ curl http://localhost:5000/health
 | `SUPABASE_URL` | unset | Supabase project URL. When unset, the backend uses memory-only mode |
 | `SUPABASE_SERVICE_KEY` | unset | Supabase service-role key for render job persistence |
 | `SUPABASE_STORAGE_BUCKET` | `manim-videos` | Storage bucket for rendered async videos |
+| `MANIM_EXECUTOR` | `local` | `local` runs Manim in the current container; `cloud_run` dispatches async renders to Cloud Run Jobs |
+| `CLOUD_RUN_PROJECT` | unset | Google Cloud project ID used when `MANIM_EXECUTOR=cloud_run` |
+| `CLOUD_RUN_REGION` | unset | Cloud Run region, for example `asia-east1` |
+| `CLOUD_RUN_JOB_NAME` | unset | Existing Cloud Run Job name that runs `python cloud_run_worker.py` |
+| `CLOUD_RUN_JOB_TIMEOUT_SECONDS` | unset | Optional per-execution timeout override passed to Cloud Run Jobs |
+| `CLOUD_RUN_CONTAINER_NAME` | unset | Optional container name override for multi-container jobs |
+| `GOOGLE_APPLICATION_CREDENTIALS` | unset | Optional path to a Google service account file |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | unset | Optional service account JSON value for platforms that cannot mount a file |
+| `CLOUD_RUN_ACCESS_TOKEN` | unset | Optional short-lived access token for local/manual dispatch tests |
 
 ### Supabase Setup
 
@@ -158,6 +168,43 @@ Read-only readiness check:
 ```bash
 python scripts/verify_render_persistence.py --external-read-only --env-file .env.local
 ```
+
+### Cloud Run Jobs Executor
+
+The production render architecture keeps the public Vercel and Supabase
+contract unchanged:
+
+1. Vercel calls this backend's `POST /render-async`.
+2. The backend writes a `render_jobs` row and returns `job_id`.
+3. With `MANIM_EXECUTOR=cloud_run`, the backend calls the Cloud Run Jobs API and
+   passes only `AEGIS_RENDER_JOB_ID` and `AEGIS_RENDER_MODE` as execution env
+   overrides.
+4. The Cloud Run Job container runs `python cloud_run_worker.py`, fetches the
+   job from Supabase, renders Manim, uploads the MP4 to Supabase Storage, and
+   updates the existing job status.
+5. The frontend keeps polling `/status/<job_id>` and downloading through
+   `/download/<job_id>`.
+
+Create the Cloud Run Job from the same render backend image and override the
+command to run the worker:
+
+```bash
+gcloud run jobs create aegis-manim-render \
+  --image REGION-docker.pkg.dev/PROJECT/REPO/aegis-manim-render:latest \
+  --region asia-east1 \
+  --command python \
+  --args cloud_run_worker.py \
+  --task-timeout 3600 \
+  --memory 4Gi \
+  --cpu 2 \
+  --set-env-vars SUPABASE_URL=... \
+  --set-secrets SUPABASE_SERVICE_KEY=...
+```
+
+The control-plane service that receives `/render-async` needs permission to run
+that job. If it runs outside Google Cloud, configure either
+`GOOGLE_APPLICATION_CREDENTIALS_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; never
+log or expose those values.
 
 Local memory-mode API smoke:
 

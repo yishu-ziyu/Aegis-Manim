@@ -39,6 +39,8 @@ RUN mkdir -p /app/temp /app/outputs
 ARG CACHE_BUST=1
 COPY render_backend/app.py .
 COPY render_backend/supabase_client.py .
+COPY render_backend/cloud_run_executor.py .
+COPY render_backend/cloud_run_worker.py .
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

@@ -19,10 +19,14 @@ services:
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         value: manim-videos
-      - key: MAX_CODE_SIZE
-        value: 102400
-      - key: DEFAULT_TIMEOUT
+      - key: MANIM_EXECUTOR
+        value: local
+      - key: MANIM_RENDER_TIMEOUT_SECONDS
         value: 300
+      - key: MANIM_SEGMENT_RENDER_THRESHOLD
+        value: 2
+      - key: MANIM_SEGMENT_RENDER_SIZE
+        value: 2
       - key: RATE_LIMIT_MAX_REQUESTS
         value: 10
     healthCheckPath: /health

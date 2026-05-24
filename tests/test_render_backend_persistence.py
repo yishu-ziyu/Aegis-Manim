@@ -20,7 +20,9 @@ requires_backend = pytest.mark.skipif(
 )
 
 supabase_client = importlib.import_module("supabase_client")
+cloud_run_executor = importlib.import_module("cloud_run_executor")
 backend = importlib.import_module("app") if HAS_BACKEND_DEPS else None
+cloud_run_worker = importlib.import_module("cloud_run_worker") if HAS_BACKEND_DEPS else None
 
 
 def _row(
@@ -104,6 +106,32 @@ def test_health_exposes_safe_render_font_diagnostics(monkeypatch):
     assert payload["render"]["quality"] == backend.MANIM_RENDER_QUALITY
     assert payload["render"]["cjk_font"]["ok"] is True
     assert "api" not in str(payload).lower()
+
+
+@requires_backend
+def test_health_exposes_cloud_run_executor_diagnostics_without_secrets(monkeypatch):
+    monkeypatch.setattr(backend, "_use_supabase", lambda: False)
+    monkeypatch.setattr(
+        backend,
+        "cloud_run_health_payload",
+        lambda: {
+            "configured": True,
+            "project": "aegis-project",
+            "region": "asia-east1",
+            "job_name": "aegis-manim-render",
+            "credentials_configured": True,
+        },
+    )
+    monkeypatch.setattr(backend, "MANIM_EXECUTOR", "cloud_run")
+
+    response = backend.app.test_client().get("/health")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["render"]["executor"]["selected"] == "cloud_run"
+    assert payload["render"]["executor"]["cloud_run"]["configured"] is True
+    assert "token" not in str(payload).lower()
+    assert "service_key" not in str(payload).lower()
 
 
 def test_root_render_dockerfile_installs_cjk_fonts():
@@ -575,6 +603,122 @@ def test_supabase_upload_success_returns_storage_url_as_video_path(monkeypatch, 
     assert result["success"] is True
     assert result["video_path"] == storage_url
     assert result["video_url"] == storage_url
+
+
+def test_cloud_run_dispatch_uses_job_id_env_overrides_without_code_or_secrets(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_post(url, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"name": "projects/p/locations/asia-east1/executions/ex-1", "uid": "uid-1"},
+        )
+
+    monkeypatch.setenv("CLOUD_RUN_PROJECT", "p")
+    monkeypatch.setenv("CLOUD_RUN_REGION", "asia-east1")
+    monkeypatch.setenv("CLOUD_RUN_JOB_NAME", "aegis-manim-render")
+    monkeypatch.setenv("CLOUD_RUN_ACCESS_TOKEN", "access-token")
+    monkeypatch.setattr(cloud_run_executor.requests, "post", fake_post)
+
+    execution = cloud_run_executor.dispatch_cloud_run_render_job(
+        "job-1",
+        "segmented",
+        timeout_seconds=600,
+    )
+
+    assert execution.name.endswith("/ex-1")
+    assert captured["url"] == (
+        "https://run.googleapis.com/v2/projects/p/locations/asia-east1/jobs/"
+        "aegis-manim-render:run"
+    )
+    payload = captured["json"]
+    assert payload["overrides"]["timeout"] == "600s"
+    env = payload["overrides"]["containerOverrides"][0]["env"]
+    assert {"name": "AEGIS_RENDER_JOB_ID", "value": "job-1"} in env
+    assert {"name": "AEGIS_RENDER_MODE", "value": "segmented"} in env
+    assert "from manim import" not in str(payload)
+    assert "access-token" not in str(payload)
+
+
+@requires_backend
+def test_render_async_dispatches_to_cloud_run_executor(monkeypatch):
+    updates: list[dict[str, object]] = []
+    monkeypatch.setattr(backend, "MANIM_EXECUTOR", "cloud_run")
+    monkeypatch.setattr(backend, "_use_supabase", lambda: True)
+    monkeypatch.setattr(backend, "initialize_app", lambda: None)
+    backend.app.config["_PERSISTENCE_INITIALIZED"] = True
+    monkeypatch.setattr(
+        backend,
+        "supa_insert_job",
+        lambda **kwargs: _row(str(kwargs["job_id"]), metadata=kwargs.get("metadata")),
+    )
+    monkeypatch.setattr(backend, "supa_update_job", lambda **kwargs: updates.append(kwargs) or _row(str(kwargs["job_id"])))
+    monkeypatch.setattr(backend, "_get_job", lambda job_id: backend._jobs.get(job_id))
+    monkeypatch.setattr(
+        backend,
+        "dispatch_cloud_run_render_job",
+        lambda job_id, render_mode, timeout_seconds=None: SimpleNamespace(
+            name="projects/p/locations/asia-east1/executions/ex-1",
+            uid="uid-1",
+        ),
+    )
+
+    response = backend.app.test_client().post(
+        "/render-async",
+        headers={"X-API-Key": backend.API_KEY},
+        json={
+            "code": "from manim import *\nclass GeneratedScene(Scene):\n    def construct(self):\n        self.wait(1)\n",
+            "scene_name": "GeneratedScene",
+            "render_mode": "auto",
+        },
+    )
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload["executor"] == "cloud_run"
+    assert payload["status_url"].startswith("/status/")
+    assert any(update.get("status") == "running" for update in updates)
+    final_metadata = updates[-1]["metadata"]
+    assert final_metadata["executor"] == "cloud_run"
+    assert final_metadata["stage"] == "cloud_run_dispatched"
+    assert final_metadata["cloud_run_execution"].endswith("/ex-1")
+
+
+@requires_backend
+def test_cloud_run_worker_executes_persisted_job_by_id(monkeypatch):
+    job = backend.RenderJob(
+        job_id="job-1",
+        status=backend.JobStatus.PENDING,
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
+        code="from manim import *",
+        scene_name="GeneratedScene",
+        metadata={"render_mode": "segmented"},
+    )
+    updates: list[dict[str, object]] = []
+    executed: list[tuple[str, str, str, str]] = []
+    final_status = {"status": backend.JobStatus.DONE}
+    monkeypatch.setenv("AEGIS_RENDER_JOB_ID", "job-1")
+    monkeypatch.setenv("AEGIS_RENDER_MODE", "segmented")
+    monkeypatch.setattr(cloud_run_worker, "_get_job", lambda job_id: job if not executed else SimpleNamespace(status=final_status["status"]))
+    monkeypatch.setattr(cloud_run_worker, "_update_job", lambda *args, **kwargs: updates.append({"args": args, **kwargs}))
+    monkeypatch.setattr(
+        cloud_run_worker,
+        "_execute_render_job",
+        lambda job_id, code, scene_name, render_mode="auto": executed.append((job_id, code, scene_name, render_mode)),
+    )
+
+    exit_code = cloud_run_worker.main()
+
+    assert exit_code == 0
+    assert executed == [("job-1", "from manim import *", "GeneratedScene", "segmented")]
+    assert updates[0]["status"] == backend.JobStatus.RUNNING
+    assert updates[0]["metadata"]["executor"] == "cloud_run"
+    assert updates[0]["metadata"]["stage"] == "cloud_run_worker_started"
 
 
 @requires_backend
