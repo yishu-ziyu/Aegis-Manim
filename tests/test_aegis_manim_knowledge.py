@@ -67,6 +67,24 @@ class GeneratedScene(Scene):
 
         assert any(issue.category == "layout-fit" and "font_size" in issue.technical_message for issue in issues)
 
+    def test_precheck_flags_axes_labels_that_can_break_cloud_rendering(self) -> None:
+        code = """
+from manim import *
+
+class GeneratedScene(Scene):
+    def construct(self):
+        axes = Axes(x_range=[0, 5, 1], y_range=[0, 5, 1], x_label="Q", y_label="P")
+        labels = axes.get_axis_labels("数量 Q", "价格 P")
+        self.play(Create(axes), FadeIn(labels))
+"""
+
+        issues = manim_knowledge.precheck_manim_code(code, "GeneratedScene")
+
+        assert any(
+            issue.category == "axes-api" and "get_axis_labels" in issue.technical_message
+            for issue in issues
+        )
+
     def test_classifies_latex_render_failures_with_recipe(self) -> None:
         classification = manim_knowledge.classify_render_error("LaTeX Error: File `standalone.cls' not found")
 

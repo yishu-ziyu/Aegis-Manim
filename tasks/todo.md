@@ -1,5 +1,178 @@
 # Dual-Coding Generation Process Goal
 
+# Image Understanding to Manim Visualization
+
+- [x] Use grill-me to clarify the product boundary for image upload, image understanding, confirmation, and Manim visualization.
+- [x] Record the confirmed specification in `docs/specs/image-understanding-visualization.md`.
+- [x] Build a minimal probe to verify whether the existing Kimi Code / Kimi plan key can process image input.
+- [x] If the probe succeeds, add `/api/vision/analyze` with structured Chinese JSON output.
+- [x] Add frontend upload, paste, drag-and-drop, and mobile photo-pick entry points.
+- [x] Add the Chinese understanding card with auditable analysis, free-text direction edits, and confirmation.
+- [x] Feed the confirmed structured summary into the existing `/api/generate` flow.
+- [x] Add a server-side real CLI image probe that can be run on ECS before opening the public image feature.
+- [x] Add repeatable 3-5 image acceptance script for `/api/vision/analyze` through generate/render.
+- [x] Run the 5-image Chinese economics acceptance set and record pass/fail evidence.
+- [x] Add a production-safe remote `VISION_BACKEND_URL` proxy path for Vercel/public gateway.
+- [x] Add a host-level `aegis_vision_server.py` so the ECS host can call the real logged-in CLI outside Docker.
+- [x] Add a systemd installer for the host-level Vision Server.
+- [x] Add a one-command ECS doctor script that probes real CLI image reading before installing Vision Server.
+- [x] Add a local packaging script so pending Vision Server files can be uploaded to ECS as one archive.
+- [x] Add a local push script that uploads the Vision Server package to ECS and runs the remote doctor.
+- [x] Document the production image-understanding bridge in the ECS deploy guide and local AI workflow component.
+- [x] Record explicit Agent Team call/reclaim/re-call boundaries for this production feature lane.
+- [x] Add a full public image-to-render acceptance wrapper for the production website.
+- [x] Decide production exposure: public, beta/whitelist, or hidden, based on verified production image-to-video acceptance results.
+
+## Review
+
+On 2026-05-26 CST, completed the grill-me product clarification for the image-understanding feature. The agreed MVP is: one image plus optional text, uploaded/pasted/dragged from desktop or selected from mobile camera/gallery; Kimi analyzes the image into a Chinese understanding card; the user confirms or adds free-text direction; then Aegis generates and renders a Manim teaching animation. First version does not store original images, does not embed the original image into the final video, does not support multi-image/PDF/document uploads, and does not add a new paid vision provider. The first implementation step is a real probe against the existing Kimi plan key; if that cannot read images, the public image entry must stay hidden.
+
+On 2026-05-26 CST, integrated the first verifier sidecar review back into the main implementation. The push script now uploads and runs the remote doctor through one SSH session, the doctor persists the exact CLI binary and `KIMI_VISION_CLI_ARGS_JSON` that passed the image probe into `/opt/aegis/vision.env` before installing systemd, and the deploy/component docs now include a `vision.yishuziyu.cn -> 127.0.0.1:5050` reverse-proxy pattern. Agent Team is reclaimed until a real server doctor output exists; after that evidence arrives, re-call verifier lanes for Vercel env wiring, public-browser acceptance, and safety review.
+
+The verifier sidecar then found one manual-doc footgun: a user could single-run `probe_kimi_vision_cli.py --args-json ...` and then run the installer directly, bypassing persistence of the tested args. The docs now route that branch back through `BINARY=... ARGS_JSON=... scripts/aegis_vision_server_doctor.sh`, so the service env and the verified CLI invocation stay aligned.
+
+Follow-up hardening made the one-command push more robust for the user's Alibaba ECS connection behavior: the remote doctor now runs under `nohup`, writes `/opt/aegis/vision-doctor.log`, stores `/opt/aegis/vision-doctor.pid`, and prints the tail command. This prevents a dropped SSH session from killing the long CLI image probe or 5-image acceptance run.
+
+Added `scripts/check_aegis_vision_server_update.sh` as the evidence-recovery command after push. It connects once, shows the doctor pid, tails `/opt/aegis/vision-doctor.log`, extracts pass/fail markers, prints `systemctl status aegis-vision.service`, and curls `http://127.0.0.1:5050/health` without exposing API keys.
+
+Added `scripts/decide_aegis_vision_exposure.py` to make the production exposure decision evidence-driven. It reads the probe report, 3-5 case acceptance JSONL, and health endpoint. Passing server doctor vision-only evidence yields `beta`, not public; `public` is only emitted after full image -> generate -> render -> video acceptance passes.
+
+Added `scripts/run_aegis_public_vision_acceptance.sh` as the public-site closure command. It generates the five Chinese economics fixtures, calls `scripts/production_vision_economics_acceptance.py` against `https://manim.yishuziyu.cn`, and intentionally does not pass `--skip-render`, so it validates image understanding, prompt generation, Manim render, video download, duration probing, and frame extraction. This script is the handoff point after the server doctor reaches `beta`; public exposure still waits for all five public records to show `ok=true`, `status=done`, `videoUrl`, and `videoBytes`.
+
+On 2026-05-26 CST, direct authenticated HTTP probes against Kimi Code were rejected with coding-agent access gating, so the implementation pivoted to a real server CLI bridge instead of HTTP client spoofing. Added `/api/vision/analyze`, `core/vision_analysis.py`, `scripts/kimi_vision_cli_bridge.py`, and frontend upload/paste/drag/drop UI with a Chinese confirmation card. The browser flow was verified locally with a fake CLI command: image upload showed a Chinese IS-LM analysis, clicking “使用这个方向” wrote the Chinese suggested prompt back into the generation textarea. Verification passed with `python3 -m py_compile scripts/kimi_vision_cli_bridge.py core/vision_analysis.py core/web_app.py api/index.py app.py`, `node --check /tmp/aegis_web_app_inline.js`, `pytest -o addopts='' tests/test_aegis_vision_analysis.py tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py -q` returning 46 passed, and `git diff --check`. Remaining production gate: install/login a real Kimi/Codex/Claude CLI on the ECS host, set `KIMI_VISION_CLI_COMMAND`, then run 3-5 Chinese economics image tests end to end.
+
+Follow-up in the same goal turn added a production exposure gate: `AEGIS_VISION_PUBLIC_ENABLED` must be set to `1` and a vision provider must be configured before the upload UI is visible or `/api/vision/analyze` executes. Until then the frontend field is hidden and the ASGI/local route returns `vision_feature_disabled`, so the public site cannot accidentally expose an unverified image upload path. Added regression tests for `scripts/kimi_vision_cli_bridge.py`, including prompt image-token forwarding and raw-text fallback. Verification now passes with `pytest -o addopts='' tests/test_aegis_vision_analysis.py tests/test_kimi_vision_cli_bridge.py tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py -q` returning 50 passed, plus browser automation with the gate enabled confirmed upload, Chinese analysis card, and prompt writeback.
+
+Added `scripts/probe_kimi_vision_cli.py` so the ECS host can prove the real logged-in CLI reads a real Chinese economics image before production exposure. The probe calls the existing wrapper, validates Chinese economics content plus a non-empty `recommended_prompt`, fails if the CLI says it cannot see the image, and prints the exact production env exports only after success. This keeps the user's preferred route concrete: use the actual terminal CLI on the server, not a fake HTTP coding-agent identity. Follow-up hardening added `KIMI_VISION_CLI_ARGS_JSON`, so the same wrapper can call non-Kimi-shaped terminal tools such as Codex or Claude by changing the binary and argument array instead of changing the web API. Remaining gate: run this probe on `root@121.89.90.68` with a real economics screenshot, then run the 3-5 image acceptance set through the public web flow.
+
+Added `scripts/production_vision_economics_acceptance.py` for the final image feature acceptance run. It accepts 3-5 local Chinese economics image files, posts each image to `/api/vision/analyze`, verifies Chinese economics content plus a usable `suggestedPrompt`, then by default sends that prompt through `/api/generate`, `/api/render`, status polling, video download, duration probing, and representative frame extraction. Use `--skip-render` only to isolate the vision route during server CLI debugging.
+
+On 2026-05-26 CST, accepted the user's correction that the viable path is a real logged-in terminal CLI on the purchased ECS host, not an HTTP coding-agent impersonation. The CLI bridge and probe now support non-Kimi argument shapes through `KIMI_VISION_CLI_ARGS_JSON`, so the same web feature can call Kimi, Codex, Claude Code, or another server-installed terminal tool after that tool's real image syntax is verified. Focused verification passed with `python3 -m py_compile scripts/kimi_vision_cli_bridge.py scripts/probe_kimi_vision_cli.py tests/test_kimi_vision_cli_bridge.py tests/test_probe_kimi_vision_cli.py`, `pytest -o addopts='' tests/test_probe_kimi_vision_cli.py tests/test_kimi_vision_cli_bridge.py tests/test_production_vision_economics_acceptance.py tests/test_aegis_vision_analysis.py tests/test_aegis_web_ui.py tests/test_aegis_public_trial.py -q` returning 57 passed, `pytest -o addopts='' tests/test_aegis_ops_scripts.py -q` returning 3 passed, `git diff --check`, and a secret-pattern scan across the new CLI/probe/docs files. Full repository pytest still fails in the local Mac environment because `dvisvgm` and `standalone.cls` are not installed; the failures are concentrated in upstream Manim LaTeX/Tex tests and are not evidence against the image-to-CLI bridge. Remaining gate: run `scripts/probe_kimi_vision_cli.py` on `root@121.89.90.68` from an already logged-in real CLI session, then run the 3-5 image acceptance set.
+
+On 2026-05-26 CST, generated five deterministic Chinese economics postgraduate-exam image fixtures under `/tmp/aegis-vision-economics-fixtures/`: tax wedge and deadweight loss, consumer choice and price effect, monopoly pricing and welfare loss, negative externality and Pigouvian tax, and IS-LM fiscal expansion. Updated `scripts/production_vision_economics_acceptance.py` so it accepts both legacy top-level vision fields and the new nested `analysis.recommended_prompt` response shape. A first 5-image local run had one 180s client timeout on the negative-externality image, then that same image passed on direct retry in 46.1s. A second continuous run with `--request-timeout 320` passed 5/5 through `http://127.0.0.1:8765/api/vision/analyze`; per-image latencies were about 59.6s, 50.9s, 40.8s, 50.3s, and 41.3s, with Chinese suggested prompts between 469 and 488 characters. The previously timed-out negative-externality case was then run through the full local chain: image understanding returned HTTP 200 in 46.2s, `/api/generate` returned HTTP 200 through `codex-cli` at 116.3s, local Manim rendered successfully by 142.6s, and the MP4 `media/videos/aegis-externality-generated/480p15/GeneratedScene.mp4` is 55.332678s. Extracted frames `/tmp/aegis-externality-render-frame-8s.png` and `/tmp/aegis-externality-render-frame-18s.png` show readable Chinese text and the correct MPC/MSC/MSB externality diagram. Current production exposure decision remains conservative: the local feature is viable, but the public image upload entry should stay gated until the same CLI route is installed and verified on `root@121.89.90.68`.
+
+Follow-up on 2026-05-26 CST closed the main public-production architecture gap: Vercel/public gateway can now enable image understanding by setting `VISION_BACKEND_URL` and `VISION_BACKEND_API_KEY`, while the real image-reading CLI stays on the ECS host. Added `scripts/aegis_vision_server.py` as a host-level HTTP service for `/api/vision/analyze`, `scripts/install_aegis_vision_server.sh` as a systemd installer, remote backend proxy support in `core/vision_analysis.py`, and updated `.env.example`, `tasks/aliyun-swas-deploy-guide.md`, and `/Users/mahaoxuan/Desktop/ai组件工作流/服务器CLI视觉模型桥接组件.md`. Focused verification passed with `pytest -o addopts='' tests/test_aegis_ops_scripts.py tests/test_aegis_vision_analysis.py tests/test_kimi_vision_cli_bridge.py tests/test_probe_kimi_vision_cli.py tests/test_production_vision_economics_acceptance.py tests/test_aegis_web_ui.py -q` returning 29 passed, plus `git diff --check`. Remaining production gate is now explicit and user-actionable: run the server CLI probe from the active root SSH terminal, then install/start `aegis-vision.service` if the probe returns `ok: true`.
+
+Added `scripts/aegis_vision_server_doctor.sh` as the user-facing ECS entrypoint. It checks the project checkout and test image, auto-selects `kimi`, `codex`, or `claude`, runs `scripts/probe_kimi_vision_cli.py`, refuses public exposure if the probe fails, and only installs `aegis-vision.service` after the report says `ok: true`. The deploy guide and the local AI workflow component now route the user to this one command first, with the manual probe kept as a fallback for debugging.
+
+Added `scripts/package_aegis_vision_server_update.sh` to reduce the user intervention step from multiple path-sensitive `scp` commands to one local tarball upload. It packages `core/vision_analysis.py` plus the Vision Server, installer, doctor, CLI bridge, probe, fixture generator, image acceptance runner, and a default Chinese economics test image at `fixtures/vision-test.png` into `/tmp/aegis-vision-server-update.tgz`, then prints the exact upload and server extraction commands. The doctor now falls back to `fixtures/vision-test.png` when no explicit `IMAGE_PATH` is provided, so the user can validate server CLI image reading without preparing a separate screenshot first.
+
+Extended the ECS doctor so a single successful run now produces stronger production evidence: after the single-image CLI probe passes, it installs `aegis-vision.service`, checks `http://127.0.0.1:5050/health`, reads the generated backend API key from `/opt/aegis/vision.env`, and runs `scripts/production_vision_economics_acceptance.py --skip-render` against the five bundled Chinese economics fixtures. The public image entry should only be enabled if both `Probe passed.` and the 5-image summary report all cases passing.
+
+Added `scripts/push_aegis_vision_server_update.sh` to turn the current server update into one local command: package the pending Vision Server files, upload the archive through one SSH session to `root@121.89.90.68:/opt/aegis/`, extract it into `/opt/aegis/Aegis-Manim`, and run `scripts/aegis_vision_server_doctor.sh` remotely. The intended Agent Team rhythm is now explicit: call a team for broad research, independent provider/server review, or production acceptance design; reclaim to the lead agent for file edits, packaging, server commands, and user-intervention points; call again after the real server doctor output exists to split production env wiring, browser acceptance, and safety review; shut team work down once evidence is merged here.
+
+Agent Team lifecycle for this feature is now treated as part of the development process, not optional commentary:
+
+| Stage | Agent Team state | Owner | Evidence to continue |
+|---|---|---|---|
+| Product boundary and architecture | Call Agent Team for independent product, provider, server, and safety lanes | Lead agent coordinates | Specs and risks merged into `docs/specs/*`, this task log, and deploy docs |
+| Local implementation | Reclaim to lead agent | Lead agent edits code and tests | Local tests, browser check, and `git diff --check` pass |
+| Server handoff | Reclaim to lead agent | Lead agent produces package/push/check scripts; user only supplies password/login when required | `scripts/push_aegis_vision_server_update.sh` and `scripts/check_aegis_vision_server_update.sh` exist |
+| Real ECS doctor output | Re-call Agent Team | Verification lanes split into server evidence, Vercel env wiring, public-browser acceptance, and safety/privacy review | `Probe passed.`, 5/5 vision-only JSONL, health output, and no secret leakage |
+| Public-site full acceptance | Re-call or keep verifier lane active | Lead agent runs/integrates full acceptance evidence | `scripts/run_aegis_public_vision_acceptance.sh` produces 3-5 `status=done` videos |
+| Production decision | Close Agent Team | Lead agent merges final evidence and makes `hidden` / `beta` / `public` decision | Decision and evidence are written here and in deploy docs; no open sidecar tasks remain |
+
+Agent Team record template for each future team phase:
+
+```text
+Agent Team call reason:
+Lanes and owner agents:
+Expected evidence:
+Lead-agent reclaim point:
+Re-call trigger:
+Close evidence:
+Active workers/sidecars after close: none, or list merged report paths
+```
+
+Current sidecar state: verifier `019e63a2-ba38-7ae0-adad-882fe02c7187` completed with PASS and was closed after its gaps were folded into this task log and the deployment/component docs.
+
+Current orchestration state on 2026-05-26 CST: Agent Team is intentionally closed/reclaimed while the lead agent owns the single-threaded integration work. Local evidence is now enough for this phase: the running local service at `http://127.0.0.1:8765` completed 5/5 Chinese economics vision-only checks against the real CLI bridge, and Playwright verified the browser upload flow plus “使用这个方向” confirmation writing a Chinese IS-LM prompt into the generation textarea. The next Agent Team call is blocked until ECS produces real server evidence from `scripts/push_aegis_vision_server_update.sh` / `scripts/check_aegis_vision_server_update.sh`.
+
+Production exposure audit on 2026-05-26 CST: `https://manim.yishuziyu.cn/api/health` returned HTTP 200, and the production `/api/vision/analyze` route is now deployed. It intentionally returns HTTP 503 with `code=vision_feature_disabled`, which means the public route exists but the image feature gate is still closed until real ECS CLI evidence exists. `scripts/decide_aegis_vision_exposure.py --public-vision-url https://manim.yishuziyu.cn/api/vision/analyze` returns `exposure=hidden` with `publicRouteDeployed=true`, `probeOk=false`, `healthOk=false`, and `acceptanceTotal=0`. The verified exposure decision therefore remains `hidden`: noninteractive SSH to `root@121.89.90.68` still returns permission denied, so the lead agent cannot retrieve ECS doctor evidence without user login/password intervention. `scripts/decide_aegis_vision_exposure.py` now accepts `--public-vision-url` so future `hidden` / `beta` / `public` decisions include both server evidence and public-route deployment state.
+
+Current Agent Team micro-call on 2026-05-26 CST: the lead agent called one read-only build-fixer sidecar (`019e63db-7c24-7ec1-ba4d-00e141817018`) only for the Vercel bundle-size failure after `/api/vision/analyze` was added to `vercel.json`. The lead agent kept ownership of edits and patched `.vercelignore`, `vercel.json`, and `tests/test_deploy_cloud_schema.py` locally. Root cause was the Vercel project being configured as `framework=python`, which made Vercel build the repository as a Python framework app and ignore the intended API-function bundle rules. The fix was to set `"framework": null`, use a short `api/*.py` function rule, keep `excludeFiles` under Vercel's 256-character limit, and push heavy local files into `.vercelignore`. Verification: `vercel build --prod --yes` passed with `.vercel/output` at 2.3M and the API function bundle at 872K; production deploy `dpl_EXAWyJYrzzwcBWa5PBQBtfaXygCA` was aliased to `https://manim.yishuziyu.cn`; `/api/health` returned HTTP 200; `/api/vision/analyze` returned expected `vision_feature_disabled` instead of 404. Reclaim point reached: the sidecar report has been folded into this log and the sidecar is closed. Re-call trigger remains unchanged: only real ECS doctor evidence should start the next multi-lane production review. Active workers/sidecars after close: none.
+
+Fallback pivot on 2026-05-26 CST after the user called out the 6h42m stall: the lesson is now explicit. If one integration path is stuck for more than 30-60 minutes without new end-to-end evidence, the lead agent must stop looping and run a replacement-path search across official docs, community practice, and cheaper/open alternatives. In this turn, the user provided a Gemini API key. The key was used only as a process environment/inline probe and was not written to repo files. `models` probing succeeded, `gemini-2.0-flash-lite` image generation first returned HTTP 429, then `gemini-flash-lite-latest` successfully recognized the Chinese tax-wedge image. The code now supports `GEMINI_API_KEY` / `GEMINI_VISION_MODEL`, generic `VISION_API_KEY` / `VISION_BASE_URL` / `VISION_MODEL`, and text-only `VISION_OCR_COMMAND` fallback. Local acceptance through `http://127.0.0.1:8765/api/vision/analyze` passed 3/3 Chinese economics images with Gemini `gemini-flash-lite-latest`: tax wedge 46.9s and 386 suggested-prompt chars, consumer choice 39.7s and 421 chars, monopoly 40.2s and 442 chars.
+
+Production closure on 2026-05-26 CST: deployed `dpl_8mSWHnjd5U5p8qJxRZNBW3DaEpqZ` to `https://manim.yishuziyu.cn`. Production `/api/health` returned HTTP 200 with Kimi, DeepSeek, and MiniMax configured. A direct production probe confirmed the consumer-choice prompt now returns `stable-template-fallback` with `消费者选择与价格效应`, `替代效应`, `收入效应`, and `补偿预算线`, without waiting on external model generation. Full production image-to-video acceptance then passed 3/3 through `/api/vision/analyze` -> `/api/generate` -> `/api/render` -> status polling -> MP4 download -> frame extraction:
+
+- Tax wedge: job `32a955d4-e6f8-4865-863b-5fc398de6d43`, duration 10.933s, 288202 bytes, 141476ms, frame `/tmp/aegis-vision-economics-acceptance/01-32a955d4-e6f8-4865-863b-5fc398de6d43.png`.
+- Consumer choice: job `c53122b5-58fa-4532-b9e8-520a57c0c13b`, duration 7.733s, 221907 bytes, 99756ms, frame `/tmp/aegis-vision-economics-acceptance/02-c53122b5-58fa-4532-b9e8-520a57c0c13b.png`.
+- Monopoly pricing: job `e2421d53-bfe5-4b95-aabc-29a8fe9ee97e`, duration 8.133s, 204506 bytes, 93024ms, frame `/tmp/aegis-vision-economics-acceptance/03-e2421d53-bfe5-4b95-aabc-29a8fe9ee97e.png`.
+
+Frame inspection found all three outputs nonblank, Chinese-readable, and semantically aligned with the input topic. Earlier failures were diagnostic: monopoly prompts containing `无谓损失` were wrongly classified as tax-wedge fallback, and consumer-choice prompts could time out while waiting on external model generation. Both are now covered by deterministic Chinese economics fallback templates and tests. Exposure decision: `beta/whitelist` is acceptable for friends to try now; do not call it broad public-ready until the exposed Gemini key is rotated, one real browser upload test is performed on the production page, and at least one longer 5-case batch passes under the current quota/rate limits.
+
+Production hotfix on 2026-05-26 CST after the user reported a browser-level `404: NOT_FOUND` at `https://manim.yishuziyu.cn/`: `/api/health` was still HTTP 200, so the domain and Vercel project were alive but the root route was not being rewritten to the Python function. Root cause was `vercel.json` only rewriting `/api/*` routes even though `api/index.py` already serves `GET /`. The fix added a root rewrite from `/` to `/api/index`, rotated the production `GEMINI_API_KEY`, and deployed `dpl_86VEUpATpnc3yR4fc93JkwxSeudH`, aliased to `https://manim.yishuziyu.cn`. Verification: `GET /` returned HTTP 200 with `Aegis Studio Web` HTML, `/api/health` returned HTTP 200, `/api/vision/analyze` returned HTTP 200 on the tax-wedge image and recognized `经济学教学图表（供需模型与税收效应）`, and a repo/component secret scan found no old or new Gemini key strings.
+
+Next Agent Team call plan after ECS doctor evidence exists:
+
+```text
+Agent Team call reason: server-side vision CLI bridge produced real ECS evidence and needs production exposure review.
+Lanes and owner agents: server evidence audit; Vercel env/proxy wiring; public browser 3-5 image acceptance; safety/privacy and secret-leak review.
+Expected evidence: Probe passed; 5/5 vision-only JSONL; 127.0.0.1:5050 health; Vercel env names without secret values; public full-render JSONL with MP4 URLs when moving from beta to public.
+Lead-agent reclaim point: all lanes submit evidence, then the lead agent updates docs and runs `scripts/decide_aegis_vision_exposure.py`.
+Re-call trigger: any public acceptance failure, CORS/proxy failure, CLI timeout pattern, or privacy/retention concern.
+Close evidence: exposure decision is written as hidden/beta/public with paths to the exact logs and no open sidecar tasks.
+Active workers/sidecars after close: none.
+```
+
+# Production Chinese Economics Batch Acceptance and Render Watchdog
+
+- [x] Add repeatable 3-5 question Chinese graduate-exam economics acceptance script.
+- [x] Add render-backend health watchdog script with lock, cooldown, HTTP health check, and Docker restart.
+- [x] Add systemd timer installer for the render watchdog.
+- [x] Add regression tests proving scripts avoid API key leakage and remain shell/Python valid.
+- [x] Reproduce the tax-wedge public trial timeout risk with a test-first default-provider rule.
+- [x] Make default public trial tax-wedge prompts use the Chinese stable template before external model calls.
+- [x] Deploy the gateway fix to production alias `https://manim.yishuziyu.cn`.
+- [x] Run 3 consecutive live Chinese economics questions through public generate/render/status/download/frame checks.
+- [x] Inspect representative frames for readable Chinese text and nonblank output.
+- [ ] Install the watchdog on the ECS host once SSH credentials are available to Codex or the current root terminal.
+
+## Review
+
+On 2026-05-25 CST, deployed production gateway `dpl_AAqYABUz7bMi829JEph59hLbCe8q`, aliased to `https://manim.yishuziyu.cn`. The new rule keeps the existing two-part pricing fast path and adds a default-provider fast path for tax-wedge graduate-exam prompts, so high-risk Chinese economics topics do not wait on slow external model generation before falling back.
+
+Live batch acceptance passed 3/3 against the production site. Q1 two-part pricing used `stable-template-fallback`, job `eb5ed101-20d5-4f45-bd9a-39a7abfe1285`, MP4 duration 4.4s. Q2 tax wedge used `stable-template-fallback`, job `4604d64b-b9e0-4809-8b75-52abe7de4ff5`, MP4 duration 10.933s; this fixed the previous 90s generation timeout. Q3 competitive market surplus used `server-managed-trial`, job `8ddb0318-c4ab-41cf-8e5e-5dd77d1b3089`, MP4 duration 28.867s. Frames were saved under `/tmp/aegis-econ-acceptance-20260525-rerun/` and showed readable Chinese labels without obvious garbling.
+
+Verification passed with `python3 -m pytest -o addopts='' tests/test_aegis_ops_scripts.py tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_aegis_prompt_context.py -q` returning 60 passed, plus `python3 -m py_compile scripts/production_economics_acceptance.py`. Codex could not install the watchdog directly because noninteractive SSH to `root@121.89.90.68` returned permission denied; installation steps are documented in `tasks/aliyun-swas-deploy-guide.md`.
+
+# Production Chinese Two-Part Pricing Acceptance
+
+- [x] Deploy the Chinese-first economics generation rules to `https://manim.yishuziyu.cn`.
+- [x] Add a fast stable Chinese template for two-part pricing prompts to avoid model timeout or topic drift.
+- [x] Prevent two-part pricing prompts that mention deadweight loss from falling into the tax-wedge fallback.
+- [x] Re-run focused public-trial, runtime compatibility, and prompt-context tests.
+- [x] Run a live graduate-exam economics prompt through public `/api/generate`.
+- [x] Run the generated Manim code through public `/api/render` and poll to `done`.
+- [x] Download the returned MP4, inspect metadata, and extract a representative frame.
+- [x] Fix visible label overlap in the two-part pricing fallback template and redeploy.
+
+## Review
+
+On 2026-05-25 CST, deployed the Chinese-first production rule set to `https://manim.yishuziyu.cn` through Vercel deployment `dpl_9DdsSKYS3o7DWZqHABU7yWXFyYDz`. The production `/api/health` endpoint returned HTTP 200 with `runtime=vercel-python-function`, and the public page returned HTML with `lang="zh-CN"`.
+
+The live acceptance prompt was a harder Chinese economics graduate-exam style question about monopolistic two-part pricing, constant marginal cost, consumer surplus, fixed entry fee, efficient output, deadweight-loss elimination, and surplus redistribution. Public `/api/generate` returned HTTP 200 with `model=stable-template-fallback`, `endpoint=server-managed-fallback`, 4 `self.play(...)` calls, Chinese visible text, no tax-wedge fallback, and the warning `已识别为考研经济学二部定价题，优先使用中文稳定模板，避免模型长时间生成或跑题。` Public `/api/render` accepted the code and job `2ccbb042-bd8f-4561-854c-3de79634dca0` reached `done`.
+
+Final MP4: `https://lnbalcskhcnkrtlqpgku.supabase.co/storage/v1/object/public/manim-videos/2ccbb042-bd8f-4561-854c-3de79634dca0/GeneratedScene.mp4`, H.264 854x480, duration 4.399678s, 66 frames, size 106497 bytes. Representative frame: `/tmp/aegis-latest-two-part-pricing-frame-v2.png`. The frame shows Chinese title, subtitle, demand curve, marginal cost, monopoly point, consumer surplus, and efficient output labels without garbled text or severe overlap. Codex in-app browser automation was attempted but the browser runtime transport was unavailable, so this pass used HTTP/API/video/frame verification instead of an in-app browser screenshot.
+
+Focused verification passed with `python3 -m pytest -o addopts='' tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_aegis_prompt_context.py -q` returning 56 passed. `git diff --check` also passed.
+
+# Public Chinese Economics Acceptance Follow-up
+
+- [x] Add a Chinese-first visible text contract to public trial generation prompts.
+- [x] Avoid Chinese sentence-to-sentence transform animations that can show mixed glyphs.
+- [x] Add a runtime compatibility fix for generated `Arrow(max_tip_length=...)`.
+- [x] Verify focused prompt, public trial, and runtime compatibility tests.
+- [x] Run a live public economics graduate-exam style tax-wedge render.
+- [x] Inspect MP4 metadata and representative frames for readable Chinese labels.
+
+## Review
+
+On 2026-05-25 CST, strengthened the public Manim generation contract for Chinese economics teaching scenes: all visible titles, labels, captions, axis explanations, step labels, and conclusions default to Chinese; English draft prose must be translated before entering `Text(...)`; compact symbols such as `价格 P`, `数量 Q`, `需求 D`, `供给 S`, `边际成本 MC`, and `边际收益 MR` remain allowed when paired with Chinese context; and Chinese captions now fade out/in rather than transform sentence-to-sentence. The runtime compatibility layer also removes unsupported generated `Arrow(max_tip_length=...)`.
+
+Focused verification passed with `python3 -m pytest -o addopts='' tests/test_aegis_public_trial.py tests/test_aegis_runtime_compatibility.py tests/test_aegis_prompt_context.py -q` returning 54 passed. A live public test on `https://manim.yishuziyu.cn` used a harder tax-wedge prompt about from-unit tax, `Pb`, `Ps`, `Q0`, `Q1`, tax revenue, deadweight loss, and efficiency loss. Public generation returned HTTP 200, fell back from Kimi access to DeepSeek, produced Chinese Manim code with no `LaggedStart`, `BraceLabel`, or `max_tip_length`, then public render job `e18ae1c7-f5db-4336-9289-1606220e3c11` completed 4/4 segmented renders. Final MP4: `https://lnbalcskhcnkrtlqpgku.supabase.co/storage/v1/object/public/manim-videos/e18ae1c7-f5db-4336-9289-1606220e3c11/GeneratedScene_segmented.mp4`, H.264 854x480, duration 23.999356s, size 379855 bytes. Representative frames showed Chinese title, price/quantity axes, demand/supply/taxed supply curves, tax revenue rectangle, deadweight-loss triangle, and Chinese conclusion text. Remaining UX issue: direct video URL navigation in the Codex in-app browser was blocked by the browser client, but the MP4 was reachable via `curl` and verified locally.
+
 # Trial Provider Stability and Community Works MVP
 
 - [x] Dispatch subagents for provider stability, cache/community structure, and community works architecture.
@@ -345,3 +518,23 @@ Kimi Coding Plan and MiniMax are now separated as two explicit reliability lanes
 Focused verification passed with `41 passed` across provider, public trial, Manim knowledge, and prompt-context tests; `python -m py_compile core/llm_providers.py api/index.py` passed; and `git diff --check` passed. A full `pytest -o addopts='' -q` run was intentionally stopped after entering broad Manim upstream tests with many unrelated failures and slow cases. Production `/api/health` now reports `trialProviders.configured.kimiCode=true`, `trialProviders.configured.miniMax=true`, and timeouts `{kimi:55, kimiRepair:35, miniMax:120, miniMaxRepair:90}` without exposing secrets. Public soft render budget is now 24 `self.play` calls, with a 40-play hard gate for extreme scripts.
 
 Closed-loop production acceptance passed through both paths. The durable fallback-quality path passed with API render job `d1f53c4a-2963-43e9-aeaa-de349fb090c6`, which completed as segmented `0/2 -> 1/2 -> done 2/2`, produced a Supabase MP4 with 288202 bytes, 854x480, about 10.93s, and extracted frame `/tmp/aegis-model-tuned-frame-6s.png` shows the intended tax-wedge supply/demand diagram. The visible in-app browser test on `https://manim.yishuziyu.cn` also passed: request `20260524-042530-vercel` rendered video URL `https://lnbalcskhcnkrtlqpgku.supabase.co/storage/v1/object/public/manim-videos/17b56d24-281c-4eb6-b860-d8db7d743171/GeneratedScene_segmented.mp4`, duration about 10.93s, and extracted frame `/tmp/aegis-browser-frame-6s.png` shows readable Chinese labels and the correct economics diagram. After relaxing MiniMax timeout and soft budget, live request `20260524-050844-vercel` showed Kimi failing with `access` but MiniMax backup returning `server-managed-trial` / `vercel-generated-code` with 24 `self.play` calls and all required tax-wedge objects. A later repeat still fell back after `kimi-code:access, minimax-coding-cn:timeout`, so the friend-facing experience is usable, but Kimi remains an upstream access problem and MiniMax remains variable under live latency.
+
+# Image Understanding CLI Bridge
+
+- [x] Validate that direct `KIMI_CODE_API_KEY` HTTP calls return Kimi access gating instead of usable product API access.
+- [x] Add `/api/vision/analyze` as a formal image-understanding endpoint.
+- [x] Add a server-side CLI bridge via `KIMI_VISION_CLI_COMMAND` so a real logged-in terminal tool can read uploaded images.
+- [x] Add upload, paste, drag/drop, mobile file-input, and Chinese confirmation-card UI.
+- [x] Keep confirmed image understanding as a Chinese prompt into the existing generate/render chain.
+- [x] Verify the CLI image route with a real terminal tool on this workstation.
+- [x] Run 5 local Chinese economics postgraduate-question image tests through `/api/vision/analyze`.
+- [ ] Install and verify the same Kimi/Codex/Claude CLI route on the cloud server with image input.
+- [ ] Run 3-5 Chinese economics postgraduate-question image tests through the production site.
+
+## Review
+
+The implementation route has changed from raw Kimi Code HTTP vision to a real terminal-backed bridge. Direct HTTP probes to `https://api.kimi.com/coding/v1/chat/completions` returned Kimi access gating even for text, so the durable route is to configure a real server CLI command template through `KIMI_VISION_CLI_COMMAND`. The backend writes the uploaded image and prompt into temporary files, calls the configured CLI, parses structured JSON or raw Chinese text, and returns a confirmation card payload. Production exposure still depends on installing the CLI on the server and passing the Chinese economics image acceptance run.
+
+Local end-to-end test passed on 2026-05-26 CST with a generated Chinese economics image about “税收楔子与无谓损失”. The real `codex exec --image` route correctly recognized the title, full Chinese question, demand/supply curves, `S+t`, `Pb/Ps/P0`, `Q1/Q0`, tax revenue rectangle, and DWL triangle, then returned a Chinese `recommended_prompt`. The local `/api/vision/analyze` endpoint also passed after adding `--skip-git-repo-check` to the Codex CLI args. The returned `suggestedPrompt` was fed into `/api/generate` with `noRender=true`, which produced `generated/scene_20260526_144914_33fb2aa9.py`; local Manim then rendered `media/videos/scene_20260526_144914_33fb2aa9/480p15/GeneratedScene.mp4` successfully. Extracted frames `/tmp/aegis-econ-render-frame.png` and `/tmp/aegis-econ-render-frame-late.png` show readable Chinese labels and a correct supply-demand tax-wedge diagram, though some mid-scene labels around tax revenue and DWL are crowded and should be tightened in the next layout-quality pass.
+
+The 5-image local economics vision batch also passed on 2026-05-26 CST after increasing client timeout to 320s. Evidence is saved at `/tmp/aegis-vision-economics-acceptance/vision-only-320s.jsonl`. The negative-externality sample additionally passed full generation and local rendering into `media/videos/aegis-externality-generated/480p15/GeneratedScene.mp4`, with representative frames saved under `/tmp/aegis-externality-render-frame-8s.png` and `/tmp/aegis-externality-render-frame-18s.png`. The main operational gap is no longer local viability; it is installing and validating the same logged-in CLI image route on the ECS production host before public exposure.

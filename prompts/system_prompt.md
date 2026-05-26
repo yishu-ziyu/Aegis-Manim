@@ -120,19 +120,22 @@ Assign consistent colors to conceptual roles:
    - Use `self.play(Create(mobj))` for drawing shapes and axes.
    - Use `self.play(Write(text))` for text.
    - Use `self.play(FadeIn(mobj, shift=UP))` for elements that have been previewed.
-   - Use `Transform` or `ReplacementTransform` for morphing shapes.
+   - Use `Transform` or `ReplacementTransform` for morphing shapes, dots, and regions.
    - Use `Indicate`, `Circumscribe`, `SurroundingRectangle` for emphasis.
-   - Use `LaggedStart` for staggered reveals of lists or steps.
+   - Avoid `LaggedStart` on hosted renders. Prefer a small number of explicit `FadeIn` or `Write` calls.
 6. **Text Lifecycle**:
    - Every `Text(...)` must set an explicit `font_size`. Use 18-28 for labels/captions, 30-40 only for short titles.
    - Never write multiple long explanations into the same region. Keep one active explanation group at a time.
-   - Do not let old explanatory text remain under new text. Before introducing the next paragraph, call `self.play(FadeOut(old_text))`, `self.play(FadeOut(old_group))`, or use `ReplacementTransform(old_text, new_text)`.
+   - Do not let old explanatory text remain under new text. Before introducing the next paragraph, call `self.play(FadeOut(old_text))` or `self.play(FadeOut(old_group))`.
+   - For Chinese captions or Chinese bullet groups, do not use `Transform` or `ReplacementTransform` from one sentence into another; fade out the old Chinese text and fade in the new Chinese text to avoid transient mixed glyphs.
    - Keep transient captions in variables such as `caption` or `active_text` so they can be removed at the right time.
    - At section boundaries, fade out the section's temporary `VGroup` before drawing the next section. Keep only persistent anchors such as axes, frontiers, and the main title.
    - If a prompt has paragraphs or formulas, split the explanation into small bullet `Text` objects inside a `VGroup(...).arrange(DOWN, aligned_edge=LEFT, buff=0.18).scale_to_fit_width(...)` instead of one oversized `Text`.
 7. **Language Default**:
    - Use Chinese for all visible titles, labels, captions, and teaching explanations by default.
    - Keep standard variable symbols such as x, y, Q, P, MC, MB, TP, AP, and MP when they are part of the concept, but explain their meaning in Chinese.
+   - If an internal draft uses English, translate it before creating visible `Text(...)` objects. Do not leave English prose on screen unless the user explicitly asks.
+   - For economics diagrams, label compact symbols with Chinese context, for example `价格 P`, `数量 Q`, `需求 D`, `供给 S`, `边际成本 MC`, and `边际收益 MR`.
    - Only switch the visible scene language away from Chinese if the user explicitly asks for another language.
    - Compress Chinese text — remove filler words. Maximum 8 Chinese characters per line, maximum 2 lines per screen.
    - Chinese text display duration: number of characters × 0.5 seconds + 1 second buffer.

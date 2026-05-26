@@ -42,6 +42,12 @@ from manim_agent import (
     is_placeholder_api_key,
     load_system_prompt,
 )
+from vision_analysis import (
+    MAX_VISION_REQUEST_BYTES,
+    analyze_image_payload,
+    disabled_vision_response,
+    is_vision_public_enabled,
+)
 
 SYSTEM_PROMPT = load_system_prompt()
 GENERATED_DIR = PROJECT_ROOT / "generated"
@@ -66,10 +72,11 @@ JOB_STORE_LOCK = threading.Lock()
 LOCAL_TRIAL_PLANS = {
     "trial-kimi-priority": {
         "name": "免费试用 · Kimi 优先",
-        "description": "本地内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 MiniMax。",
-        "model_label": "Kimi 优先 / MiniMax 备用",
+        "description": "本地内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 DeepSeek，再切换 MiniMax。",
+        "model_label": "Kimi 优先 / DeepSeek / MiniMax 备用",
         "attempts": (
             {"provider_id": "kimi-code", "env": "KIMI_CODE_API_KEY", "model": "kimi-for-coding"},
+            {"provider_id": "deepseek", "env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-flash"},
             {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M2.7"},
         ),
     },
@@ -183,7 +190,7 @@ def build_teaching_brief(prompt: str) -> str:
             "视觉策略：优先用坐标轴、集合、点、箭头、表格和高亮关系；不要把原始公式整段塞进画面。",
             "讲解策略：公式只保留必要符号，复杂推导改写成短句和分步说明。",
             "语言策略：默认使用中文标题、中文标签、中文阶段说明和中文结论；变量符号可以保留英文缩写，但必须用中文解释含义。",
-            "排版策略：所有 Text 都写 font_size；长解释拆成 VGroup 多行短句，先 FadeOut 或 ReplacementTransform 旧讲解再出现新讲解。",
+            "排版策略：所有 Text 都写 font_size；长解释拆成 VGroup 多行短句，先 FadeOut 旧讲解再 FadeIn 新讲解；中文句子不要互相 Transform，避免过渡帧混字。",
             "Manim 约束：使用 Text，不使用 Tex/MathTex；避免依赖 LaTeX；代码必须能在本地 Manim 版本稳定渲染。",
             "运行预算：默认生成 45-120 秒中等复杂度视频，8-20 个 self.play，适合分段渲染；避免复杂 LaggedStart、密集点阵、长等待和大量扇形/切片。",
         ]
@@ -512,7 +519,7 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 job_id,
                 status="failed",
                 stage="validation",
-                student_message="本地试用模型未配置：请设置 KIMI_CODE_API_KEY 或 MINIMAX_API_KEY 环境变量。",
+                student_message="本地试用模型未配置：请设置 KIMI_CODE_API_KEY、DEEPSEEK_API_KEY 或 MINIMAX_API_KEY 环境变量。",
                 technical_message="LOCAL_TRIAL_NO_KEYS_CONFIGURED",
             )
             fail_job(
@@ -520,10 +527,10 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 {
                     "ok": False,
                     "error": "Local trial keys not configured.",
-                    "detail": "Please set KIMI_CODE_API_KEY or MINIMAX_API_KEY env var.",
+                    "detail": "Please set KIMI_CODE_API_KEY, DEEPSEEK_API_KEY, or MINIMAX_API_KEY env var.",
                     "requestId": job_id,
                 },
-                "本地试用模型未配置：请设置 KIMI_CODE_API_KEY 或 MINIMAX_API_KEY 环境变量。",
+                "本地试用模型未配置：请设置 KIMI_CODE_API_KEY、DEEPSEEK_API_KEY 或 MINIMAX_API_KEY 环境变量。",
             )
             return
 
@@ -933,6 +940,8 @@ def make_index_html() -> str:
         if "trial-kimi-priority" in local_trial:
             provider_config["defaultProvider"] = "trial-kimi-priority"
     provider_config_json = json.dumps(provider_config, ensure_ascii=False)
+    vision_enabled = is_vision_public_enabled()
+    vision_hidden_attr = "" if vision_enabled else " hidden"
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1117,6 +1126,51 @@ def make_index_html() -> str:
 
     input:focus, select:focus, textarea:focus {{
       border-color: var(--accent);
+    }}
+
+    .vision-drop-zone {{
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      background: var(--bg);
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+    }}
+    .vision-drop-zone.drag-over {{
+      border-color: var(--accent);
+      background: var(--bg-2);
+    }}
+    .vision-drop-zone input {{
+      padding: 0;
+      border: none;
+      background: transparent;
+    }}
+    .vision-confirm-card {{
+      display: none;
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius);
+      background: var(--bg-2);
+      padding: 12px;
+      gap: 10px;
+    }}
+    .vision-confirm-card.visible {{
+      display: grid;
+    }}
+    .vision-confirm-actions {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }}
+    .vision-analysis-text {{
+      color: var(--fg);
+      font-size: 0.86rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }}
+    .vision-details {{
+      color: var(--muted);
+      font-size: 0.82rem;
     }}
 
     .prompt-preview {{
@@ -1719,6 +1773,26 @@ def make_index_html() -> str:
           </div>
         </div>
 
+        <div class="field"{vision_hidden_attr}>
+          <label for="visionImageInput">上传图片让 AI 先理解</label>
+          <div id="visionDropZone" class="vision-drop-zone">
+            <input id="visionImageInput" name="visionImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+            <div class="help">支持上传、截图粘贴、拖拽；手机浏览器可选择拍照或相册。图片会先转成中文理解卡片，确认后再生成动画。</div>
+          </div>
+          <div id="visionConfirmCard" class="vision-confirm-card">
+            <strong>是否按这个方向可视化？</strong>
+            <div id="visionAnalysisText" class="vision-analysis-text"></div>
+            <details class="vision-details">
+              <summary>展开 AI 判断依据</summary>
+              <pre id="visionAuditText"></pre>
+            </details>
+            <div class="vision-confirm-actions">
+              <button id="visionUseBtn" class="tiny-btn" type="button">使用这个方向</button>
+              <button id="visionReuploadBtn" class="tiny-btn" type="button">重新选择图片</button>
+            </div>
+          </div>
+        </div>
+
         <div class="row">
           <div class="field">
             <label for="model">模型</label>
@@ -1883,6 +1957,13 @@ def make_index_html() -> str:
     const communitySource = document.getElementById("communitySource");
     const publishWorkBtn = document.getElementById("publishWorkBtn");
     const ratingButtons = Array.from(document.querySelectorAll(".rating-btn"));
+    const visionImageInput = document.getElementById("visionImageInput");
+    const visionDropZone = document.getElementById("visionDropZone");
+    const visionConfirmCard = document.getElementById("visionConfirmCard");
+    const visionAnalysisText = document.getElementById("visionAnalysisText");
+    const visionAuditText = document.getElementById("visionAuditText");
+    const visionUseBtn = document.getElementById("visionUseBtn");
+    const visionReuploadBtn = document.getElementById("visionReuploadBtn");
 
     let currentAlignment = null;
     let latestPrompt = "";
@@ -1894,6 +1975,7 @@ def make_index_html() -> str:
     let communityWorkId = "";
     let processStartedAt = 0;
     let processTimer = null;
+    let visionSuggestedPrompt = "";
 
     // ── Render backend warm-up ──
     // Render free tier spins down after 15 min of inactivity. When the page loads,
@@ -2069,6 +2151,69 @@ def make_index_html() -> str:
       }}
       promptPreview.classList.add("visible");
       renderRichText(promptPreviewContent, text);
+    }}
+
+    function fileToDataUrl(file) {{
+      return new Promise((resolve, reject) => {{
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("图片读取失败"));
+        reader.readAsDataURL(file);
+      }});
+    }}
+
+    function visionSummaryText(analysis) {{
+      if (!analysis) return "";
+      const parts = [];
+      if (analysis.recognized_content) parts.push("识别内容：" + analysis.recognized_content);
+      if (Array.isArray(analysis.key_elements) && analysis.key_elements.length) {{
+        parts.push("关键元素：" + analysis.key_elements.join("、"));
+      }}
+      if (analysis.visualization_plan) parts.push("可视化方向：" + analysis.visualization_plan);
+      if (Array.isArray(analysis.uncertainties) && analysis.uncertainties.length) {{
+        parts.push("需要确认：" + analysis.uncertainties.join("；"));
+      }}
+      return parts.join("\\n");
+    }}
+
+    async function analyzeVisionFile(file) {{
+      if (!file || !file.type || !file.type.startsWith("image/")) {{
+        setStatus("请上传 PNG、JPG/JPEG 或 WebP 图片。", "error");
+        return;
+      }}
+      if (file.size > 5 * 1024 * 1024) {{
+        setStatus("图片超过 5MB，请先压缩后再上传。", "error");
+        return;
+      }}
+      setStatus("已收到图片，正在用 AI 做中文理解...", "");
+      visionSuggestedPrompt = "";
+      visionConfirmCard.classList.remove("visible");
+      visionAnalysisText.textContent = "";
+      visionAuditText.textContent = "";
+      try {{
+        const imageData = await fileToDataUrl(file);
+        const response = await fetch("/api/vision/analyze", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            imageData,
+            mimeType: file.type,
+            prompt: promptInput.value.trim()
+          }})
+        }});
+        const data = await response.json();
+        if (!response.ok || !data.ok) {{
+          const detail = data.detail ? " | " + data.detail : "";
+          throw new Error((data.error || "图片理解失败") + detail);
+        }}
+        visionSuggestedPrompt = String(data.suggestedPrompt || "");
+        visionAnalysisText.textContent = visionSummaryText(data.analysis) || visionSuggestedPrompt || "已完成图片理解。";
+        visionAuditText.textContent = JSON.stringify(data.analysis || {{}}, null, 2);
+        visionConfirmCard.classList.add("visible");
+        setStatus("图片理解完成。请确认是否按这个方向生成可视化。", "");
+      }} catch (err) {{
+        setStatus(err && err.message ? err.message : "图片理解异常", "error");
+      }}
     }}
 
     function setProcessStage(stageIndex) {{
@@ -2569,6 +2714,47 @@ def make_index_html() -> str:
       toggleCodeBtn.textContent = showing ? "隐藏代码" : "查看代码";
     }});
 
+    visionImageInput.addEventListener("change", () => {{
+      const file = visionImageInput.files && visionImageInput.files[0];
+      if (file) analyzeVisionFile(file);
+    }});
+
+    visionUseBtn.addEventListener("click", () => {{
+      if (!visionSuggestedPrompt) {{
+        setStatus("还没有可用的图片理解结果。", "error");
+        return;
+      }}
+      promptInput.value = visionSuggestedPrompt;
+      updatePromptPreview();
+      setStatus("已把图片理解结果写入问题框，可以继续编辑或直接生成。", "");
+    }});
+
+    visionReuploadBtn.addEventListener("click", () => {{
+      visionImageInput.value = "";
+      visionSuggestedPrompt = "";
+      visionConfirmCard.classList.remove("visible");
+      visionImageInput.click();
+    }});
+
+    visionDropZone.addEventListener("dragover", (event) => {{
+      event.preventDefault();
+      visionDropZone.classList.add("drag-over");
+    }});
+    visionDropZone.addEventListener("dragleave", () => visionDropZone.classList.remove("drag-over"));
+    visionDropZone.addEventListener("drop", (event) => {{
+      event.preventDefault();
+      visionDropZone.classList.remove("drag-over");
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) analyzeVisionFile(file);
+    }});
+    document.addEventListener("paste", (event) => {{
+      const items = Array.from((event.clipboardData && event.clipboardData.items) || []);
+      const imageItem = items.find((item) => item.type && item.type.startsWith("image/"));
+      if (!imageItem) return;
+      const file = imageItem.getAsFile();
+      if (file) analyzeVisionFile(file);
+    }});
+
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
       const preset = activePreset();
@@ -2896,7 +3082,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json_body(self) -> dict[str, Any]:
+    def _read_json_body(self, *, max_bytes: int | None = None) -> dict[str, Any]:
         raw_len = self.headers.get("Content-Length", "0")
         try:
             body_len = int(raw_len)
@@ -2904,6 +3090,8 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             raise ValueError("Invalid Content-Length.") from exc
         if body_len <= 0:
             raise ValueError("Empty request body.")
+        if max_bytes is not None and body_len > max_bytes:
+            raise ValueError("请求体太大，请缩短问题后再试。")
         raw = self.rfile.read(body_len)
         try:
             return json.loads(raw.decode("utf-8"))
@@ -2997,6 +3185,20 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if route == "/api/generate/start":
             self._handle_generate_start()
+            return
+
+        if route == "/api/vision/analyze":
+            if not is_vision_public_enabled():
+                status, response = disabled_vision_response()
+                self._send_json(HTTPStatus(status), response)
+                return
+            try:
+                payload = self._read_json_body(max_bytes=MAX_VISION_REQUEST_BYTES)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = analyze_image_payload(payload)
+            self._send_json(status, response)
             return
 
         if route == "/api/render":

@@ -23,10 +23,12 @@ class AegisPromptContextTest(unittest.TestCase):
         assert "ValueTracker" in prompt
         assert "axes.c2p" in prompt
         assert "Text Lifecycle" in prompt
-        assert "ReplacementTransform(old_text, new_text)" in prompt
+        assert "fade out the old Chinese text" in prompt
+        assert "transient mixed glyphs" in prompt
         assert "FadeOut(section_group)" in prompt
         assert "Language Default" in prompt
         assert "Use Chinese for all visible titles" in prompt
+        assert "价格 P" in prompt
         assert "Default visible scene language is Chinese" in prompt
 
     def test_load_system_prompt_tolerates_missing_knowledge_pack(self) -> None:

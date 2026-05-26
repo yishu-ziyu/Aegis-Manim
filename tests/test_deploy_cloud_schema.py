@@ -78,9 +78,37 @@ def test_vercel_rewrites_include_community_proxy_routes() -> None:
     config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
     rewrites = {rewrite["source"]: rewrite["destination"] for rewrite in config["rewrites"]}
 
+    assert rewrites["/api/vision/analyze"] == "/api/index"
     assert rewrites["/api/community/search"] == "/api/index"
     assert rewrites["/api/community/works"] == "/api/index"
     assert rewrites["/api/community/works/(.*)"] == "/api/index"
+
+
+def test_vercel_function_bundle_excludes_local_heavy_directories() -> None:
+    config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
+    assert config.get("framework") is None
+    assert "api/*.py" in config.get("functions", {})
+
+    exclude_patterns = "\n".join(
+        function_config.get("excludeFiles", "")
+        for function_config in config.get("functions", {}).values()
+    )
+    assert len(config["functions"]["api/*.py"]["excludeFiles"]) <= 256
+
+    for path in [
+        ".vercel",
+        ".venv",
+        ".aegis-local-venv",
+        "pyproject.toml",
+        "uv.lock",
+        "manim",
+        "media",
+        "render_backend",
+        "final_video_warehouse",
+        "tests",
+        "docs",
+    ]:
+        assert path in exclude_patterns
 
 
 def test_deploy_supabase_schema_uses_safe_statement_splitter(monkeypatch) -> None:
