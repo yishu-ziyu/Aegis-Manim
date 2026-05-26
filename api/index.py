@@ -33,6 +33,12 @@ from manim_agent import (  # noqa: E402
     load_system_prompt,
 )
 from manim_knowledge import precheck_manim_code, summarize_precheck_for_prompt  # noqa: E402
+from vision_analysis import (  # noqa: E402
+    MAX_VISION_REQUEST_BYTES,
+    analyze_image_payload,
+    disabled_vision_response,
+    is_vision_public_enabled,
+)
 
 # Load .env so trial provider keys and RENDER_BACKEND_URL are available
 load_dotenv(PROJECT_ROOT / ".env")
@@ -49,6 +55,19 @@ MAX_PUBLIC_LAGGED_STARTS = 4
 MAX_PUBLIC_RENDER_HARD_PLAYS = 40
 MAX_PUBLIC_RENDER_HARD_WAITS = 32
 MAX_PUBLIC_HARD_LAGGED_STARTS = 8
+PUBLIC_RENDER_RISKY_PATTERNS = (
+    ("LaggedStart(", "LaggedStart can create slow segmented-render chunks"),
+    ("BraceLabel(", "BraceLabel can be slow or brittle on hosted segmented rendering"),
+)
+PUBLIC_CHINESE_SCENE_CONTRACT = (
+    "Chinese-first visible text contract:",
+    "All visible Text(...) titles, captions, axis explanations, step labels, and conclusions must be Chinese by default unless the user explicitly asks for another language.",
+    "If the internal draft uses English, translate it before putting text into Text(...); do not leave English prose such as Demand, Supply, Tax Revenue, or Deadweight Loss on screen.",
+    "Compact symbols are allowed, but pair them with Chinese labels: 价格 P, 数量 Q, 需求 D, 供给 S, 边际成本 MC, 边际收益 MR.",
+    "Keep each Chinese Text line short, ideally 8 Chinese characters or fewer; split longer explanations into VGroup rows and call scale_to_fit_width when needed.",
+    "For Chinese captions, do not Transform or ReplacementTransform one sentence into another; FadeOut the old caption, then FadeIn the new caption to avoid transient mixed glyphs.",
+    "Do not pass arbitrary font= values into Text; the runtime injects a CJK-capable default font.",
+)
 PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "45"))
 PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "25"))
 PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS = int(
@@ -57,23 +76,34 @@ PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS = int(
 PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "120"))
 )
+PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS = int(
+    os.environ.get("PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "90"))
+)
 PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "35"))
 )
 PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "90"))
 )
+PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS = int(
+    os.environ.get("PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
+)
 PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-kimi-priority"
 PUBLIC_TRIAL_PLANS = {
     "trial-kimi-priority": {
         "name": "免费试用 · Kimi 优先",
-        "description": "内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 MiniMax。",
-        "model_label": "Kimi 优先 / MiniMax 备用",
+        "description": "内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 DeepSeek，再切换 MiniMax。",
+        "model_label": "Kimi 优先 / DeepSeek / MiniMax 备用",
         "attempts": (
             {
                 "provider_id": "kimi-code",
                 "env": "KIMI_CODE_API_KEY",
                 "model": "kimi-for-coding",
+            },
+            {
+                "provider_id": "deepseek",
+                "env": "DEEPSEEK_API_KEY",
+                "model": "deepseek-v4-flash",
             },
             {
                 "provider_id": "minimax-coding-cn",
@@ -102,6 +132,7 @@ CLOUD_ENDPOINT_ERROR = (
 # Render backend configuration
 RENDER_BACKEND_URL = os.environ.get("RENDER_BACKEND_URL", "").rstrip("/")
 RENDER_BACKEND_API_KEY = os.environ.get("RENDER_BACKEND_API_KEY", "").strip()
+RENDER_BACKEND_RETRYABLE_STATUS = {502, 503, 504}
 
 
 def _render_backend_headers() -> dict[str, str]:
@@ -148,13 +179,21 @@ def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, 
             # Unexpected error, treat as connection failure for retry purposes
             return None
 
-    # First attempt
-    result = _try_once()
+    retries = max(0, int(os.environ.get("RENDER_BACKEND_RETRIES", "2")))
+    wakeup_wait = max(0.0, float(os.environ.get("RENDER_BACKEND_WAKEUP_WAIT_SECONDS", "12")))
+    result: tuple[int, str] | None = None
+    last_status: int | None = None
+    last_body = ""
 
-    # If connection failed, wake up the instance and retry once
-    if result is None:
-        print("[Render] Connection failed, instance may be cold. Sending wake-up ping...", file=sys.stderr)
-        # Fire-and-forget wake-up request (ignore any response)
+    for attempt in range(retries + 1):
+        result = _try_once()
+        if result is not None:
+            last_status, last_body = result
+            if last_status not in RENDER_BACKEND_RETRYABLE_STATUS or attempt >= retries:
+                break
+
+        reason = "connection failed" if result is None else f"status={last_status}"
+        print(f"[Render] {reason}, sending wake-up ping before retry...", file=sys.stderr)
         try:
             ping_url = f"{RENDER_BACKEND_URL}/health"
             ping_req = urllib_request.Request(
@@ -162,13 +201,11 @@ def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, 
             )
             urllib_request.urlopen(ping_req, timeout=5)
         except Exception:
-            pass  # Wake-up pings are best-effort
+            pass
 
-        # Wait for Render free tier to cold-start (typically 30-60s, but 10s is often enough for the HTTP layer)
-        time.sleep(10)
-
-        print("[Render] Retrying original request after wake-up...", file=sys.stderr)
-        result = _try_once()
+        if attempt < retries:
+            time.sleep(wakeup_wait * (attempt + 1))
+            print("[Render] Retrying original request after wake-up...", file=sys.stderr)
 
     if result is None:
         return HTTPStatus.BAD_GATEWAY, {
@@ -176,7 +213,7 @@ def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, 
             "error": "渲染后端连接失败：实例可能正在冷启动，请稍后再试。",
         }
 
-    status, body = result
+    status, body = result if result is not None else (last_status or HTTPStatus.BAD_GATEWAY, last_body)
     try:
         parsed = json.loads(body) if body else {}
     except json.JSONDecodeError:
@@ -215,10 +252,19 @@ def _proxy_to_render_backend_raw(path: str, method: str = "GET", payload: dict[s
         except Exception:
             return None
 
-    result = _try_once_raw()
+    retries = max(0, int(os.environ.get("RENDER_BACKEND_RETRIES", "2")))
+    wakeup_wait = max(0.0, float(os.environ.get("RENDER_BACKEND_WAKEUP_WAIT_SECONDS", "12")))
+    result: tuple[int, bytes, dict[str, str]] | None = None
+    last_status: int | None = None
+    for attempt in range(retries + 1):
+        result = _try_once_raw()
+        if result is not None:
+            last_status = result[0]
+            if last_status not in RENDER_BACKEND_RETRYABLE_STATUS or attempt >= retries:
+                break
 
-    if result is None:
-        print("[RenderRaw] Connection failed, instance may be cold. Sending wake-up ping...", file=sys.stderr)
+        reason = "connection failed" if result is None else f"status={last_status}"
+        print(f"[RenderRaw] {reason}, sending wake-up ping before retry...", file=sys.stderr)
         try:
             ping_url = f"{RENDER_BACKEND_URL}/health"
             ping_req = urllib_request.Request(
@@ -227,9 +273,9 @@ def _proxy_to_render_backend_raw(path: str, method: str = "GET", payload: dict[s
             urllib_request.urlopen(ping_req, timeout=5)
         except Exception:
             pass
-        time.sleep(10)
-        print("[RenderRaw] Retrying original request after wake-up...", file=sys.stderr)
-        result = _try_once_raw()
+        if attempt < retries:
+            time.sleep(wakeup_wait * (attempt + 1))
+            print("[RenderRaw] Retrying original request after wake-up...", file=sys.stderr)
 
     if result is None:
         err_body = "渲染后端连接失败：实例可能正在冷启动，请稍后再试。".encode("utf-8")
@@ -259,11 +305,14 @@ def build_health_payload() -> dict[str, object]:
             "defaultProvider": PUBLIC_TRIAL_DEFAULT_PROVIDER,
             "configured": {
                 "kimiCode": bool(read_server_key("KIMI_CODE_API_KEY")),
+                "deepSeek": bool(read_server_key("DEEPSEEK_API_KEY")),
                 "miniMax": bool(read_server_key("MINIMAX_API_KEY")),
             },
             "timeouts": {
                 "kimi": PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS,
                 "kimiRepair": PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS,
+                "deepSeek": PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS,
+                "deepSeekRepair": PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS,
                 "miniMax": PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS,
                 "miniMaxRepair": PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS,
             },
@@ -354,6 +403,9 @@ def render_budget_warnings(code: str) -> list[str]:
         warnings.append(f"self.wait count {wait_count} exceeds hosted budget {MAX_PUBLIC_RENDER_WAITS}")
     if lagged_count > MAX_PUBLIC_LAGGED_STARTS:
         warnings.append(f"LaggedStart count {lagged_count} exceeds hosted budget {MAX_PUBLIC_LAGGED_STARTS}")
+    for pattern, message in PUBLIC_RENDER_RISKY_PATTERNS:
+        if pattern in code:
+            warnings.append(message)
     return warnings
 
 
@@ -380,8 +432,9 @@ def hosted_render_budget_prompt(prompt: str, warnings: list[str]) -> str:
             "; ".join(warnings),
             "Regenerate the complete Manim Python file as a reliable segmented-render scene.",
             f"Hard limits: at most {MAX_PUBLIC_RENDER_PLAYS} self.play(...) calls, at most {MAX_PUBLIC_RENDER_WAITS} self.wait(...) calls, at most {MAX_PUBLIC_LAGGED_STARTS} LaggedStart(...).",
-            "No dense object swarms, no loops containing self.play/self.wait, no long wait chains, no more than 8 visible text labels at once.",
+            "No dense object swarms, no loops containing self.play/self.wait, no long wait chains, no LaggedStart, no BraceLabel, no more than 8 visible text labels at once.",
             "Target video length: 45-120 seconds when the renderer can segment the scene. Prefer clear visual beats over a dense lecture.",
+            *PUBLIC_CHINESE_SCENE_CONTRACT,
         ]
     )
 
@@ -401,6 +454,11 @@ def trial_generation_prompt(prompt: str) -> str:
             "Make a high-quality teaching scene, not a placeholder: 4-6 visual beats, 8-14 self.play calls, clear diagrams, short Chinese labels.",
             "Use Text instead of Tex/MathTex. Keep labels inside the frame and avoid dense paragraphs.",
             "Prefer Axes, Line, Dot, Polygon, Arrow, VGroup, FadeIn/FadeOut/ReplacementTransform for reliable rendering.",
+            "Avoid hosted-render slow paths: no LaggedStart, no BraceLabel, no dense brace annotations, no animation loops.",
+            "Use supported Manim Community APIs: place graph points through axes.c2p(...), pass axis labels through get_axis_labels(Text(...), Text(...)), and do not pass x_label/y_label into Axes(...).",
+            "For economics diagrams, draw the economic object itself: curves, equilibrium dots, dashed projection lines, arrows, and surplus/profit/deadweight-loss areas with Polygon.",
+            "Every Text(...) must set font_size; no more than 8 visible labels at once; remove old explanation text before adding new explanation text.",
+            *PUBLIC_CHINESE_SCENE_CONTRACT,
         ]
     )
     return "\n".join(lines)
@@ -409,6 +467,8 @@ def trial_generation_prompt(prompt: str) -> str:
 def trial_timeout_seconds(provider_id: str, *, repair: bool = False) -> int:
     if provider_id == "kimi-code":
         return PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS
+    if provider_id == "deepseek":
+        return PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
     if provider_id.startswith("minimax"):
         return PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
     return PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS
@@ -433,25 +493,127 @@ def trial_precheck_repair_prompt(prompt: str, code: str, issues: list[object]) -
 
 def is_tax_wedge_prompt(prompt: str) -> bool:
     lowered = prompt.lower()
-    markers = (
+    tax_markers = (
         "tax wedge",
         "deadweight loss",
-        "supply",
-        "demand",
-        "buyer price",
-        "seller price",
+        "tax revenue",
+        "unit tax",
         "税收楔子",
         "无谓损失",
-        "供给",
-        "需求",
+        "税收收入",
+        "单位税",
+        "征税",
         "买方价格",
         "卖方价格",
+    )
+    return any(marker in lowered or marker in prompt for marker in tax_markers)
+
+
+def is_two_part_pricing_prompt(prompt: str) -> bool:
+    lowered = prompt.lower()
+    markers = (
+        "two-part pricing",
+        "two part pricing",
+        "two-part tariff",
+        "two part tariff",
+        "fixed fee",
+        "entry fee",
+        "access fee",
+        "二部定价",
+        "两部定价",
+        "固定入场费",
+        "入场费",
     )
     return any(marker in lowered or marker in prompt for marker in markers)
 
 
+def is_standard_monopoly_prompt(prompt: str) -> bool:
+    if is_two_part_pricing_prompt(prompt):
+        return False
+    lowered = prompt.lower()
+    markers = (
+        "monopoly",
+        "monopolist",
+        "mr",
+        "mc",
+        "marginal revenue",
+        "marginal cost",
+        "垄断定价",
+        "垄断市场",
+        "垄断厂商",
+        "边际收益",
+        "边际成本",
+        "垄断利润",
+        "完全竞争产量",
+    )
+    return any(marker in lowered or marker in prompt for marker in markers)
+
+
+def is_consumer_choice_prompt(prompt: str) -> bool:
+    lowered = prompt.lower()
+    markers = (
+        "consumer choice",
+        "budget line",
+        "budget constraint",
+        "indifference curve",
+        "substitution effect",
+        "income effect",
+        "price effect",
+        "compensated budget",
+        "消费者选择",
+        "预算线",
+        "预算约束",
+        "无差异曲线",
+        "替代效应",
+        "收入效应",
+        "价格效应",
+        "补偿预算线",
+    )
+    return any(marker in lowered or marker in prompt for marker in markers)
+
+
+def has_topic_specific_fallback(prompt: str) -> bool:
+    return (
+        is_tax_wedge_prompt(prompt)
+        or is_two_part_pricing_prompt(prompt)
+        or is_standard_monopoly_prompt(prompt)
+        or is_consumer_choice_prompt(prompt)
+    )
+
+
 def topic_quality_warnings(prompt: str, code: str) -> list[str]:
     warnings: list[str] = []
+    if is_standard_monopoly_prompt(prompt):
+        lowered_code = code.lower()
+        required_groups = (
+            ("垄断", "monopoly"),
+            ("边际收益", "mr", "marginal revenue"),
+            ("边际成本", "mc", "marginal cost"),
+            ("垄断利润", "monopoly profit"),
+            ("无谓损失", "deadweight loss", "dwl"),
+        )
+        for group in required_groups:
+            if not any(marker in code or marker in lowered_code for marker in group):
+                warnings.append(f"standard-monopoly missing {'/'.join(group)}")
+        if "Polygon(" not in code:
+            warnings.append("standard-monopoly missing profit/dwl polygon")
+        return warnings
+    if is_consumer_choice_prompt(prompt):
+        lowered_code = code.lower()
+        required_groups = (
+            ("预算线", "budget line", "budget constraint"),
+            ("无差异曲线", "indifference"),
+            ("替代效应", "substitution effect"),
+            ("收入效应", "income effect"),
+            ("补偿预算线", "compensated budget"),
+        )
+        for group in required_groups:
+            if not any(marker in code or marker in lowered_code for marker in group):
+                warnings.append(f"consumer-choice missing {'/'.join(group)}")
+        for point in ("A", "B", "C"):
+            if f'"{point}"' not in code and f"'{point}'" not in code:
+                warnings.append(f"consumer-choice missing point {point}")
+        return warnings
     if is_tax_wedge_prompt(prompt):
         required_groups = (
             ("税收收入", "tax revenue"),
@@ -465,6 +627,21 @@ def topic_quality_warnings(prompt: str, code: str) -> list[str]:
                 warnings.append(f"tax-wedge missing {'/'.join(group)}")
         if "Polygon(" not in code:
             warnings.append("tax-wedge missing revenue/dwl polygon")
+    if is_two_part_pricing_prompt(prompt):
+        lowered_code = code.lower()
+        required_groups = (
+            ("二部定价", "两部定价", "two-part", "two part"),
+            ("消费者剩余", "consumer surplus"),
+            ("固定入场费", "入场费", "fixed fee", "entry fee", "access fee"),
+            ("边际成本", "marginal cost", " mc"),
+            ("垄断定价", "monopoly price", "linear monopoly"),
+            ("有效率产量", "efficient output", "q_e"),
+        )
+        for group in required_groups:
+            if not any(marker in code or marker in lowered_code for marker in group):
+                warnings.append(f"two-part-pricing missing {'/'.join(group)}")
+        if "Polygon(" not in code:
+            warnings.append("two-part-pricing missing surplus/profit region polygon")
     return warnings
 
 
@@ -472,6 +649,204 @@ def build_fallback_manim_code(prompt: str, scene_name: str) -> str:
     """Return a deterministic Manim scene when trial model providers are slow/unavailable."""
     safe_scene_name = local_web_app.safe_scene_name(scene_name)
     compact = " ".join(prompt.split())[:28] or "抽象概念"
+    if is_two_part_pricing_prompt(prompt):
+        return f'''from manim import *
+
+class {safe_scene_name}(Scene):
+    def construct(self):
+        self.camera.background_color = "#0f172a"
+        title = Text("垄断厂商的二部定价", font_size=34, color=YELLOW).to_edge(UP)
+        subtitle = Text("单位价格降到边际成本，固定入场费提取消费者剩余", font_size=20, color=GREY_B).next_to(title, DOWN, buff=0.18)
+
+        axis_x = Line(LEFT * 3.2 + DOWN * 1.8, RIGHT * 2.4 + DOWN * 1.8, color=GREY_B)
+        axis_y = Line(LEFT * 3.2 + DOWN * 1.8, LEFT * 3.2 + UP * 1.75, color=GREY_B)
+        demand = Line(LEFT * 2.75 + UP * 1.35, RIGHT * 1.85 + DOWN * 1.25, color=BLUE, stroke_width=5)
+        mc = Line(LEFT * 2.9 + DOWN * 0.65, RIGHT * 2.15 + DOWN * 0.65, color=GREEN, stroke_width=5)
+        monopoly_point = Dot(LEFT * 1.25 + UP * 0.35, color=RED)
+        efficient_point = Dot(RIGHT * 1.05 + DOWN * 0.65, color=YELLOW)
+        surplus = Polygon(
+            LEFT * 2.9 + UP * 1.55,
+            RIGHT * 1.05 + DOWN * 0.65,
+            LEFT * 2.9 + DOWN * 0.65,
+            color=TEAL,
+            fill_opacity=0.25,
+            stroke_width=2,
+        )
+        labels = VGroup(
+            Text("需求 D", font_size=18, color=BLUE).move_to(LEFT * 0.2 + UP * 1.35),
+            Text("边际成本 MC", font_size=18, color=GREEN).move_to(RIGHT * 1.15 + DOWN * 0.36),
+            Text("垄断点", font_size=17, color=RED).next_to(monopoly_point, UP, buff=0.12).shift(RIGHT * 0.25),
+            Text("有效率产量 Qe", font_size=18, color=YELLOW).next_to(efficient_point, DOWN, buff=0.16).shift(RIGHT * 0.35),
+            Text("消费者剩余", font_size=17, color=TEAL).move_to(LEFT * 2.05 + UP * 0.08),
+        )
+        rule_box = VGroup(
+            Text("二部定价规则", font_size=23, color=YELLOW),
+            Text("1. 单价 = MC，交易量扩大", font_size=19, color=WHITE),
+            Text("2. 固定入场费 = 消费者剩余", font_size=19, color=WHITE),
+            Text("3. 无谓损失消失，剩余转为利润", font_size=19, color=WHITE),
+        ).arrange(DOWN, aligned_edge=LEFT, buff=0.16).to_edge(RIGHT, buff=0.55).shift(DOWN * 0.15)
+
+        self.play(FadeIn(title), FadeIn(subtitle), run_time=0.7)
+        self.play(Create(VGroup(axis_x, axis_y, demand, mc)), FadeIn(labels[:2]), run_time=0.9)
+        self.play(FadeIn(monopoly_point), FadeIn(efficient_point), FadeIn(surplus), FadeIn(labels[2:]), run_time=0.9)
+        self.play(FadeIn(rule_box), Indicate(surplus), run_time=1.0)
+        self.wait(0.8)
+'''
+    if is_standard_monopoly_prompt(prompt):
+        return f'''from manim import *
+
+class {safe_scene_name}(Scene):
+    def construct(self):
+        self.camera.background_color = "#0f172a"
+        title = Text("垄断定价与福利损失", font_size=34, color=YELLOW).to_edge(UP)
+        subtitle = Text("MR=MC 决定 Qm，再由需求曲线决定 Pm", font_size=20, color=GREY_B).next_to(title, DOWN, buff=0.18)
+
+        axes = Axes(
+            x_range=[0, 6, 1],
+            y_range=[0, 5, 1],
+            x_length=6.4,
+            y_length=4.25,
+            tips=False,
+            axis_config={{"include_numbers": False, "color": GREY_B}},
+        ).shift(DOWN * 0.32)
+        q_label = Text("产量 Q", font_size=18, color=GREY_B).next_to(axes.x_axis, RIGHT, buff=0.18)
+        p_label = Text("价格 P", font_size=18, color=GREY_B).next_to(axes.y_axis, UP, buff=0.18)
+
+        demand = Line(axes.c2p(0.75, 4.35), axes.c2p(5.35, 0.75), color=BLUE, stroke_width=5)
+        mr = Line(axes.c2p(0.75, 4.0), axes.c2p(3.95, 0.65), color=RED, stroke_width=5)
+        mc = Line(axes.c2p(0.75, 1.55), axes.c2p(5.35, 1.55), color=GREEN, stroke_width=5)
+        labels = VGroup(
+            Text("需求 D", font_size=18, color=BLUE).next_to(demand.get_start(), UP, buff=0.1),
+            Text("边际收益 MR", font_size=18, color=RED).next_to(mr.get_center(), DOWN, buff=0.12).shift(LEFT * 0.35),
+            Text("边际成本 MC", font_size=18, color=GREEN).next_to(mc.get_end(), UP, buff=0.1),
+        )
+
+        qm, pm, mc_price, qc = 2.65, 2.82, 1.55, 4.15
+        monopoly_dot = Dot(axes.c2p(qm, mc_price), color=RED)
+        price_dot = Dot(axes.c2p(qm, pm), color=YELLOW)
+        competition_dot = Dot(axes.c2p(qc, mc_price), color=WHITE)
+        qm_line = DashedLine(axes.c2p(qm, 0), axes.c2p(qm, pm), color=YELLOW, stroke_opacity=0.65)
+        pm_line = DashedLine(axes.c2p(0, pm), axes.c2p(qm, pm), color=YELLOW, stroke_opacity=0.65)
+        qc_line = DashedLine(axes.c2p(qc, 0), axes.c2p(qc, mc_price), color=WHITE, stroke_opacity=0.5)
+
+        profit = Polygon(
+            axes.c2p(0, mc_price),
+            axes.c2p(qm, mc_price),
+            axes.c2p(qm, pm),
+            axes.c2p(0, pm),
+            color=TEAL,
+            fill_opacity=0.22,
+            stroke_width=2,
+        )
+        dwl = Polygon(
+            axes.c2p(qm, pm),
+            axes.c2p(qm, mc_price),
+            axes.c2p(qc, mc_price),
+            color=RED,
+            fill_opacity=0.34,
+            stroke_width=3,
+        )
+        outcome_labels = VGroup(
+            Text("Qm", font_size=18, color=YELLOW).next_to(axes.c2p(qm, 0), DOWN, buff=0.12),
+            Text("Pm", font_size=18, color=YELLOW).next_to(axes.c2p(0, pm), LEFT, buff=0.12),
+            Text("Qc", font_size=18, color=WHITE).next_to(axes.c2p(qc, 0), DOWN, buff=0.12),
+            Text("垄断利润", font_size=18, color=TEAL).move_to(profit.get_center()),
+            Text("无谓损失", font_size=18, color=RED).next_to(dwl, RIGHT, buff=0.12),
+        )
+        step1 = Text("1. 垄断厂商按 MR=MC 选择产量 Qm", font_size=21, color=WHITE).to_edge(DOWN)
+        step2 = Text("2. 再沿需求曲线向上找到垄断价格 Pm", font_size=21, color=WHITE).to_edge(DOWN)
+        step3 = Text("3. 相比 Qc，少生产的部分造成无谓损失", font_size=21, color=YELLOW).to_edge(DOWN)
+
+        self.play(FadeIn(title), FadeIn(subtitle), run_time=0.7)
+        self.play(Create(axes), FadeIn(VGroup(q_label, p_label)), run_time=0.8)
+        self.play(Create(demand), Create(mr), Create(mc), FadeIn(labels), run_time=1.1)
+        self.play(FadeIn(monopoly_dot), Create(qm_line), FadeIn(outcome_labels[0]), FadeIn(step1), run_time=1.0)
+        self.wait(0.5)
+        self.play(FadeIn(price_dot), Create(pm_line), FadeIn(outcome_labels[1]), ReplacementTransform(step1, step2), FadeIn(profit), FadeIn(outcome_labels[3]), run_time=1.1)
+        self.wait(0.5)
+        self.play(FadeIn(competition_dot), Create(qc_line), FadeIn(outcome_labels[2]), ReplacementTransform(step2, step3), FadeIn(dwl), FadeIn(outcome_labels[4]), run_time=1.2)
+        self.wait(1.2)
+'''
+    if is_consumer_choice_prompt(prompt):
+        return f'''from manim import *
+
+class {safe_scene_name}(Scene):
+    def construct(self):
+        self.camera.background_color = "#0f172a"
+        title = Text("消费者选择与价格效应", font_size=34, color=YELLOW).to_edge(UP)
+        subtitle = Text("X 降价：A 到 B 是替代效应，B 到 C 是收入效应", font_size=20, color=GREY_B).next_to(title, DOWN, buff=0.18)
+
+        axes = Axes(
+            x_range=[0, 6, 1],
+            y_range=[0, 5, 1],
+            x_length=6.4,
+            y_length=4.25,
+            tips=False,
+            axis_config={{"include_numbers": False, "color": GREY_B}},
+        ).shift(DOWN * 0.32)
+        x_label = Text("商品 X", font_size=18, color=GREY_B).next_to(axes.x_axis, RIGHT, buff=0.18)
+        y_label = Text("商品 Y", font_size=18, color=GREY_B).next_to(axes.y_axis, UP, buff=0.18)
+
+        old_budget = Line(axes.c2p(0.45, 4.15), axes.c2p(3.95, 0.45), color=GREY_B, stroke_width=4)
+        new_budget = Line(axes.c2p(0.45, 4.15), axes.c2p(5.45, 0.45), color=BLUE, stroke_width=5)
+        comp_budget = DashedLine(axes.c2p(0.95, 3.15), axes.c2p(4.75, 0.35), color=ORANGE, stroke_width=4)
+
+        old_ic = VMobject(color=RED, stroke_width=4).set_points_smoothly([
+            axes.c2p(1.05, 3.75),
+            axes.c2p(1.65, 2.35),
+            axes.c2p(2.55, 1.35),
+            axes.c2p(3.55, 0.86),
+        ])
+        new_ic = VMobject(color=GREEN, stroke_width=4).set_points_smoothly([
+            axes.c2p(2.1, 3.95),
+            axes.c2p(3.05, 2.45),
+            axes.c2p(4.05, 1.48),
+            axes.c2p(5.1, 1.05),
+        ])
+
+        point_a = Dot(axes.c2p(2.0, 1.88), color=RED)
+        point_b = Dot(axes.c2p(3.25, 1.45), color=ORANGE)
+        point_c = Dot(axes.c2p(4.35, 1.72), color=GREEN)
+        point_labels = VGroup(
+            Text("A", font_size=22, color=RED).next_to(point_a, UP, buff=0.08),
+            Text("B", font_size=22, color=ORANGE).next_to(point_b, DOWN, buff=0.08),
+            Text("C", font_size=22, color=GREEN).next_to(point_c, UP, buff=0.08),
+        )
+
+        line_labels = VGroup(
+            Text("原预算线", font_size=18, color=GREY_B).next_to(old_budget, DOWN, buff=0.1).shift(LEFT * 0.55),
+            Text("新预算线", font_size=18, color=BLUE).next_to(new_budget, RIGHT, buff=0.1),
+            Text("补偿预算线", font_size=18, color=ORANGE).next_to(comp_budget, DOWN, buff=0.12),
+            Text("原无差异曲线", font_size=17, color=RED).next_to(old_ic, LEFT, buff=0.12),
+            Text("更高无差异曲线", font_size=17, color=GREEN).next_to(new_ic, RIGHT, buff=0.12),
+        )
+
+        substitution = Arrow(axes.c2p(2.0, 0.28), axes.c2p(3.25, 0.28), color=ORANGE, buff=0.02, stroke_width=4)
+        income = Arrow(axes.c2p(3.25, 0.28), axes.c2p(4.35, 0.28), color=GREEN, buff=0.02, stroke_width=4)
+        effect_labels = VGroup(
+            Text("替代效应", font_size=18, color=ORANGE).next_to(substitution, DOWN, buff=0.08),
+            Text("收入效应", font_size=18, color=GREEN).next_to(income, DOWN, buff=0.08),
+        )
+        guides = VGroup(
+            DashedLine(point_a.get_center(), axes.c2p(2.0, 0), color=RED, stroke_opacity=0.45),
+            DashedLine(point_b.get_center(), axes.c2p(3.25, 0), color=ORANGE, stroke_opacity=0.45),
+            DashedLine(point_c.get_center(), axes.c2p(4.35, 0), color=GREEN, stroke_opacity=0.45),
+        )
+
+        step1 = Text("1. 初始最优点 A：预算线与无差异曲线相切", font_size=20, color=WHITE).to_edge(DOWN)
+        step2 = Text("2. X 降价使预算线绕纵轴向外旋转", font_size=20, color=WHITE).to_edge(DOWN)
+        step3 = Text("3. 补偿预算线分解 A 到 C 的总变化", font_size=20, color=YELLOW).to_edge(DOWN)
+
+        self.play(FadeIn(title), FadeIn(subtitle), run_time=0.7)
+        self.play(Create(axes), FadeIn(VGroup(x_label, y_label)), run_time=0.8)
+        self.play(Create(old_budget), Create(old_ic), FadeIn(point_a), FadeIn(point_labels[0]), FadeIn(line_labels[0]), FadeIn(line_labels[3]), FadeIn(step1), run_time=1.1)
+        self.wait(0.4)
+        self.play(Create(new_budget), Create(new_ic), FadeIn(point_c), FadeIn(point_labels[2]), FadeIn(line_labels[1]), FadeIn(line_labels[4]), ReplacementTransform(step1, step2), run_time=1.2)
+        self.wait(0.4)
+        self.play(Create(comp_budget), FadeIn(point_b), FadeIn(point_labels[1]), FadeIn(line_labels[2]), FadeIn(guides), ReplacementTransform(step2, step3), run_time=1.0)
+        self.play(GrowArrow(substitution), GrowArrow(income), FadeIn(effect_labels), run_time=1.0)
+        self.wait(1.1)
+'''
     if is_tax_wedge_prompt(prompt):
         return f'''from manim import *
 
@@ -692,6 +1067,51 @@ def validate_cloud_model_endpoint(raw_url: str, *, field_name: str) -> str | Non
     return None
 
 
+def build_trial_fallback_response(
+    *,
+    trial_provider_id: str,
+    plan: dict[str, object],
+    prompt: str,
+    scene_name: str,
+    request_id: str,
+    failed_categories: list[str] | None = None,
+    skipped: list[str] | None = None,
+    last_error: str | None = None,
+    lead_warning: str | None = None,
+) -> tuple[int, dict[str, object]]:
+    fallback_code = build_fallback_manim_code(prompt, scene_name)
+    fallback_code, compatibility_notes = apply_runtime_compatibility_fixes(fallback_code)
+    warnings = [
+        lead_warning
+        or "内测试用模型响应较慢或暂不可用，已自动切换到稳定模板生成，视频仍会继续渲染。",
+        *compatibility_notes,
+    ]
+    if failed_categories:
+        warnings.append("模型失败类别：" + ", ".join(failed_categories[-3:]))
+    elif last_error:
+        warnings.append(f"模型失败类别：{last_error}")
+    if skipped:
+        warnings.append("未配置的试用模型：" + ", ".join(skipped))
+    detected_scene_name = local_web_app.detect_scene_name(fallback_code, scene_name)
+    return HTTPStatus.OK, {
+        "ok": True,
+        "provider": trial_provider_id,
+        "providerName": str(plan["name"]),
+        "model": "stable-template-fallback",
+        "endpoint": "server-managed-fallback",
+        "code": fallback_code,
+        "warnings": warnings,
+        "compatibilityNotes": warnings,
+        "sceneName": detected_scene_name,
+        "sceneNameInput": scene_name,
+        "codeFile": "vercel-generated-fallback",
+        "requestId": request_id,
+        "rendered": False,
+        "renderBackend": "external-required",
+        "message": "模型接口暂慢，已使用稳定模板生成 Manim 代码并继续云端渲染。",
+    }
+
+
 def generate_code_with_trial_plan(
     *,
     trial_provider_id: str,
@@ -707,6 +1127,42 @@ def generate_code_with_trial_plan(
             "error": "公开内测页只支持内置免费试用模型。",
             "requestId": request_id,
         }
+    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_two_part_pricing_prompt(prompt):
+        return build_trial_fallback_response(
+            trial_provider_id=trial_provider_id,
+            plan=plan,
+            prompt=prompt,
+            scene_name=scene_name,
+            request_id=request_id,
+            lead_warning="已识别为考研经济学二部定价题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
+        )
+    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_standard_monopoly_prompt(prompt):
+        return build_trial_fallback_response(
+            trial_provider_id=trial_provider_id,
+            plan=plan,
+            prompt=prompt,
+            scene_name=scene_name,
+            request_id=request_id,
+            lead_warning="已识别为考研经济学垄断定价题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
+        )
+    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_consumer_choice_prompt(prompt):
+        return build_trial_fallback_response(
+            trial_provider_id=trial_provider_id,
+            plan=plan,
+            prompt=prompt,
+            scene_name=scene_name,
+            request_id=request_id,
+            lead_warning="已识别为考研经济学消费者选择题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
+        )
+    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_tax_wedge_prompt(prompt):
+        return build_trial_fallback_response(
+            trial_provider_id=trial_provider_id,
+            plan=plan,
+            prompt=prompt,
+            scene_name=scene_name,
+            request_id=request_id,
+            lead_warning="已识别为考研经济学税收楔子题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
+        )
 
     generation_prompt = trial_generation_prompt(prompt)
     skipped: list[str] = []
@@ -798,6 +1254,14 @@ def generate_code_with_trial_plan(
                             file=sys.stderr,
                         )
                         continue
+                    if has_topic_specific_fallback(prompt):
+                        last_error = "topic-budget"
+                        failed_categories.append(f"{provider.id}:topic-budget")
+                        print(
+                            f"[{request_id}] trial provider exceeded topic fallback render budget: {provider.id}",
+                            file=sys.stderr,
+                        )
+                        continue
                     quality_warnings.extend(
                         f"模型脚本略超软预算，已交给分段渲染尝试：{note}"
                         for note in budget_notes[:3]
@@ -823,9 +1287,11 @@ def generate_code_with_trial_plan(
         warnings = [*compatibility_notes, *quality_warnings]
         if skipped:
             warnings.append("部分试用模型暂不可用，已自动使用可用的备用模型。")
-        elif provider.id != str(plan["attempts"][0]["provider_id"]):
+        if provider.id != str(plan["attempts"][0]["provider_id"]):
             reason_text = failed_categories[0].split(":", 1)[1] if failed_categories else "request"
-            warnings.append(f"Kimi 本次未完成（{reason_text}），已自动切换到 MiniMax 备用模型。")
+            warnings.append(f"Kimi 本次未完成（{reason_text}），已自动切换到 {provider.name} 备用模型。")
+        if failed_categories:
+            warnings.append("模型失败类别：" + ", ".join(failed_categories[-3:]))
 
         return HTTPStatus.OK, {
             "ok": True,
@@ -850,36 +1316,16 @@ def generate_code_with_trial_plan(
             f"[{request_id}] no trial provider keys configured: {', '.join(skipped)}",
             file=sys.stderr,
         )
-    fallback_code = build_fallback_manim_code(prompt, scene_name)
-    fallback_code, compatibility_notes = apply_runtime_compatibility_fixes(fallback_code)
-    warnings = [
-        "内测试用模型响应较慢或暂不可用，已自动切换到稳定模板生成，视频仍会继续渲染。",
-        *compatibility_notes,
-    ]
-    if failed_categories:
-        warnings.append("模型失败类别：" + ", ".join(failed_categories[-3:]))
-    elif last_error:
-        warnings.append(f"模型失败类别：{last_error}")
-    if skipped:
-        warnings.append("未配置的试用模型：" + ", ".join(skipped))
-    detected_scene_name = local_web_app.detect_scene_name(fallback_code, scene_name)
-    return HTTPStatus.OK, {
-        "ok": True,
-        "provider": trial_provider_id,
-        "providerName": str(plan["name"]),
-        "model": "stable-template-fallback",
-        "endpoint": "server-managed-fallback",
-        "code": fallback_code,
-        "warnings": warnings,
-        "compatibilityNotes": warnings,
-        "sceneName": detected_scene_name,
-        "sceneNameInput": scene_name,
-        "codeFile": "vercel-generated-fallback",
-        "requestId": request_id,
-        "rendered": False,
-        "renderBackend": "external-required",
-        "message": "模型接口暂慢，已使用稳定模板生成 Manim 代码并继续云端渲染。",
-    }
+    return build_trial_fallback_response(
+        trial_provider_id=trial_provider_id,
+        plan=plan,
+        prompt=prompt,
+        scene_name=scene_name,
+        request_id=request_id,
+        failed_categories=failed_categories,
+        skipped=skipped,
+        last_error=last_error,
+    )
 
 
 def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
@@ -1082,13 +1528,13 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json_body(self) -> dict[str, object]:
+    def _read_json_body(self, *, max_bytes: int = MAX_PUBLIC_BODY_BYTES) -> dict[str, object]:
         raw_len = self.headers.get("Content-Length", "0")
         try:
             body_len = int(raw_len)
         except ValueError:
             return {}
-        if body_len > MAX_PUBLIC_BODY_BYTES:
+        if body_len > max_bytes:
             raise ValueError("请求体太大，请缩短问题后再试。")
         if body_len <= 0:
             return {}
@@ -1166,6 +1612,19 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
             status, response = generate_manim_code_for_gateway(payload)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/vision/analyze":
+            if not is_vision_public_enabled():
+                status, response = disabled_vision_response()
+                self._send_json(HTTPStatus(status), response)
+                return
+            try:
+                payload = self._read_json_body(max_bytes=MAX_VISION_REQUEST_BYTES)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = analyze_image_payload(payload)
             self._send_json(HTTPStatus(status), response)
             return
         if route == "/api/community/works" or route.startswith("/api/community/works/"):

@@ -76,6 +76,17 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         doc="https://platform.kimi.ai/docs/api/overview",
         api_key_placeholder="MOONSHOT_API_KEY",
     ),
+    "deepseek": ProviderPreset(
+        id="deepseek",
+        name="DeepSeek API",
+        api_type="openai-compatible",
+        region="cn",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-v4-flash",
+        models=("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
+        doc="https://api-docs.deepseek.com/",
+        api_key_placeholder="DEEPSEEK_API_KEY",
+    ),
     "codex-local-proxy": ProviderPreset(
         id="codex-local-proxy",
         name="Codex / 本地 OpenAI-Compatible 代理",
@@ -499,6 +510,8 @@ def call_codex_cli(
 def max_tokens_for_provider(provider_id: str, model: str) -> int | None:
     if provider_id == "kimi-code":
         return int(os.getenv("KIMI_CODE_MAX_TOKENS", "8192"))
+    if provider_id == "deepseek":
+        return int(os.getenv("DEEPSEEK_MAX_TOKENS", "8192"))
     if provider_id.startswith("minimax"):
         return int(os.getenv("MINIMAX_MAX_TOKENS", "8192"))
     raw = os.getenv("LLM_MAX_TOKENS", "").strip()

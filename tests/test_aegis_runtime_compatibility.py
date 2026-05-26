@@ -168,6 +168,15 @@ ring = AnnularSector(inner_radius=1, outer_radius=2, angle=PI / 2)
         assert 'axis_config={"include_numbers": False}' in patched
         assert any("Axes" in note for note in notes)
 
+    def test_arrow_max_tip_length_keyword_is_removed(self) -> None:
+        code = "move_arrow = Arrow(LEFT, RIGHT, color=GREEN, max_tip_length=0.2, buff=0.1)"
+
+        patched, notes = manim_agent.apply_runtime_compatibility_fixes(code)
+
+        assert "max_tip_length" not in patched
+        assert "Arrow(LEFT, RIGHT, color=GREEN, buff=0.1)" in patched
+        assert any("Arrow(max_tip_length" in note for note in notes)
+
     def test_invalid_set_stroke_chain_is_rewritten(self) -> None:
         code = "frontier = VMobject()\nfrontier.set.stroke(color=YELLOW, width=3)"
 

@@ -66,6 +66,52 @@ class AegisLLMProviderTest(unittest.TestCase):
         assert provider.default_model == "kimi-for-coding"
         assert provider.requires_api_key
 
+    def test_deepseek_provider_uses_official_openai_compatible_endpoint(self) -> None:
+        provider = resolve_provider("deepseek")
+
+        assert provider.api_type == "openai-compatible"
+        assert provider.base_url == "https://api.deepseek.com"
+        assert openai_chat_completions_url(provider.base_url) == "https://api.deepseek.com/chat/completions"
+        assert provider.default_model == "deepseek-v4-flash"
+        assert "deepseek-v4-flash" in provider.models
+        assert provider.requires_api_key
+
+    def test_deepseek_openai_request_uses_configured_token_budget_without_leaking_key(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_read_response_json(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.header_items())
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return {"choices": [{"message": {"content": "from manim import *\n"}}]}
+
+        original = llm_providers.read_response_json
+        llm_providers.read_response_json = fake_read_response_json
+        try:
+            code, provider, endpoint = generate_code_with_provider(
+                provider_id="deepseek",
+                api_key="server-key",
+                base_url="",
+                endpoint=None,
+                model="deepseek-v4-flash",
+                system_prompt="system",
+                user_prompt="explain two-part pricing",
+                temperature=0.2,
+                timeout=12,
+            )
+        finally:
+            llm_providers.read_response_json = original
+
+        payload = captured["payload"]
+        assert code == "from manim import *\n"
+        assert provider.id == "deepseek"
+        assert endpoint == "https://api.deepseek.com/chat/completions"
+        assert captured["url"] == endpoint
+        assert isinstance(payload, dict)
+        assert payload["model"] == "deepseek-v4-flash"
+        assert payload["max_tokens"] == 8192
+        assert "server-key" not in json.dumps(payload)
+
     def test_kimi_code_openai_request_adds_cache_and_safety_metadata(self) -> None:
         captured: dict[str, object] = {}
 

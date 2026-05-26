@@ -244,6 +244,21 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
         call = re.sub(r"\(\s*,", "(", call)
         return re.sub(r",\s*\)", ")", call)
 
+    def strip_call_keyword(call: str, keyword: str) -> str:
+        call = re.sub(
+            rf"(?P<prefix>\(\s*){keyword}\s*=\s*(?:[^,()\n]+|\([^)]*\))\s*,\s*",
+            r"\g<prefix>",
+            call,
+        )
+        call = re.sub(
+            rf",\s*{keyword}\s*=\s*(?:[^,()\n]+|\([^)]*\))",
+            "",
+            call,
+        )
+        call = re.sub(r",\s*,", ",", call)
+        call = re.sub(r"\(\s*,", "(", call)
+        return re.sub(r",\s*\)", ")", call)
+
     candidate = re.sub(r"\bMathTex\s*\(", "Text(", patched)
     if candidate != patched:
         notes.append("Replaced MathTex(...) with Text(...) for the default LaTeX-free product path.")
@@ -303,6 +318,16 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
     )
     if candidate != patched:
         notes.append("Removed unsupported x_label/y_label kwargs from Axes(...) constructor.")
+        patched = candidate
+
+    candidate = re.sub(
+        r"\bArrow\s*\((?:[^()]|\([^()]*\))*\)",
+        lambda match: strip_call_keyword(match.group(0), "max_tip_length"),
+        patched,
+        flags=re.DOTALL,
+    )
+    if candidate != patched:
+        notes.append("Removed unsupported Arrow(max_tip_length=...) keyword for cloud rendering.")
         patched = candidate
 
     candidate = re.sub(r"\.get_h_line\s*\(", ".get_horizontal_line(", patched)

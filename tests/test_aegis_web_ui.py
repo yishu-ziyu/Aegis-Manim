@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -22,6 +23,52 @@ class AegisWebUiTest(unittest.TestCase):
         assert "renderRichText(script, segment.script" in html
         assert "script.textContent = segment.script" not in html
         assert "PROVIDER_CONFIG.providerStorageKey" in html
+
+    def test_page_contains_image_understanding_confirmation_flow(self) -> None:
+        old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
+        old_command = os.environ.get("KIMI_VISION_CLI_COMMAND")
+        os.environ["AEGIS_VISION_PUBLIC_ENABLED"] = "1"
+        os.environ["KIMI_VISION_CLI_COMMAND"] = "python3 fake.py {image_path} {prompt_path}"
+        try:
+            html = web_app.make_index_html()
+        finally:
+            if old_enabled is None:
+                os.environ.pop("AEGIS_VISION_PUBLIC_ENABLED", None)
+            else:
+                os.environ["AEGIS_VISION_PUBLIC_ENABLED"] = old_enabled
+            if old_command is None:
+                os.environ.pop("KIMI_VISION_CLI_COMMAND", None)
+            else:
+                os.environ["KIMI_VISION_CLI_COMMAND"] = old_command
+
+        assert 'id="visionImageInput"' in html
+        assert 'id="visionDropZone"' in html
+        assert 'id="visionConfirmCard"' in html
+        assert 'id="visionUseBtn"' in html
+        assert 'fetch("/api/vision/analyze"' in html
+        assert "是否按这个方向可视化" in html
+        assert "document.addEventListener(\"paste\"" in html
+        assert "dragover" in html
+
+    def test_image_understanding_entry_is_hidden_until_publicly_enabled(self) -> None:
+        old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
+        old_command = os.environ.get("KIMI_VISION_CLI_COMMAND")
+        os.environ.pop("AEGIS_VISION_PUBLIC_ENABLED", None)
+        os.environ["KIMI_VISION_CLI_COMMAND"] = "python3 fake.py {image_path} {prompt_path}"
+        try:
+            html = web_app.make_index_html()
+        finally:
+            if old_enabled is None:
+                os.environ.pop("AEGIS_VISION_PUBLIC_ENABLED", None)
+            else:
+                os.environ["AEGIS_VISION_PUBLIC_ENABLED"] = old_enabled
+            if old_command is None:
+                os.environ.pop("KIMI_VISION_CLI_COMMAND", None)
+            else:
+                os.environ["KIMI_VISION_CLI_COMMAND"] = old_command
+
+        assert '<div class="field" hidden>' in html
+        assert 'id="visionImageInput"' in html
 
     def test_cloud_generate_mode_uses_direct_generate_flow(self) -> None:
         old_url = web_app.AEGIS_CLOUD_GENERATE_URL
@@ -85,6 +132,7 @@ class AegisWebUiTest(unittest.TestCase):
 
     def test_local_web_server_exposes_render_proxy_routes(self) -> None:
         assert "if route == \"/api/render\":" in Path(web_app.__file__).read_text(encoding="utf-8")
+        assert "if route == \"/api/vision/analyze\":" in Path(web_app.__file__).read_text(encoding="utf-8")
         html = web_app.make_index_html()
 
         assert "const RENDER_BACKEND_API_KEY" not in html

@@ -226,6 +226,18 @@ def precheck_manim_code(code: str, expected_scene_name: str) -> list[PrecheckIss
                 )
             )
 
+    if _has_axes_label_constructor_mismatch(tree):
+        issues.append(
+            PrecheckIssue(
+                category="axes-api",
+                severity="warn",
+                student_message="检测到坐标轴标签可能触发 LaTeX 或旧版参数，正在改成稳定的 Text 标签。",
+                technical_message="Axes labels must use supported Manim Community APIs: no x_label/y_label kwargs on Axes(...), and get_axis_labels(...) should receive Text(...) mobjects.",
+                repair_hint=REPAIR_RECIPES["axes-api"]["prompt"],
+                source_ids=("manim-mobjects", "manim-text", "local-bug-log"),
+            )
+        )
+
     return issues
 
 
@@ -422,4 +434,18 @@ def _has_repeated_direct_text_without_cleanup(tree: ast.AST) -> bool:
                     if pending_text:
                         return True
                     pending_text = True
+    return False
+
+
+def _has_axes_label_constructor_mismatch(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _is_call_named(node, {"Axes"}) and any(
+            keyword.arg in {"x_label", "y_label"} for keyword in node.keywords
+        ):
+            return True
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "get_axis_labels":
+            if any(isinstance(arg, ast.Constant) and isinstance(arg.value, str) for arg in node.args):
+                return True
     return False

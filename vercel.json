@@ -1,13 +1,51 @@
 {
+  "framework": null,
   "installCommand": "python -m pip install -r requirements.txt",
+  "functions": {
+    "api/*.py": {
+      "excludeFiles": "{.git/**,.vercel/**,.venv/**,.aegis-local-venv/**,docs/**,tests/**,manim/**,media/**,generated/**,render_backend/**,final_video_warehouse/**,pyproject.toml,uv.lock}"
+    }
+  },
   "rewrites": [
-    { "source": "/api/generate", "destination": "/api/index" },
-    { "source": "/api/render", "destination": "/api/index" },
-    { "source": "/api/render/status/(.*)", "destination": "/api/index" },
-    { "source": "/api/render/download/(.*)", "destination": "/api/index" },
-    { "source": "/api/community/search", "destination": "/api/index" },
-    { "source": "/api/community/works", "destination": "/api/index" },
-    { "source": "/api/community/works/(.*)", "destination": "/api/index" },
-    { "source": "/api/health", "destination": "/api/index" }
+    {
+      "source": "/",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/generate",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/render",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/render/status/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/render/download/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/vision/analyze",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/community/search",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/community/works",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/community/works/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/health",
+      "destination": "/api/index"
+    }
   ]
 }

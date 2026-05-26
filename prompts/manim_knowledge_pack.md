@@ -21,11 +21,13 @@ Refresh sources: local Manim docs under `docs/source`, official Manim Community 
 - Keep text short and place it with `to_edge`, `next_to`, `move_to`, or `arrange`; avoid overlapping labels.
 - Every `Text(...)` must set explicit `font_size`; use 18-28 for dense labels/captions and reserve 30-40 for short titles.
 - Manage every transient text object explicitly. If a caption, paragraph, or bullet group is only needed for one step, store it in a variable and remove it with `FadeOut(...)` before the next text appears.
-- When two explanations occupy the same region, prefer `ReplacementTransform(old_text, new_text)` or `Transform(old_group, new_group)` instead of writing the new text on top of the old text.
+- When two explanations occupy the same region, fade out the old explanation before fading in the new one. Use `ReplacementTransform` for shapes or regions, not for Chinese sentences.
 - At a scene or section boundary, fade out the temporary explanation group with `self.play(FadeOut(section_group))`. Leave only persistent visual anchors such as axes, frontier curves, or a main title.
 - Do not create multiple `Text(...)` objects at the same `to_edge`, `next_to`, or `move_to` position without first removing or transforming the previous one.
 - For paragraph-like explanations, split text into multiple short `Text` rows in a `VGroup(...).arrange(DOWN, aligned_edge=LEFT, buff=0.18)` and call `scale_to_fit_width(...)` before placing the group.
 - Default visible scene language is Chinese. Keep formula symbols compact, but write titles, captions, axis explanations, stage labels, and conclusions in Chinese unless the user explicitly requests another language.
+- If a model draft uses English prose, translate it before constructing visible `Text(...)` objects. Keep compact symbols only when paired with Chinese labels such as `价格 P`, `数量 Q`, `需求 D`, `供给 S`, `边际成本 MC`, or `边际收益 MR`.
+- Do not animate one Chinese sentence into another with `Transform` or `ReplacementTransform`; use `FadeOut(old_caption)` followed by `FadeIn(new_caption)` so intermediate frames do not show mixed Chinese glyphs.
 - When the user provides LaTeX-style formulas, show them as readable plain-text formula labels with `Text(..., font_size=...)`; do not introduce `Tex` or `MathTex` just because the prompt contains `$...$`, `\\(...)`, or `\\[...]`.
 
 ## Layout patterns
@@ -66,4 +68,4 @@ Refresh sources: local Manim docs under `docs/source`, official Manim Community 
 - Do not create text so large that it leaves the frame; keep most labels between font sizes 18 and 32.
 - Do not output explanations, markdown fences, or extra prose outside the Python code.
 - Do not rely on network, local asset files, fonts, or images unless explicitly provided by the user.
-- Keep generated scenes segmented-render friendly: a clear multi-step visual explanation, 8-20 animations, no dense object swarms, no long chained waits, and no more than three `LaggedStart` calls over small groups.
+- Keep generated scenes segmented-render friendly: a clear multi-step visual explanation, 8-20 animations, no dense object swarms, no long chained waits, no `BraceLabel`, and no `LaggedStart` on hosted renders.

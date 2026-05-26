@@ -6,22 +6,26 @@ from typing import Any
 
 from api.index import (
     MAX_PUBLIC_BODY_BYTES,
+    MAX_VISION_REQUEST_BYTES,
     _proxy_to_render_backend,
     _proxy_to_render_backend_raw,
+    analyze_image_payload,
     build_health_payload,
     build_index_html,
+    disabled_vision_response,
     generate_manim_code_for_gateway,
+    is_vision_public_enabled,
     proxy_community_request,
 )
 
 
-async def read_body(receive: Any) -> bytes:
+async def read_body(receive: Any, *, max_bytes: int = MAX_PUBLIC_BODY_BYTES) -> bytes:
     chunks: list[bytes] = []
     more_body = True
     while more_body:
         message = await receive()
         chunks.append(message.get("body", b""))
-        if sum(len(chunk) for chunk in chunks) > MAX_PUBLIC_BODY_BYTES:
+        if sum(len(chunk) for chunk in chunks) > max_bytes:
             raise ValueError("请求体太大，请缩短问题后再试。")
         more_body = bool(message.get("more_body", False))
     return b"".join(chunks)
@@ -115,6 +119,24 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             return
 
         status, response = generate_manim_code_for_gateway(payload)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method == "POST" and path == "/api/vision/analyze":
+        if not is_vision_public_enabled():
+            status, response = disabled_vision_response()
+            await send_json(send, HTTPStatus(status), response)
+            return
+        try:
+            raw_body = await read_body(receive, max_bytes=MAX_VISION_REQUEST_BYTES)
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception as exc:
+            await send_json(send, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        status, response = analyze_image_payload(payload)
         await send_json(send, HTTPStatus(status), response)
         return
 
