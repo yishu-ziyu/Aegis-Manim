@@ -159,6 +159,7 @@ class AegisLLMProviderTest(unittest.TestCase):
         assert payload["max_tokens"] == 8192
         assert payload["system"] == "system"
         assert captured["headers"]["X-api-key"] == "server-key"
+        assert captured["headers"]["User-agent"].startswith("Aegis-Manim-Coding-Agent")
         assert "server-key" not in json.dumps(payload)
 
     def test_minimax_coding_cn_provider_uses_anthropic_messages_endpoint(self) -> None:

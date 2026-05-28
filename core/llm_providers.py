@@ -434,10 +434,13 @@ def call_anthropic_compatible(
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": temperature,
     }
+    user_agent = "Aegis-Manim/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)"
+    if "Kimi Code" in provider_name:
+        user_agent = "Aegis-Manim-Coding-Agent/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)"
     headers = {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
-        "User-Agent": "Aegis-Manim/1.0 (https://manim.yishuziyu.cn; contact@yishuziyu.cn)",
+        "User-Agent": user_agent,
     }
     if api_key:
         headers["x-api-key"] = api_key
