@@ -76,6 +76,17 @@ class AegisLLMProviderTest(unittest.TestCase):
         assert "deepseek-v4-flash" in provider.models
         assert provider.requires_api_key
 
+    def test_mimo_provider_uses_openai_compatible_cn_endpoint(self) -> None:
+        provider = resolve_provider("mimo")
+
+        assert provider.api_type == "openai-compatible"
+        assert provider.base_url == "https://token-plan-cn.xiaomimimo.com/v1"
+        assert openai_chat_completions_url(provider.base_url) == "https://token-plan-cn.xiaomimimo.com/v1/chat/completions"
+        assert provider.default_model == "mimo-v2.5-pro"
+        assert "mimo-v2.5-pro" in provider.models
+        assert provider.requires_api_key
+        assert provider.region == "cn"
+
     def test_deepseek_openai_request_uses_configured_token_budget_without_leaking_key(self) -> None:
         captured: dict[str, object] = {}
 
