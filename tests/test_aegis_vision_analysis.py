@@ -45,6 +45,13 @@ class AegisVisionAnalysisTest(unittest.TestCase):
                 "KIMI_VISION_API_KEY",
                 "MOONSHOT_API_KEY",
                 "KIMI_CODE_API_KEY",
+                "MIMO_API_KEY",
+                "MIMO_VISION_BASE_URL",
+                "MIMO_VISION_MODEL",
+                "MIMO_VISION_TIMEOUT_SECONDS",
+                "MIMO_VISION_MAX_TOKENS",
+                "MIMO_VISION_RETRIES",
+                "MIMO_VISION_RETRY_BACKOFF_SECONDS",
             )
         }
         for key in self._old_env:
@@ -304,6 +311,59 @@ class AegisVisionAnalysisTest(unittest.TestCase):
         assert '"model": "cheap-vision-model"' in captured["body"]
         assert response["visionMeta"]["provider"] == "cheap-router"
         assert response["suggestedPrompt"] == "用中文解释财政扩张的IS-LM图"
+
+    def test_mimo_provider_uses_openai_compatible_endpoint_with_bearer_auth(self) -> None:
+        os.environ["MIMO_API_KEY"] = "tp-test-mimo-key"
+        os.environ["MIMO_VISION_BASE_URL"] = "https://token-plan-sgp.xiaomimimo.com/v1"
+        os.environ["MIMO_VISION_MODEL"] = "mimo-v2.5-pro"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return (
+                    '{"choices":[{"message":{"content":"{'
+                    '\\"recognized_content\\":\\"税收楔子图\\",'
+                    '\\"key_elements\\":[\\"Pb\\",\\"Ps\\"],'
+                    '\\"uncertainties\\":[],'
+                    '\\"visualization_plan\\":\\"画供需曲线\\",'
+                    '\\"recommended_prompt\\":\\"用中文解释税收楔子\\"'
+                    '}"}}]}'
+                ).encode("utf-8")
+
+        def fake_urlopen(req, timeout=45):
+            captured["url"] = req.full_url
+            captured["authorization"] = req.headers.get("Authorization")
+            captured["body"] = req.data.decode("utf-8")
+            return FakeResponse()
+
+        original_urlopen = vision_analysis.urllib_request.urlopen
+        vision_analysis.urllib_request.urlopen = fake_urlopen
+        try:
+            status, response = vision_analysis.analyze_image_payload(
+                {"imageData": TINY_PNG_BASE64, "mimeType": "image/png"}
+            )
+        finally:
+            vision_analysis.urllib_request.urlopen = original_urlopen
+
+        assert status == 200
+        assert captured["url"] == "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
+        assert captured["authorization"] == "Bearer tp-test-mimo-key"
+        assert '"model": "mimo-v2.5-pro"' in captured["body"]
+        assert response["visionMeta"]["provider"] == "mimo-vision"
+        assert response["visionMeta"]["model"] == "mimo-v2.5-pro"
+        assert response["suggestedPrompt"] == "用中文解释税收楔子"
+
+    def test_mimo_provider_is_detected_as_configured(self) -> None:
+        os.environ["MIMO_API_KEY"] = "tp-test-mimo-key"
+        assert vision_analysis.is_vision_provider_configured() is True
 
     def test_ocr_command_provider_returns_text_only_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

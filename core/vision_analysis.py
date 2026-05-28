@@ -64,6 +64,7 @@ def is_vision_provider_configured() -> bool:
         or os.getenv("VISION_OCR_COMMAND", "").strip()
         or os.getenv("KIMI_VISION_API_KEY", "").strip()
         or os.getenv("MOONSHOT_API_KEY", "").strip()
+        or os.getenv("MIMO_API_KEY", "").strip()
     )
 
 
@@ -473,6 +474,72 @@ def analyze_image_payload(payload: dict[str, object]) -> tuple[int, dict[str, ob
             mime_type=mime_type,
             user_hint=user_hint,
         )
+
+    mimo_api_key = os.getenv("MIMO_API_KEY", "").strip()
+    if mimo_api_key:
+        mimo_base_url = os.getenv("MIMO_VISION_BASE_URL", "https://token-plan-sgp.xiaomimimo.com/v1").rstrip("/")
+        mimo_model = os.getenv("MIMO_VISION_MODEL", "mimo-v2.5-pro").strip() or "mimo-v2.5-pro"
+        request_payload = {
+            "model": mimo_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}},
+                        {"type": "text", "text": _vision_prompt(user_hint)},
+                    ],
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": int(os.getenv("MIMO_VISION_MAX_TOKENS", "1200")),
+        }
+        request_data = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+        timeout = _env_int("MIMO_VISION_TIMEOUT_SECONDS", "45")
+        retries = max(0, _env_int("MIMO_VISION_RETRIES", "2"))
+        retry_backoff = max(0.0, _env_float("MIMO_VISION_RETRY_BACKOFF_SECONDS", "1.5"))
+        parsed = None
+        for attempt in range(retries + 1):
+            req = urllib_request.Request(
+                f"{mimo_base_url}/chat/completions",
+                data=request_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {mimo_api_key}",
+                    "User-Agent": "Aegis-Manim-Vision/1.0 (https://manim.yishuziyu.cn)",
+                },
+                method="POST",
+            )
+            try:
+                with urllib_request.urlopen(req, timeout=timeout) as resp:
+                    parsed = json.loads(resp.read().decode("utf-8"))
+                    break
+            except urllib_error.HTTPError as exc:
+                detail = _read_http_error_detail(exc)
+                if exc.code in _RETRYABLE_HTTP_STATUS and attempt < retries:
+                    time.sleep(retry_backoff * (attempt + 1))
+                    continue
+                return _error(HTTPStatus.BAD_GATEWAY, "vision_provider_error", "Mimo 图片理解模型调用失败。", detail=detail)
+            except Exception as exc:
+                if attempt < retries:
+                    time.sleep(retry_backoff * (attempt + 1))
+                    continue
+                return _error(HTTPStatus.BAD_GATEWAY, "vision_provider_error", "Mimo 图片理解模型调用失败。", detail=str(exc))
+        if parsed is None:
+            return _error(HTTPStatus.BAD_GATEWAY, "vision_provider_error", "Mimo 图片理解模型没有返回内容。")
+
+        analysis = _extract_json_object(_extract_openai_text(parsed))
+        recommended_prompt = str(analysis.get("recommended_prompt") or analysis.get("visualization_plan") or "").strip()
+        return int(HTTPStatus.OK), {
+            "ok": True,
+            "analysis": analysis,
+            "suggestedPrompt": recommended_prompt,
+            "visionMeta": {
+                "mimeType": mime_type,
+                "imageBytes": len(image_bytes),
+                "provider": "mimo-vision",
+                "model": mimo_model,
+            },
+        }
 
     api_key = (
         os.getenv("VISION_API_KEY", "").strip()

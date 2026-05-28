@@ -190,6 +190,17 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_placeholder="API Key，可按网关要求留空",
         requires_api_key=False,
     ),
+    "mimo": ProviderPreset(
+        id="mimo",
+        name="Mimo Token Plan",
+        api_type="openai-compatible",
+        region="cn",
+        base_url="https://token-plan-cn.xiaomimimo.com/v1",
+        default_model="mimo-v2.5-pro",
+        models=("mimo-v2.5-pro",),
+        doc="https://docs.mimo.com/",
+        api_key_placeholder="MIMO_API_KEY (tp-...)",
+    ),
     "custom-anthropic": ProviderPreset(
         id="custom-anthropic",
         name="自定义 Anthropic-Compatible",

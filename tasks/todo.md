@@ -1,3 +1,16 @@
+# Mimo Provider Integration
+
+- [x] Add Mimo Token Plan (`mimo-v2.5-pro`) as a code-generation provider in `core/llm_providers.py`.
+- [x] Add Mimo as a dedicated vision-analysis provider in `core/vision_analysis.py` via `MIMO_API_KEY`.
+- [x] Support OpenAI-compatible endpoint with CN/SGP/AMS cluster override via `MIMO_VISION_BASE_URL`.
+- [x] Add env-example documentation for Mimo vision configuration.
+- [x] Add regression tests for Mimo provider preset and vision analysis HTTP path.
+- [x] Verify py_compile and focused pytest suites pass.
+
+## Review
+
+On 2026-05-28 CST, integrated Mimo as both a code-generation and vision-analysis provider. The provider preset uses the official CN cluster (`https://token-plan-cn.xiaomimimo.com/v1`) as default; users can override to SGP or AMS via `AEGIS_LLM_BASE_URL` for generation or `MIMO_VISION_BASE_URL` for vision. The vision path uses the existing OpenAI-compatible request builder with Mimo-specific env vars, retries, and timeout defaults matching the Gemini/generic vision provider patterns. No real Mimo API key is stored in the repo; `.env.example` documents the expected `tp-...` format. Verification: `python3 -m py_compile core/llm_providers.py core/vision_analysis.py` passed; `pytest -o addopts='' tests/test_aegis_llm_providers.py tests/test_aegis_vision_analysis.py tests/test_aegis_public_trial.py tests/test_aegis_web_ui.py -q` returned 71 passed.
+
 # Dual-Coding Generation Process Goal
 
 # Image Understanding to Manim Visualization
