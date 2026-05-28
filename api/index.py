@@ -89,7 +89,7 @@ PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
 )
 PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS = int(
-    os.environ.get("PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "90"))
+    os.environ.get("PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "120"))
 )
 PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
@@ -139,7 +139,7 @@ PUBLIC_TRIAL_PLANS = {
                 "provider_id": "mimo",
                 "env": "MIMO_API_KEY",
                 "model": "mimo-v2.5-pro",
-                "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
             },
         ),
     },
