@@ -88,6 +88,12 @@ PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS = int(
 PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
 )
+PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS = int(
+    os.environ.get("PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "90"))
+)
+PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS = int(
+    os.environ.get("PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
+)
 PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-kimi-priority"
 PUBLIC_TRIAL_PLANS = {
     "trial-kimi-priority": {
@@ -121,6 +127,18 @@ PUBLIC_TRIAL_PLANS = {
                 "provider_id": "minimax-coding-cn",
                 "env": "MINIMAX_API_KEY",
                 "model": "MiniMax-M2.7",
+            },
+        ),
+    },
+    "trial-mimo-direct": {
+        "name": "免费试用 · Mimo 编程",
+        "description": "内测免费额度：直接使用 Mimo Token Plan 生成教学脚本。",
+        "model_label": "Mimo 编程试用",
+        "attempts": (
+            {
+                "provider_id": "mimo",
+                "env": "MIMO_API_KEY",
+                "model": "mimo-v2.5-pro",
             },
         ),
     },
@@ -307,6 +325,7 @@ def build_health_payload() -> dict[str, object]:
                 "kimiCode": bool(read_server_key("KIMI_CODE_API_KEY")),
                 "deepSeek": bool(read_server_key("DEEPSEEK_API_KEY")),
                 "miniMax": bool(read_server_key("MINIMAX_API_KEY")),
+                "mimo": bool(read_server_key("MIMO_API_KEY")),
             },
             "timeouts": {
                 "kimi": PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS,
@@ -315,6 +334,8 @@ def build_health_payload() -> dict[str, object]:
                 "deepSeekRepair": PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS,
                 "miniMax": PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS,
                 "miniMaxRepair": PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS,
+                "mimo": PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS,
+                "mimoRepair": PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS,
             },
         },
     }
@@ -491,6 +512,8 @@ def trial_timeout_seconds(provider_id: str, *, repair: bool = False) -> int:
         return PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
     if provider_id.startswith("minimax"):
         return PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
+    if provider_id == "mimo":
+        return PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS
     return PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS
 
 
