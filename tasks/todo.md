@@ -538,3 +538,18 @@ The implementation route has changed from raw Kimi Code HTTP vision to a real te
 Local end-to-end test passed on 2026-05-26 CST with a generated Chinese economics image about “税收楔子与无谓损失”. The real `codex exec --image` route correctly recognized the title, full Chinese question, demand/supply curves, `S+t`, `Pb/Ps/P0`, `Q1/Q0`, tax revenue rectangle, and DWL triangle, then returned a Chinese `recommended_prompt`. The local `/api/vision/analyze` endpoint also passed after adding `--skip-git-repo-check` to the Codex CLI args. The returned `suggestedPrompt` was fed into `/api/generate` with `noRender=true`, which produced `generated/scene_20260526_144914_33fb2aa9.py`; local Manim then rendered `media/videos/scene_20260526_144914_33fb2aa9/480p15/GeneratedScene.mp4` successfully. Extracted frames `/tmp/aegis-econ-render-frame.png` and `/tmp/aegis-econ-render-frame-late.png` show readable Chinese labels and a correct supply-demand tax-wedge diagram, though some mid-scene labels around tax revenue and DWL are crowded and should be tightened in the next layout-quality pass.
 
 The 5-image local economics vision batch also passed on 2026-05-26 CST after increasing client timeout to 320s. Evidence is saved at `/tmp/aegis-vision-economics-acceptance/vision-only-320s.jsonl`. The negative-externality sample additionally passed full generation and local rendering into `media/videos/aegis-externality-generated/480p15/GeneratedScene.mp4`, with representative frames saved under `/tmp/aegis-externality-render-frame-8s.png` and `/tmp/aegis-externality-render-frame-18s.png`. The main operational gap is no longer local viability; it is installing and validating the same logged-in CLI image route on the ECS production host before public exposure.
+
+# Kimi Code Access Retry
+
+- [x] Research the current Kimi Code 403/access failure against official docs and developer issues.
+- [x] Move hosted `kimi-code` calls from the OpenAI-compatible `/coding/v1` path to the official Anthropic-compatible `/coding/` path.
+- [x] Change public trial fallback order from `Kimi -> DeepSeek -> MiniMax` to `Kimi -> MiniMax -> DeepSeek`.
+- [x] Replace raw `access` warning text with a clearer Chinese diagnosis.
+- [x] Add focused regression coverage for the new Kimi protocol and fallback order.
+- [ ] Deploy the retry to production and run one Chinese economics postgraduate prompt through the production site.
+
+## Review
+
+Official Kimi Code documentation says Kimi Code and Kimi Open Platform keys/base URLs are not interchangeable, and that OpenAI-compatible requests can hit a client whitelist style 403. Their recommended third-party coding-agent path for Claude Code is the Anthropic-compatible base URL `https://api.kimi.com/coding/`. GitHub issue search shows the same “Kimi For Coding is currently only available for Coding Agents” 403 appearing in Cline/Roo/Kimi CLI integration discussions. The production warning therefore most likely came from using the OpenAI-compatible Kimi Code path from a non-whitelisted hosted client, not from missing Vercel env configuration.
+
+The retry changes `kimi-code` to the Anthropic-compatible `/coding/messages` route and makes MiniMax the immediate backup before DeepSeek. Focused local verification passed with `68 passed` across provider, public trial, web UI, and vision tests. The full upstream Manim suite is still not a useful release gate in this workstation because it fails on missing local TeX packages such as `dvisvgm` / `standalone.cls` and unrelated graphical baseline tests.

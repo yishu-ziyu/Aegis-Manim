@@ -72,12 +72,12 @@ JOB_STORE_LOCK = threading.Lock()
 LOCAL_TRIAL_PLANS = {
     "trial-kimi-priority": {
         "name": "免费试用 · Kimi 优先",
-        "description": "本地内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 DeepSeek，再切换 MiniMax。",
-        "model_label": "Kimi 优先 / DeepSeek / MiniMax 备用",
+        "description": "本地内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 MiniMax，再切换 DeepSeek。",
+        "model_label": "Kimi 优先 / MiniMax / DeepSeek 备用",
         "attempts": (
             {"provider_id": "kimi-code", "env": "KIMI_CODE_API_KEY", "model": "kimi-for-coding"},
-            {"provider_id": "deepseek", "env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-flash"},
             {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M2.7"},
+            {"provider_id": "deepseek", "env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-flash"},
         ),
     },
     "trial-minimax-direct": {

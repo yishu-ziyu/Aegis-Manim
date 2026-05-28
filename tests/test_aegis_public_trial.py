@@ -197,7 +197,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert "quota" in "\n".join(response["warnings"])
         assert "detail" not in response
 
-    def test_trial_uses_deepseek_between_kimi_and_minimax(self) -> None:
+    def test_trial_uses_minimax_between_kimi_and_deepseek(self) -> None:
         calls: list[dict[str, object]] = []
 
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
@@ -228,53 +228,55 @@ class AegisPublicTrialTest(unittest.TestCase):
 
         assert status == 200
         assert response["ok"] is True
-        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "deepseek"]
-        assert calls[1]["api_key"] == "server-deepseek-key"
-        assert calls[1]["model"] == "deepseek-v4-flash"
-        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
-        assert "DeepSeek" in "\n".join(response["warnings"])
-        assert "access" in "\n".join(response["warnings"])
-
-    def test_trial_falls_back_to_minimax_after_deepseek_failure(self) -> None:
-        calls: list[dict[str, object]] = []
-
-        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
-            provider_id = str(kwargs["provider_id"])
-            calls.append(kwargs)
-            if provider_id == "kimi-code":
-                raise RuntimeError("Kimi Code API HTTP 403: access denied")
-            if provider_id == "deepseek":
-                raise TimeoutError("DeepSeek timed out")
-            provider = gateway.resolve_provider(provider_id)
-            return (
-                "from manim import *\nclass GeneratedScene(Scene):\n"
-                "    def construct(self):\n"
-                "        self.play(Write(Text('消费者剩余', font_size=28)))\n",
-                provider,
-                "hidden",
-            )
-
-        original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
-        os.environ["DEEPSEEK_API_KEY"] = "server-deepseek-key"
-        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
-        gateway.generate_code_with_llm = fake_generate_code_with_llm
-        try:
-            status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "解释消费者剩余", "provider": "trial-kimi-priority"}
-            )
-        finally:
-            gateway.generate_code_with_llm = original
-
-        assert status == 200
-        assert response["ok"] is True
-        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "deepseek", "minimax-coding-cn"]
-        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
-        assert calls[2]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
+        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "minimax-coding-cn"]
+        assert calls[1]["api_key"] == "server-minimax-key"
+        assert calls[1]["model"] == "MiniMax-M2.7"
+        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
         warnings = "\n".join(response["warnings"])
         assert "MiniMax" in warnings
+        assert "权限/白名单/套餐额度问题" in warnings
         assert "kimi-code:access" in warnings
-        assert "deepseek:timeout" in warnings
+
+    def test_trial_falls_back_to_deepseek_after_minimax_failure(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            provider_id = str(kwargs["provider_id"])
+            calls.append(kwargs)
+            if provider_id == "kimi-code":
+                raise RuntimeError("Kimi Code API HTTP 403: access denied")
+            if provider_id == "minimax-coding-cn":
+                raise TimeoutError("MiniMax timed out")
+            provider = gateway.resolve_provider(provider_id)
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                "        self.play(Write(Text('消费者剩余', font_size=28)))\n",
+                provider,
+                "hidden",
+            )
+
+        original = gateway.generate_code_with_llm
+        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
+        os.environ["DEEPSEEK_API_KEY"] = "server-deepseek-key"
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
+        try:
+            status, response = gateway.generate_manim_code_for_gateway(
+                {"prompt": "解释消费者剩余", "provider": "trial-kimi-priority"}
+            )
+        finally:
+            gateway.generate_code_with_llm = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "minimax-coding-cn", "deepseek"]
+        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
+        assert calls[2]["timeout"] == gateway.PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
+        warnings = "\n".join(response["warnings"])
+        assert "DeepSeek" in warnings
+        assert "kimi-code:access" in warnings
+        assert "minimax-coding-cn:timeout" in warnings
 
     def test_minimax_direct_uses_longer_timeout_and_teaching_contract(self) -> None:
         calls: list[dict[str, object]] = []

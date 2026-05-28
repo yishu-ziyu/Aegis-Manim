@@ -57,9 +57,9 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     "kimi-code": ProviderPreset(
         id="kimi-code",
         name="Kimi Code API",
-        api_type="openai-compatible",
+        api_type="anthropic-compatible",
         region="cn",
-        base_url="https://api.kimi.com/coding/v1",
+        base_url="https://api.kimi.com/coding",
         default_model="kimi-for-coding",
         models=("kimi-for-coding",),
         doc="https://www.kimi.com/coding/docs/",

@@ -92,8 +92,8 @@ PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-kimi-priority"
 PUBLIC_TRIAL_PLANS = {
     "trial-kimi-priority": {
         "name": "免费试用 · Kimi 优先",
-        "description": "内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 DeepSeek，再切换 MiniMax。",
-        "model_label": "Kimi 优先 / DeepSeek / MiniMax 备用",
+        "description": "内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 MiniMax，再切换 DeepSeek。",
+        "model_label": "Kimi 优先 / MiniMax / DeepSeek 备用",
         "attempts": (
             {
                 "provider_id": "kimi-code",
@@ -101,14 +101,14 @@ PUBLIC_TRIAL_PLANS = {
                 "model": "kimi-for-coding",
             },
             {
-                "provider_id": "deepseek",
-                "env": "DEEPSEEK_API_KEY",
-                "model": "deepseek-v4-flash",
-            },
-            {
                 "provider_id": "minimax-coding-cn",
                 "env": "MINIMAX_API_KEY",
                 "model": "MiniMax-M2.7",
+            },
+            {
+                "provider_id": "deepseek",
+                "env": "DEEPSEEK_API_KEY",
+                "model": "deepseek-v4-flash",
             },
         ),
     },
@@ -382,6 +382,26 @@ def sanitize_upstream_error(exc: Exception) -> str:
     if "503" in text or "overload" in text.lower() or "busy" in text.lower():
         return "overloaded"
     return "request"
+
+
+def describe_trial_failure(category: str) -> str:
+    if category == "access":
+        return "权限/白名单/套餐额度问题"
+    if category == "auth":
+        return "Key 无效或鉴权失败"
+    if category == "billing":
+        return "余额或计费不可用"
+    if category == "quota":
+        return "额度耗尽或限流"
+    if category == "timeout":
+        return "请求超时"
+    if category == "overloaded":
+        return "服务繁忙"
+    if category == "precheck":
+        return "代码预检未通过"
+    if category == "budget":
+        return "渲染预算超限"
+    return category
 
 
 def clamp_temperature(value: object) -> float:
@@ -1289,7 +1309,7 @@ def generate_code_with_trial_plan(
             warnings.append("部分试用模型暂不可用，已自动使用可用的备用模型。")
         if provider.id != str(plan["attempts"][0]["provider_id"]):
             reason_text = failed_categories[0].split(":", 1)[1] if failed_categories else "request"
-            warnings.append(f"Kimi 本次未完成（{reason_text}），已自动切换到 {provider.name} 备用模型。")
+            warnings.append(f"Kimi 本次未完成（{describe_trial_failure(reason_text)}），已自动切换到 {provider.name} 备用模型。")
         if failed_categories:
             warnings.append("模型失败类别：" + ", ".join(failed_categories[-3:]))
 
