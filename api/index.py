@@ -139,6 +139,7 @@ PUBLIC_TRIAL_PLANS = {
                 "provider_id": "mimo",
                 "env": "MIMO_API_KEY",
                 "model": "mimo-v2.5-pro",
+                "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
             },
         ),
     },
@@ -1217,6 +1218,7 @@ def generate_code_with_trial_plan(
         provider_id = str(attempt["provider_id"])
         provider = resolve_provider(provider_id)
         model = str(attempt["model"]) or provider.default_model or DEFAULT_MODEL
+        trial_base_url = str(attempt.get("base_url", "")).strip()
         if not api_key:
             skipped.append(provider.name)
             continue
@@ -1226,7 +1228,7 @@ def generate_code_with_trial_plan(
             raw_code, _used_provider_name, _used_endpoint = generate_code_with_llm(
                 provider_id=provider.id,
                 api_key=api_key,
-                base_url="",
+                base_url=trial_base_url,
                 endpoint="",
                 model=model,
                 system_prompt=SYSTEM_PROMPT,
