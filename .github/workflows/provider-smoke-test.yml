@@ -1,0 +1,37 @@
+name: Provider Smoke Test
+
+on:
+  deployment_status:
+    types: [success]
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: 'Deployment endpoint to test'
+        required: true
+        default: 'https://manim.yishuziyu.cn'
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    if: github.event.deployment.environment == 'production' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run provider smoke test
+        run: |
+          ENDPOINT="${{ github.event.inputs.endpoint || 'https://manim.yishuziyu.cn' }}"
+          python3 scripts/post_deploy_verify.py --endpoint "$ENDPOINT" --ci --timeout 180
+
+      - name: Upload results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-smoke-test-failure
+          path: /tmp/post_deploy_verify_results.json
+          if-no-files-found: ignore

@@ -22,7 +22,8 @@ User prompt
   -> Supabase community_works
   -> hit: return code + video_url, skip model and render
   -> miss: continue current /api/generate and /api/render flow
-  -> after successful render: user can publish the result to community_works
+  -> after successful render: user can submit the result as a candidate work
+  -> reviewer approves/features/quarantines/hides/rejects it
 ```
 
 Keep Supabase service credentials in Render. Vercel should only proxy community API calls.
@@ -31,9 +32,10 @@ Keep Supabase service credentials in Render. Vercel should only proxy community 
 
 The Render backend first tries the dedicated `community_works`, `community_work_ratings`, and `community_work_events` tables. If Supabase returns a missing-table response, it automatically falls back to the already-deployed `render_jobs` table:
 
-- Published state is stored as `metadata.community_status = "published"`.
+- Repository state is stored as `metadata.community_status`.
 - Search reads completed jobs with `metadata->>community_status = published` and ranks them by metadata quality signals.
-- Publish writes the completed render job's community fields back into `render_jobs.metadata`; browser-supplied code and video URLs are still ignored.
+- Candidate submission writes the completed render job's community fields back into `render_jobs.metadata`; browser-supplied code and video URLs are still ignored.
+- Review writes `community_review_stage`, `community_review_status`, `community_repository_decision`, and reviewer metadata back into `render_jobs.metadata`.
 - Rating and reuse update metadata on the same render job.
 
 This lets the cloud MVP work before the new tables are applied. The dedicated tables remain the target structure for moderation, richer search, and cleaner analytics.
@@ -52,8 +54,8 @@ CREATE TABLE IF NOT EXISTS community_works (
     render_job_id text REFERENCES render_jobs(job_id) ON DELETE SET NULL,
     author_label text,
     tags text[] DEFAULT '{}',
-    status text NOT NULL DEFAULT 'published'
-        CHECK (status IN ('published', 'hidden', 'rejected')),
+    status text NOT NULL DEFAULT 'candidate'
+        CHECK (status IN ('candidate', 'published', 'featured', 'quarantine', 'hidden', 'rejected')),
     quality_score numeric NOT NULL DEFAULT 0,
     rating_avg numeric NOT NULL DEFAULT 0,
     rating_count int NOT NULL DEFAULT 0,
@@ -65,7 +67,7 @@ CREATE TABLE IF NOT EXISTS community_works (
 
 CREATE INDEX IF NOT EXISTS idx_community_works_quality
     ON community_works (quality_score DESC, rating_avg DESC, reuse_count DESC, created_at DESC)
-    WHERE status = 'published';
+    WHERE status IN ('published', 'featured');
 
 CREATE INDEX IF NOT EXISTS idx_community_works_prompt_normalized
     ON community_works USING gin (prompt_normalized gin_trgm_ops);
@@ -83,7 +85,7 @@ CREATE TABLE IF NOT EXISTS community_work_ratings (
 CREATE TABLE IF NOT EXISTS community_work_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     work_id uuid NOT NULL REFERENCES community_works(id) ON DELETE CASCADE,
-    event_type text NOT NULL CHECK (event_type IN ('reuse')),
+    event_type text NOT NULL CHECK (event_type IN ('reuse', 'rating', 'review', 'promote', 'demote')),
     query text,
     metadata jsonb NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now()
@@ -98,9 +100,9 @@ MVP search can use Postgres full-text search plus score ordering. Embeddings are
 
 `GET /api/community/search?q=帕累托最优&limit=5`
 
-Returns published works only. Automatic reuse should only use the top result when it has a valid `video_url`, acceptable score, and status `published`.
+Returns public works only: `published` and `featured`. Automatic reuse should only use the top result when it has a valid `video_url`, acceptable score, and public status.
 
-### Publish
+### Submit Candidate
 
 `POST /api/community/works`
 
@@ -123,7 +125,37 @@ Validation:
 - `videoUrl` must be an existing public URL from the current Supabase `manim-videos` bucket.
 - `renderJobId` is required in the implemented MVP. Render loads the completed job's persisted `code`, `scene_name`, and `video_path` server-side instead of trusting browser-submitted code/video fields.
 - `code` must pass existing compatibility and render-budget checks before the original render job can complete.
-- MVP may publish immediately, but the schema keeps `hidden` and `rejected` states for moderation.
+- New submissions enter `candidate`, not public search.
+- Review metadata is attached immediately: `review_stage=candidate`, `review_status=pending`, and `repository_decision=pending_review`.
+
+### Review Queue
+
+`GET /api/community/review/queue?status=candidate&limit=20&reviewToken=...`
+
+Returns candidate or other non-public works for administrator review.
+
+`POST /api/community/works/{work_id}/review`
+
+Body:
+
+```json
+{
+  "decision": "approve",
+  "reviewToken": "server-configured-token",
+  "reviewerLabel": "Aegis 管理员",
+  "note": "经济学解释清楚，适合公开复用"
+}
+```
+
+Supported decisions:
+
+- `approve` or `publish` -> `published`
+- `feature` -> `featured`
+- `quarantine` -> `quarantine`
+- `hide` -> `hidden`
+- `reject` -> `rejected`
+
+Review requires the Render backend env var `AEGIS_COMMUNITY_REVIEW_TOKEN` or `COMMUNITY_REVIEW_TOKEN`. The browser panel stores the typed token in local browser storage; the token is not hardcoded into the public bundle.
 
 ### Rate
 
@@ -157,9 +189,13 @@ Records a cache hit and increments `reuse_count`.
 5. On miss:
    - keep current generate and render flow.
 6. After successful render:
-   - show a "发布到作品库" action with title and tags.
+   - show a "提交入库审阅" action.
 7. On a displayed community work:
    - show rating control and write rating events.
+8. In the folded review panel:
+   - reviewer enters the review token;
+   - loads `candidate`, `quarantine`, `hidden`, or `rejected` queues;
+   - promotes, features, quarantines, hides, or rejects each work.
 
 ## Quality Score
 
@@ -180,7 +216,10 @@ The exact formula can live in backend code first. Move it to SQL later only if n
 
 - A prompt matching a published work returns a playable `videoUrl` without calling `/api/generate` or `/api/render`.
 - A prompt without a match still follows the current production flow.
-- Successful renders can be published into `community_works`.
+- Successful renders can be submitted as `candidate` community works.
+- Candidate works do not appear in public search before review.
+- Review can promote a candidate to `published` or `featured`.
+- Quarantined, hidden, and rejected works stay out of public search.
 - Ratings update `rating_avg`, `rating_count`, and `quality_score`.
 - Reuse increments `reuse_count` and records an event.
 - Vercel does not receive Supabase service credentials.

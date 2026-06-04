@@ -1,4 +1,72 @@
-# Mimo Provider Integration
+# Aegis-Manim 任务状态机
+
+> 本文件采用 Phase-based 推进设计。Phase 命名规范见 `docs/architecture-v2/BDD-TEMPLATE.md`。
+> 历史开发日志保留在本文件底部（从 `# Mimo Provider Integration` 开始）。
+
+## 主链路状态
+
+```
+provider_layer → generation_layer → validation_layer → render_layer → delivery_layer
+     ⚠️              ✅                ✅                 ✅               🚧
+```
+
+## 活跃任务
+
+### P0-A: Mimo Timeout 决策与降级方案 ✅ 已完成
+- [x] 决策：增加 timeout 到 150s + vercel.json maxDuration=300
+  - `api/index.py`：`PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS` 默认 "120" → "150"
+  - `vercel.json`：`functions["api/*.py"].maxDuration = 300`
+  - 部署 `dpl_GudJxiyL3hcgDjoWSH5kCiDy1aVx`
+  - **连续 5 次测试全部通过，fallback 率 = 0%**
+- ~~备选：从 `PUBLIC_TRIAL_PLANS` 移除 Mimo~~（无需执行）
+- **BDD**: `docs/architecture-v2/codex-phase-p0-mimo-timeout-decision-bdd.md`
+
+### P1-A: Provider 闭环测试自动化 ✅ 已完成
+- [x] 编写 `scripts/post_deploy_verify.py` — 部署后验证脚本，测试所有 trial provider + 预期失败
+- [x] 创建 `.github/workflows/provider-smoke-test.yml` — GitHub Actions workflow，部署成功后自动触发
+- [x] 增强 `scripts/measure_trial_provider_stability.py` — 增加 `trial-mimo-direct`、默认 timeout=180、`--ci` 模式
+- [x] 编写 `tests/test_post_deploy_verify.py` — 回归测试
+- **验证**: 本地运行 `post_deploy_verify.py` 4/4 通过
+- **BDD**: `docs/architecture-v2/codex-phase-p1-provider-loop-test-bdd.md`
+
+## 待办任务
+
+### P1-B: 代码生成质量评估
+- [ ] 记录每次生成的 `provider`, `model`, `code_len`, `fallback_reason`
+- [ ] 计算各 provider 的生成成功率和 fallback 率
+- [ ] 可视化 dashboard（可选）
+
+### P2-A: 社区作品系统前端
+- [ ] Tech Spec 已完成（`docs/TECH_SPEC_COMMUNITY_WORKS.md`）
+- [ ] 实现前端 UI
+- [ ] 集成 Supabase 存储
+
+### P2-B: Job Persistence 完整实现
+- [ ] Tech Spec 已完成（`docs/TECH_SPEC_JOB_PERSISTENCE.md`）
+- [ ] 实现 render job 状态持久化
+- [ ] 实现 job 查询/重试接口
+
+### P2-C: Vision 分析公开化
+- [ ] 移除 `AEGIS_VISION_PUBLIC_ENABLED` feature flag
+- [ ] 前端集成 vision 上传与分析
+
+## 本轮新建的项目管理基础设施
+
+- [x] `Tasks/workflow.md` — 主链路 + 当前状态 + 当前要求
+- [x] `Tasks/manifest.md` — 关键产物路径
+- [x] `Tasks/handoff.md` — 跨 Session 接手说明
+- [x] `Tasks/decision-log.md` — 关键决策记录
+- [x] `Tasks/review.md` — 验证、风险、未完成项
+- [x] `Tasks/round-log.md` — 长程研发轮次账本
+- [x] `docs/architecture-v2/BDD-TEMPLATE.md` — BDD 文档模板
+- [x] `docs/architecture-v2/codex-phase-p0-mimo-timeout-decision-bdd.md` — P0-A BDD
+- [x] `docs/architecture-v2/codex-phase-p1-provider-loop-test-bdd.md` — P1-A BDD
+
+---
+
+# 历史开发日志（以下为原始内容，保留完整追溯）
+
+## Mimo Provider Integration
 
 - [x] Add Mimo Token Plan (`mimo-v2.5-pro`) as a code-generation provider in `core/llm_providers.py`.
 - [x] Add Mimo as a dedicated vision-analysis provider in `core/vision_analysis.py` via `MIMO_API_KEY`.

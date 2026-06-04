@@ -18,6 +18,16 @@ import requests
 
 # Storage bucket name for rendered videos
 STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "manim-videos")
+PUBLIC_COMMUNITY_STATUSES = ("published", "featured")
+COMMUNITY_STATUS_VALUES = ("candidate", "published", "featured", "quarantine", "hidden", "rejected")
+COMMUNITY_REVIEW_DECISIONS = {
+    "approve": "published",
+    "publish": "published",
+    "feature": "featured",
+    "quarantine": "quarantine",
+    "hide": "hidden",
+    "reject": "rejected",
+}
 
 
 class SupabaseReadUnavailable(RuntimeError):
@@ -321,6 +331,67 @@ def _community_score(rating_avg: float = 0.0, rating_count: int = 0, reuse_count
     return round(rating_signal * 0.72 + confidence * 0.16 + reuse_signal * 0.12, 4)
 
 
+def _normalize_community_status(status: str | None, default: str = "candidate") -> str:
+    status = (status or default).strip().lower()
+    return status if status in COMMUNITY_STATUS_VALUES else default
+
+
+def _community_public_status_filter() -> str:
+    return f"status=in.({','.join(PUBLIC_COMMUNITY_STATUSES)})"
+
+
+def _repository_stage_for_status(status: str) -> str:
+    return {
+        "candidate": "candidate",
+        "published": "public",
+        "featured": "featured",
+        "quarantine": "quarantine",
+        "hidden": "hidden",
+        "rejected": "rejected",
+    }.get(status, "candidate")
+
+
+def _status_after_quality_signals(
+    current_status: str,
+    rating_avg: float,
+    rating_count: int,
+    reuse_count: int,
+) -> str:
+    current_status = _normalize_community_status(current_status)
+    if current_status in {"candidate", "hidden", "rejected"}:
+        return current_status
+    if rating_count >= 5 and rating_avg < 3.0:
+        return "quarantine"
+    if rating_count >= 5 and _community_score(rating_avg, rating_count, reuse_count) >= 0.86:
+        return "featured"
+    return current_status
+
+
+def _merge_repository_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    status: str,
+    decision: str | None = None,
+) -> dict[str, Any]:
+    merged = dict(metadata or {})
+    merged["review_status"] = _review_status_for_lifecycle(status)
+    merged["review_stage"] = _repository_stage_for_status(status)
+    merged["repository_decision"] = decision or ("pending_review" if status == "candidate" else "public")
+    merged["lifecycle_status"] = status
+    return merged
+
+
+def _review_status_for_lifecycle(status: str) -> str:
+    return {
+        "candidate": "pending",
+        "published": "approved",
+        "featured": "approved",
+        "quarantine": "needs_revision",
+        "hidden": "hidden",
+        "rejected": "rejected",
+    }.get(status, "pending")
+
+
 def _is_missing_table(resp: requests.Response | None) -> bool:
     if resp is None or resp.status_code != 404:
         return False
@@ -332,9 +403,10 @@ def _community_metadata(row: dict[str, Any]) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
-def _fallback_work_from_render_job(row: dict[str, Any]) -> dict[str, Any] | None:
+def _fallback_work_from_render_job(row: dict[str, Any], *, public_only: bool = True) -> dict[str, Any] | None:
     metadata = _community_metadata(row)
-    if metadata.get("community_status") != "published":
+    status = _normalize_community_status(metadata.get("community_status"))
+    if public_only and status not in PUBLIC_COMMUNITY_STATUSES:
         return None
     job_id = row.get("job_id")
     if not job_id:
@@ -353,13 +425,21 @@ def _fallback_work_from_render_job(row: dict[str, Any]) -> dict[str, Any] | None
         "render_job_id": job_id,
         "author_label": metadata.get("community_author_label"),
         "tags": metadata.get("community_tags") or [],
-        "status": "published",
+        "status": status,
         "rating_avg": rating_avg,
         "rating_count": rating_count,
         "reuse_count": reuse_count,
         "quality_score": float(metadata.get("community_quality_score") or _community_score(rating_avg, rating_count, reuse_count)),
         "created_at": metadata.get("community_published_at") or row.get("created_at"),
         "updated_at": metadata.get("community_updated_at") or row.get("updated_at"),
+        "metadata": {
+            "review_stage": metadata.get("community_review_stage"),
+            "review_status": metadata.get("community_review_status"),
+            "repository_decision": metadata.get("community_repository_decision"),
+            "reviewer_label": metadata.get("community_reviewer_label"),
+            "review_note": metadata.get("community_review_note"),
+            "reviewed_at": metadata.get("community_reviewed_at"),
+        },
     }
 
 
@@ -379,7 +459,7 @@ def _patch_render_job_metadata(job_id: str, metadata: dict[str, Any]) -> dict[st
             print(f"[supabase] patch render_jobs metadata failed: {resp.status_code} {resp.text[:200]}")
         return None
     row = get_job(job_id)
-    return _fallback_work_from_render_job(row) if row else None
+    return _fallback_work_from_render_job(row, public_only=False) if row else None
 
 
 def _search_community_works_from_render_jobs(query: str, limit: int) -> list[dict[str, Any]]:
@@ -388,7 +468,7 @@ def _search_community_works_from_render_jobs(query: str, limit: int) -> list[dic
         (
             f"{_postgrest_url('render_jobs')}?"
             "status=eq.done"
-            "&metadata-%3E%3Ecommunity_status=eq.published"
+            "&metadata-%3E%3Ecommunity_status=in.(published,featured)"
             "&select=job_id,scene_name,code,video_path,video_name,metadata,created_at,updated_at"
             "&order=updated_at.desc"
             f"&limit={max(limit, 50)}"
@@ -423,6 +503,29 @@ def _search_community_works_from_render_jobs(query: str, limit: int) -> list[dic
     return works[:limit]
 
 
+def _list_review_queue_from_render_jobs(statuses: tuple[str, ...], limit: int) -> list[dict[str, Any]]:
+    status_filter = ",".join(statuses)
+    resp = _request_with_retries(
+        "get",
+        (
+            f"{_postgrest_url('render_jobs')}?"
+            "status=eq.done"
+            f"&metadata-%3E%3Ecommunity_status=in.({status_filter})"
+            "&select=job_id,scene_name,code,video_path,video_name,metadata,created_at,updated_at"
+            "&order=updated_at.asc"
+            f"&limit={limit}"
+        ),
+        headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
+    )
+    if resp is None or resp.status_code != 200:
+        if resp is not None:
+            print(f"[supabase] fallback review queue failed: {resp.status_code} {resp.text[:200]}")
+        return []
+    rows = resp.json()
+    works = [_fallback_work_from_render_job(row, public_only=False) for row in rows if isinstance(row, dict)]
+    return [work for work in works if work is not None and work.get("status") in statuses][:limit]
+
+
 def _insert_community_work_in_render_job(
     *,
     title: str,
@@ -431,6 +534,7 @@ def _insert_community_work_in_render_job(
     author_label: str | None = None,
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    status: str = "candidate",
 ) -> dict[str, Any] | None:
     if not render_job_id:
         return None
@@ -439,15 +543,20 @@ def _insert_community_work_in_render_job(
         return None
     existing = _community_metadata(row)
     now = datetime.now(UTC).isoformat()
+    status = _normalize_community_status(status)
+    repository_metadata = _merge_repository_metadata(metadata, status=status)
     existing.update(
         {
-            "community_status": "published",
+            "community_status": status,
             "community_title": title.strip()[:120],
             "community_prompt": prompt.strip(),
             "community_prompt_normalized": normalize_work_prompt(prompt),
             "community_author_label": (author_label or "匿名用户").strip()[:80],
             "community_tags": tags or [],
-            "community_source": (metadata or {}).get("source", "aegis-web"),
+            "community_source": repository_metadata.get("source", "aegis-web"),
+            "community_review_stage": repository_metadata.get("review_stage"),
+            "community_review_status": repository_metadata.get("review_status"),
+            "community_repository_decision": repository_metadata.get("repository_decision"),
             "community_published_at": existing.get("community_published_at") or now,
             "community_updated_at": now,
             "community_rating_avg": float(existing.get("community_rating_avg") or 0),
@@ -465,7 +574,7 @@ def _insert_community_work_in_render_job(
 
 def _get_fallback_community_work(work_id: str) -> dict[str, Any] | None:
     row = get_job(work_id)
-    return _fallback_work_from_render_job(row) if row else None
+    return _fallback_work_from_render_job(row, public_only=False) if row else None
 
 
 def search_community_works(query: str, limit: int = 5) -> list[dict[str, Any]]:
@@ -473,8 +582,8 @@ def search_community_works(query: str, limit: int = 5) -> list[dict[str, Any]]:
     limit = max(1, min(int(limit or 5), 20))
     normalized = normalize_work_prompt(query)
     filters = [
-        "status=eq.published",
-        "select=id,title,prompt,scene_name,code,video_url,render_job_id,tags,rating_avg,rating_count,reuse_count,quality_score,created_at,updated_at",
+        _community_public_status_filter(),
+        "select=id,title,prompt,scene_name,code,video_url,render_job_id,tags,status,metadata,rating_avg,rating_count,reuse_count,quality_score,created_at,updated_at",
         "order=quality_score.desc,rating_avg.desc,reuse_count.desc,created_at.desc",
         f"limit={limit}",
     ]
@@ -497,6 +606,40 @@ def search_community_works(query: str, limit: int = 5) -> list[dict[str, Any]]:
     return []
 
 
+def list_community_review_queue(status: str = "candidate", limit: int = 20) -> list[dict[str, Any]]:
+    """List non-public works that need human review."""
+    limit = max(1, min(int(limit or 20), 50))
+    statuses = tuple(
+        _normalize_community_status(item.strip())
+        for item in str(status or "candidate").split(",")
+        if item.strip()
+    ) or ("candidate",)
+    statuses = tuple(status for status in statuses if status not in PUBLIC_COMMUNITY_STATUSES)
+    if not statuses:
+        statuses = ("candidate",)
+    status_filter = ",".join(statuses)
+    filters = [
+        f"status=in.({status_filter})",
+        "select=id,title,prompt,scene_name,code,video_url,render_job_id,tags,status,metadata,rating_avg,rating_count,reuse_count,quality_score,created_at,updated_at",
+        "order=created_at.asc",
+        f"limit={limit}",
+    ]
+    resp = _request_with_retries(
+        "get",
+        f"{_postgrest_url('community_works')}?{'&'.join(filters)}",
+        headers={"apikey": _supabase_service_key(), "Authorization": f"Bearer {_supabase_service_key()}"},
+    )
+    if resp is None:
+        return []
+    if resp.status_code == 200:
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    if _is_missing_table(resp):
+        return _list_review_queue_from_render_jobs(statuses, limit)
+    print(f"[supabase] list_community_review_queue failed: {resp.status_code} {resp.text[:200]}")
+    return []
+
+
 def insert_community_work(
     *,
     title: str,
@@ -508,8 +651,10 @@ def insert_community_work(
     author_label: str | None = None,
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
-    status: str = "published",
+    status: str = "candidate",
 ) -> dict[str, Any] | None:
+    status = _normalize_community_status(status)
+    metadata = _merge_repository_metadata(metadata, status=status)
     payload = {
         "title": title.strip()[:120],
         "prompt": prompt.strip(),
@@ -520,7 +665,7 @@ def insert_community_work(
         "render_job_id": render_job_id,
         "author_label": (author_label or "匿名用户").strip()[:80],
         "tags": tags or [],
-        "metadata": metadata or {},
+        "metadata": metadata,
         "status": status,
         "quality_score": _community_score(),
     }
@@ -543,6 +688,7 @@ def insert_community_work(
             author_label=author_label,
             tags=tags,
             metadata=metadata,
+            status=status,
         )
     print(f"[supabase] insert_community_work failed: {resp.status_code} {resp.text[:200]}")
     return None
@@ -560,6 +706,94 @@ def _get_community_work(work_id: str) -> dict[str, Any] | None:
         return None
     data = resp.json()
     return data[0] if isinstance(data, list) and data else None
+
+
+def review_community_work(
+    work_id: str,
+    decision: str,
+    *,
+    reviewer_label: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any] | None:
+    """Move a candidate work through the repository review lifecycle."""
+    work_id = str(work_id or "").strip()
+    decision = str(decision or "").strip().lower()
+    next_status = COMMUNITY_REVIEW_DECISIONS.get(decision)
+    if not work_id or not next_status:
+        return None
+    work = _get_community_work(work_id)
+    if not work:
+        return None
+
+    now = datetime.now(UTC).isoformat()
+    metadata = _merge_repository_metadata(
+        _community_metadata(work),
+        status=next_status,
+        decision=f"review_{decision}",
+    )
+    metadata.update(
+        {
+            "review_status": _review_status_for_lifecycle(next_status),
+            "reviewed_at": now,
+            "reviewer_label": (reviewer_label or "reviewer").strip()[:80],
+            "review_note": (note or "").strip()[:500] or None,
+        }
+    )
+    payload = {
+        "status": next_status,
+        "metadata": metadata,
+        "updated_at": now,
+    }
+
+    if work.get("render_job_id") == work_id and work.get("id") == work_id:
+        row = get_job(work_id)
+        if not row:
+            return None
+        existing = _community_metadata(row)
+        existing.update(
+            {
+                "community_status": next_status,
+                "community_review_stage": metadata.get("review_stage"),
+                "community_review_status": metadata.get("review_status"),
+                "community_repository_decision": metadata.get("repository_decision"),
+                "community_reviewer_label": metadata.get("reviewer_label"),
+                "community_review_note": metadata.get("review_note"),
+                "community_reviewed_at": metadata.get("reviewed_at"),
+                "community_updated_at": now,
+            }
+        )
+        return _patch_render_job_metadata(work_id, existing)
+
+    resp = _request_with_retries(
+        "patch",
+        f"{_postgrest_url('community_works')}?id=eq.{quote(work_id, safe='')}",
+        headers=_headers_sr(),
+        json=payload,
+    )
+    if resp is None or resp.status_code not in (200, 204):
+        if resp is not None:
+            print(f"[supabase] review_community_work failed: {resp.status_code} {resp.text[:200]}")
+        return None
+
+    event_type = "promote" if next_status in PUBLIC_COMMUNITY_STATUSES else "demote"
+    _request_with_retries(
+        "post",
+        _postgrest_url("community_work_events"),
+        headers=_headers_sr(),
+        json={
+            "work_id": work_id,
+            "event_type": event_type,
+            "query": None,
+            "metadata": {
+                "decision": decision,
+                "next_status": next_status,
+                "reviewer_label": metadata.get("reviewer_label"),
+                "note": metadata.get("review_note"),
+            },
+        },
+    )
+    data = resp.json() if resp.status_code == 200 else []
+    return data[0] if isinstance(data, list) and data else {"id": work_id, **payload}
 
 
 def _refresh_community_work_score(work_id: str) -> dict[str, Any] | None:
@@ -580,10 +814,19 @@ def _refresh_community_work_score(work_id: str) -> dict[str, Any] | None:
     rating_avg = round(sum(rating_values) / rating_count, 2) if rating_count else 0.0
     work = _get_community_work(work_id) or {}
     reuse_count = int(work.get("reuse_count") or 0)
+    current_status = _normalize_community_status(work.get("status"), default="published")
+    next_status = _status_after_quality_signals(current_status, rating_avg, rating_count, reuse_count)
+    metadata = _merge_repository_metadata(
+        _community_metadata(work),
+        status=next_status,
+        decision=("quality_featured" if next_status == "featured" else "low_score_quarantine" if next_status == "quarantine" else None),
+    )
     payload = {
         "rating_avg": rating_avg,
         "rating_count": rating_count,
         "quality_score": _community_score(rating_avg, rating_count, reuse_count),
+        "status": next_status,
+        "metadata": metadata,
         "updated_at": datetime.now(UTC).isoformat(),
     }
     resp = _request_with_retries(
@@ -679,9 +922,18 @@ def record_community_reuse(work_id: str, query: str | None = None) -> dict[str, 
     reuse_count = int(work.get("reuse_count") or 0) + 1
     rating_avg = float(work.get("rating_avg") or 0)
     rating_count = int(work.get("rating_count") or 0)
+    current_status = _normalize_community_status(work.get("status"), default="published")
+    next_status = _status_after_quality_signals(current_status, rating_avg, rating_count, reuse_count)
+    metadata = _merge_repository_metadata(
+        _community_metadata(work),
+        status=next_status,
+        decision=("quality_featured" if next_status == "featured" else None),
+    )
     payload = {
         "reuse_count": reuse_count,
         "quality_score": _community_score(rating_avg, rating_count, reuse_count),
+        "status": next_status,
+        "metadata": metadata,
         "updated_at": datetime.now(UTC).isoformat(),
     }
     resp = _request_with_retries(

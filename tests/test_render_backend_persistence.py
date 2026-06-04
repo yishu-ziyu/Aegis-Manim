@@ -869,10 +869,82 @@ def test_community_publish_rate_and_reuse_routes_call_supabase_helpers(monkeypat
     assert publish.get_json()["work"]["workId"] == "work-1"
     assert calls["insert"]["scene_name"] == "PersistedScene"
     assert calls["insert"]["code"].endswith("# from persisted job")
+    assert calls["insert"]["status"] == "candidate"
+    assert calls["insert"]["metadata"]["review_stage"] == "candidate"
+    assert calls["insert"]["metadata"]["repository_decision"] == "pending_review"
     assert rating.status_code == 200
     assert calls["rate"] == ("work-1", 5, "anon-1", "清楚")
     assert reuse.status_code == 200
     assert calls["reuse"] == ("work-1", "帕累托")
+
+
+@requires_backend
+def test_community_review_routes_require_token_and_update_lifecycle(monkeypatch):
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(backend, "_use_supabase", lambda: True)
+    monkeypatch.setattr(backend, "COMMUNITY_REVIEW_TOKEN", "review-token")
+    monkeypatch.setattr(backend, "supa_list_jobs_by_status", lambda statuses: [])
+
+    def fake_list(status="candidate", limit=20):
+        calls["queue"] = (status, limit)
+        return [
+            {
+                "id": "work-1",
+                "title": "Slutsky 分解",
+                "prompt": "用动画解释 Slutsky 和 Hicks 补偿",
+                "scene_name": "CompensationScene",
+                "code": "from manim import *",
+                "video_url": "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4",
+                "status": "candidate",
+                "metadata": {"review_stage": "candidate", "review_status": "pending"},
+            }
+        ]
+
+    def fake_review(work_id, decision, reviewer_label=None, note=None):
+        calls["review"] = (work_id, decision, reviewer_label, note)
+        return {
+            "id": work_id,
+            "title": "Slutsky 分解",
+            "prompt": "用动画解释 Slutsky 和 Hicks 补偿",
+            "scene_name": "CompensationScene",
+            "code": "from manim import *",
+            "video_url": "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4",
+            "status": "featured",
+            "metadata": {
+                "review_stage": "featured",
+                "review_status": "approved",
+                "repository_decision": "review_feature",
+            },
+        }
+
+    monkeypatch.setattr(backend, "supa_list_community_review_queue", fake_list)
+    monkeypatch.setattr(backend, "supa_review_community_work", fake_review)
+
+    client = backend.app.test_client()
+    unauthorized = client.get("/community/review/queue", headers={"X-API-Key": backend.API_KEY})
+    queue = client.get(
+        "/community/review/queue?status=candidate&limit=5&reviewToken=review-token",
+        headers={"X-API-Key": backend.API_KEY},
+    )
+    reviewed = client.post(
+        "/community/works/work-1/review",
+        headers={"X-API-Key": backend.API_KEY},
+        json={
+            "decision": "feature",
+            "reviewToken": "review-token",
+            "reviewerLabel": "teacher",
+            "note": "经济学解释清楚",
+        },
+    )
+
+    assert unauthorized.status_code == 401
+    assert queue.status_code == 200
+    assert queue.get_json()["items"][0]["reviewStage"] == "candidate"
+    assert calls["queue"] == ("candidate", 5)
+    assert reviewed.status_code == 200
+    assert reviewed.get_json()["work"]["status"] == "featured"
+    assert reviewed.get_json()["work"]["reviewStage"] == "featured"
+    assert calls["review"] == ("work-1", "feature", "teacher", "经济学解释清楚")
 
 
 def test_supabase_list_jobs_by_status_uses_status_filter(monkeypatch):
@@ -909,7 +981,7 @@ def test_supabase_search_community_works_orders_by_quality(monkeypatch):
 
     assert rows == [{"id": "work-1"}]
     assert "community_works" in captured["url"]
-    assert "status=eq.published" in captured["url"]
+    assert "status=in.(published,featured)" in captured["url"]
     assert "order=quality_score.desc" in captured["url"]
     assert "limit=3" in captured["url"]
 
@@ -957,7 +1029,28 @@ def test_supabase_search_community_works_falls_back_to_render_job_metadata(monke
     assert rows[0]["id"] == "job-1"
     assert rows[0]["render_job_id"] == "job-1"
     assert rows[0]["title"] == "帕累托最优"
-    assert any("metadata-%3E%3Ecommunity_status=eq.published" in call[1] for call in calls)
+    assert any("metadata-%3E%3Ecommunity_status=in.(published,featured)" in call[1] for call in calls)
+
+
+def test_supabase_list_community_review_queue_filters_non_public_statuses(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_request(method, url, headers, timeout=None):
+        assert method == "get"
+        captured["url"] = url
+        return SimpleNamespace(status_code=200, json=lambda: [{"id": "work-1", "status": "candidate"}])
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
+    monkeypatch.setattr(supabase_client.requests, "request", fake_request)
+
+    rows = supabase_client.list_community_review_queue("candidate,published,quarantine", limit=9)
+
+    assert rows == [{"id": "work-1", "status": "candidate"}]
+    assert "community_works" in captured["url"]
+    assert "status=in.(candidate,quarantine)" in captured["url"]
+    assert "order=created_at.asc" in captured["url"]
+    assert "limit=9" in captured["url"]
 
 
 def test_supabase_insert_community_work_falls_back_to_render_job_metadata(monkeypatch):
@@ -1008,9 +1101,64 @@ def test_supabase_insert_community_work_falls_back_to_render_job_metadata(monkey
     assert row is not None
     assert row["id"] == "job-1"
     assert row["prompt"] == "可视化帕累托最优"
-    assert stored_metadata["community_status"] == "published"
+    assert stored_metadata["community_status"] == "candidate"
+    assert stored_metadata["community_review_stage"] == "candidate"
+    assert stored_metadata["community_repository_decision"] == "pending_review"
     assert stored_metadata["community_tags"] == ["经济学"]
     assert any(call[0] == "patch" and "render_jobs" in call[1] for call in calls)
+
+
+def test_supabase_review_community_work_promotes_and_records_event(monkeypatch):
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_request(method, url, timeout=None, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "get" and "community_works" in url:
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [
+                    {
+                        "id": "work-1",
+                        "status": "candidate",
+                        "metadata": {
+                            "review_stage": "candidate",
+                            "review_status": "pending",
+                            "repository_decision": "pending_review",
+                        },
+                    }
+                ],
+            )
+        if method == "patch" and "community_works" in url:
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [{"id": "work-1", "status": kwargs["json"]["status"], "metadata": kwargs["json"]["metadata"]}],
+            )
+        if method == "post" and "community_work_events" in url:
+            return SimpleNamespace(status_code=201, json=lambda: [{"id": "event-1"}])
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
+    monkeypatch.setattr(supabase_client.requests, "request", fake_request)
+
+    result = supabase_client.review_community_work(
+        "work-1",
+        "approve",
+        reviewer_label="teacher",
+        note="可入库",
+    )
+
+    assert result is not None
+    assert result["status"] == "published"
+    patch_payload = next(call[2]["json"] for call in calls if call[0] == "patch" and "community_works" in call[1])
+    assert patch_payload["status"] == "published"
+    assert patch_payload["metadata"]["review_stage"] == "public"
+    assert patch_payload["metadata"]["review_status"] == "approved"
+    assert patch_payload["metadata"]["repository_decision"] == "review_approve"
+    assert patch_payload["metadata"]["reviewer_label"] == "teacher"
+    event_payload = next(call[2]["json"] for call in calls if call[0] == "post" and "community_work_events" in call[1])
+    assert event_payload["event_type"] == "promote"
+    assert event_payload["metadata"]["next_status"] == "published"
 
 
 def test_supabase_rate_community_work_upserts_and_refreshes_score(monkeypatch):
@@ -1023,9 +1171,15 @@ def test_supabase_rate_community_work_upserts_and_refreshes_score(monkeypatch):
         if "community_work_ratings" in url:
             return SimpleNamespace(status_code=200, json=lambda: [{"rating": 5}, {"rating": 4}])
         if "community_works" in url and method == "get":
-            return SimpleNamespace(status_code=200, json=lambda: [{"reuse_count": 3}])
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [{"status": "published", "metadata": {}, "reuse_count": 3}],
+            )
         if method == "patch":
-            return SimpleNamespace(status_code=200, json=lambda: [{"id": "work-1", "rating_avg": 4.5}])
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [{"id": "work-1", "rating_avg": 4.5, "status": kwargs["json"]["status"]}],
+            )
         raise AssertionError(f"unexpected request {method} {url}")
 
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
@@ -1039,6 +1193,46 @@ def test_supabase_rate_community_work_upserts_and_refreshes_score(monkeypatch):
     assert "on_conflict=work_id,rater_key" in calls[0][1]
     assert calls[0][2]["headers"]["Prefer"] == "resolution=merge-duplicates,return=representation"
     assert any(call[0] == "patch" and "community_works" in call[1] for call in calls)
+    patch_payload = next(call[2]["json"] for call in calls if call[0] == "patch" and "community_works" in call[1])
+    assert patch_payload["status"] == "published"
+    assert patch_payload["metadata"]["review_stage"] == "public"
+
+
+def test_supabase_rate_community_work_moves_low_public_score_to_quarantine(monkeypatch):
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_request(method, url, timeout=None, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "post":
+            return SimpleNamespace(status_code=201, json=lambda: [{"id": "rating-1"}])
+        if "community_work_ratings" in url:
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [{"rating": 2}, {"rating": 3}, {"rating": 2}, {"rating": 3}, {"rating": 2}],
+            )
+        if "community_works" in url and method == "get":
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [{"status": "published", "metadata": {}, "reuse_count": 1}],
+            )
+        if method == "patch":
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [{"id": "work-1", "status": kwargs["json"]["status"]}],
+            )
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
+    monkeypatch.setattr(supabase_client.requests, "request", fake_request)
+
+    result = supabase_client.rate_community_work("work-1", 2, rater_key="anon-1")
+
+    assert result["status"] == "quarantine"
+    patch_payload = next(call[2]["json"] for call in calls if call[0] == "patch" and "community_works" in call[1])
+    assert patch_payload["status"] == "quarantine"
+    assert patch_payload["metadata"]["review_stage"] == "quarantine"
+    assert patch_payload["metadata"]["repository_decision"] == "low_score_quarantine"
 
 
 def test_supabase_is_not_configured_when_url_is_empty(monkeypatch):

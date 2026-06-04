@@ -142,16 +142,36 @@ class AegisWebUiTest(unittest.TestCase):
         assert "retryCount < 1" in html
         assert "渲染实例刚重启，正在自动重提一次" in html
 
-    def test_web_ui_searches_community_before_generating_and_can_rate_reused_work(self) -> None:
+    def test_web_ui_searches_community_before_generating_and_can_submit_repository_review(self) -> None:
         html = web_app.make_index_html()
 
         assert 'fetch("/api/community/search?' in html
         assert "applyCommunityWork" in html
-        assert "已复用社区高分作品" in html
+        assert "已复用社区高分或精选作品" in html
         assert 'fetch(`/api/community/works/${communityWorkId}/reuse`' in html
         assert 'fetch(`/api/community/works/${communityWorkId}/rating`' in html
+        assert 'id="communityHub"' in html
+        assert "作品仓库" in html
+        assert 'id="communitySearchInput"' in html
+        assert 'id="communitySearchBtn"' in html
+        assert 'id="communitySearchList"' in html
+        assert "renderCommunitySearchResults" in html
+        assert "searchCommunityRepository" in html
+        assert "复用这个动画" in html
         assert 'id="communityActions"' in html
+        assert "提交入库审阅" in html
+        assert "已提交到候选仓库，审阅通过后进入社区复用库。" in html
+        assert 'id="reviewPanel"' in html
+        assert "管理员审阅队列" in html
+        assert "候选仓库审阅" in html
+        assert "通过公开" in html
+        assert "设为精选" in html
+        assert "退回观察" in html
+        assert 'fetch(`/api/community/review/queue?' in html
+        assert 'fetch(`/api/community/works/${workId}/review`' in html
+        assert "aegis.community.reviewToken" in html
         assert 'data-rating="5"' in html
+        assert 'data-rating="1"' in html
 
     def test_local_render_proxy_accepts_snake_case_scene_name_and_detects_code_class(self) -> None:
         render_payload, error_payload = web_app.build_render_backend_submit_payload(
@@ -190,6 +210,11 @@ class AegisWebUiTest(unittest.TestCase):
         assert "默认使用中文标题" in brief
         assert "变量符号可以保留英文缩写" in brief
         assert "不使用 Tex/MathTex" in brief
+        assert "每个镜头只引入一个新经济对象" in brief
+        assert "认知锚点" in brief
+        assert "辅助标注长期堆在主图上" in brief
+        assert "半透明或小图例复现" in brief
+        assert "先呈现基准状态" in brief
         assert "45-120 秒中等复杂度视频" in brief
         assert "8-20 个 self.play" in brief
 

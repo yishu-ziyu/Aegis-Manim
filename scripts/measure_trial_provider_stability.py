@@ -10,7 +10,7 @@ from urllib import error, request
 
 
 DEFAULT_URL = "https://manim.yishuziyu.cn/api/generate"
-DEFAULT_PROVIDERS = ("trial-minimax-direct", "trial-kimi-priority")
+DEFAULT_PROVIDERS = ("trial-minimax-direct", "trial-kimi-priority", "trial-mimo-direct")
 DEFAULT_PROMPTS = (
     "用三步解释消费者剩余。",
     "可视化帕累托最优过程。",
@@ -196,7 +196,8 @@ def parse_args() -> argparse.Namespace:
         help="Provider to measure. Repeat for multiple providers. Defaults to both trial providers.",
     )
     parser.add_argument("--runs", type=int, default=3, help="Number of prompt samples per provider.")
-    parser.add_argument("--timeout", type=int, default=90, help="Per-request timeout in seconds.")
+    parser.add_argument("--timeout", type=int, default=180, help="Per-request timeout in seconds.")
+    parser.add_argument("--ci", action="store_true", help="CI mode: exit non-zero if any provider fails or fallback rate > 0.")
     parser.add_argument(
         "--jsonl",
         type=Path,
@@ -225,7 +226,19 @@ def main() -> int:
         if jsonl_file:
             jsonl_file.close()
 
-    print(json.dumps({"summary": summarize(samples)}, ensure_ascii=False, indent=2))
+    summary = summarize(samples)
+    print(json.dumps({"summary": summary}, ensure_ascii=False, indent=2))
+
+    if args.ci:
+        for provider, stats in summary.items():
+            if stats["successRate"] < 1.0:
+                print(f"[CI] FAIL: {provider} successRate={stats['successRate']}", file=sys.stderr)
+                return 1
+            if stats["fallbackRate"] > 0.0:
+                print(f"[CI] FAIL: {provider} fallbackRate={stats['fallbackRate']}", file=sys.stderr)
+                return 1
+        print("[CI] PASS: all providers stable", file=sys.stderr)
+
     return 0
 
 

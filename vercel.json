@@ -3,6 +3,7 @@
   "installCommand": "python -m pip install -r requirements.txt",
   "functions": {
     "api/*.py": {
+      "maxDuration": 300,
       "excludeFiles": "{.git/**,.vercel/**,.venv/**,.aegis-local-venv/**,docs/**,tests/**,manim/**,media/**,generated/**,render_backend/**,final_video_warehouse/**,pyproject.toml,uv.lock}"
     }
   },
@@ -33,6 +34,10 @@
     },
     {
       "source": "/api/community/search",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/community/review/queue",
       "destination": "/api/index"
     },
     {

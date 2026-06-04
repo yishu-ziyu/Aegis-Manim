@@ -191,6 +191,10 @@ def build_teaching_brief(prompt: str) -> str:
             "讲解策略：公式只保留必要符号，复杂推导改写成短句和分步说明。",
             "语言策略：默认使用中文标题、中文标签、中文阶段说明和中文结论；变量符号可以保留英文缩写，但必须用中文解释含义。",
             "排版策略：所有 Text 都写 font_size；长解释拆成 VGroup 多行短句，先 FadeOut 旧讲解再 FadeIn 新讲解；中文句子不要互相 Transform，避免过渡帧混字。",
+            "时间策略：每个镜头只引入一个新经济对象；引入新对象前保留坐标轴、关键点或基准线作为认知锚点。",
+            "消失规则：临时推导文字、过渡箭头、一次性阴影解释完就 FadeOut；不要让辅助标注长期堆在主图上。",
+            "复现规则：原状态、变化后状态、补偿状态需要比较时，用半透明或小图例复现，不要重新从零画导致学生断线。",
+            "比较静态策略：先呈现基准状态，再让价格线旋转、点移动或曲线平移；Slutsky/Hicks、税前/税后等多状态内容要分阶段或分屏。",
             "Manim 约束：使用 Text，不使用 Tex/MathTex；避免依赖 LaTeX；代码必须能在本地 Manim 版本稳定渲染。",
             "运行预算：默认生成 45-120 秒中等复杂度视频，8-20 个 self.play，适合分段渲染；避免复杂 LaggedStart、密集点阵、长等待和大量扇形/切片。",
         ]
@@ -1541,6 +1545,79 @@ def make_index_html() -> str:
     }}
     body.learning-mode video {{ max-height: 640px; }}
 
+    .community-hub {{
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.66);
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }}
+    .community-hub-head {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }}
+    .community-hub h3 {{
+      margin: 0;
+      font-size: 0.95rem;
+      letter-spacing: 0;
+    }}
+    .community-hub-copy {{
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.55;
+      margin-top: 3px;
+    }}
+    .community-search-row {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }}
+    .community-search-row input {{
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 10px;
+      background: rgba(255,255,255,0.78);
+      color: var(--fg);
+      font: inherit;
+    }}
+    .community-search-status {{
+      color: var(--muted);
+      font-size: 0.78rem;
+      min-height: 1.25em;
+    }}
+    .community-search-status[data-state="success"] {{ color: var(--success); }}
+    .community-search-status[data-state="warn"] {{ color: var(--warn); }}
+    .community-search-list {{
+      display: grid;
+      gap: 8px;
+    }}
+    .community-work-card {{
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius);
+      padding: 10px;
+      background: rgba(255,255,255,0.54);
+      display: grid;
+      gap: 8px;
+    }}
+    .community-work-card strong {{
+      color: var(--fg);
+      font-size: 0.86rem;
+    }}
+    .community-work-prompt {{
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }}
+    .community-work-actions {{
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }}
+
     .community-actions {{
       display: none;
       align-items: center;
@@ -1556,6 +1633,70 @@ def make_index_html() -> str:
       align-items: center;
       gap: 6px;
       flex-wrap: wrap;
+    }}
+    .review-panel {{
+      border-top: 1px solid var(--border-light);
+      padding-top: 12px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }}
+    .review-panel summary {{
+      cursor: pointer;
+      color: var(--fg);
+      font-weight: 650;
+    }}
+    .review-controls {{
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) 140px auto;
+      gap: 8px;
+      margin: 12px 0;
+      align-items: end;
+    }}
+    .review-controls input,
+    .review-controls select {{
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 10px;
+      background: rgba(255,255,255,0.7);
+      color: var(--fg);
+      font: inherit;
+    }}
+    .review-list {{
+      display: grid;
+      gap: 8px;
+    }}
+    .review-item {{
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius);
+      padding: 10px;
+      background: rgba(255,255,255,0.5);
+    }}
+    .review-item strong {{
+      display: block;
+      color: var(--fg);
+      margin-bottom: 4px;
+    }}
+    .review-meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0;
+    }}
+    .review-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }}
+    @media (max-width: 720px) {{
+      .community-hub-head,
+      .review-controls {{
+        display: grid;
+      }}
+      .community-search-row,
+      .review-controls {{
+        grid-template-columns: 1fr;
+      }}
     }}
 
     /* ── Alignment / Script Panel ── */
@@ -1899,13 +2040,31 @@ def make_index_html() -> str:
             <video id="videoPlayer" controls preload="metadata"></video>
           </div>
 
+          <section id="communityHub" class="community-hub">
+            <div class="community-hub-head">
+              <div>
+                <h3>作品仓库</h3>
+                <div class="community-hub-copy">先查已有高分或精选作品；生成完成后可以提交候选，公开作品可复用、评分和再审阅。</div>
+              </div>
+              <span class="tag">公开作品优先复用</span>
+            </div>
+            <div class="community-search-row">
+              <input id="communitySearchInput" type="search" placeholder="搜索仓库：如 Slutsky 补偿、税收归宿、Edgeworth 盒" autocomplete="off" />
+              <button id="communitySearchBtn" class="ghost-btn" type="button">搜索仓库</button>
+            </div>
+            <div id="communitySearchStatus" class="community-search-status">输入题目后可以先查找已有作品；生成完成后可提交入库审阅。</div>
+            <div id="communitySearchList" class="community-search-list"></div>
+          </section>
+
           <div id="communityActions" class="community-actions">
             <span id="communitySource">社区作品状态</span>
             <div class="rating-row">
-              <button id="publishWorkBtn" class="ghost-btn" type="button">发布到社区</button>
+              <button id="publishWorkBtn" class="ghost-btn" type="button">提交入库审阅</button>
               <button class="ghost-btn rating-btn" type="button" data-rating="5">5分</button>
               <button class="ghost-btn rating-btn" type="button" data-rating="4">4分</button>
               <button class="ghost-btn rating-btn" type="button" data-rating="3">3分</button>
+              <button class="ghost-btn rating-btn" type="button" data-rating="2">2分</button>
+              <button class="ghost-btn rating-btn" type="button" data-rating="1">1分</button>
             </div>
           </div>
 
@@ -1920,6 +2079,21 @@ def make_index_html() -> str:
             <div id="alignmentWarning" class="alignment-warning"></div>
             <div id="alignmentList" class="alignment-list"></div>
           </section>
+
+          <details id="reviewPanel" class="review-panel">
+            <summary>管理员审阅队列 · 候选仓库审阅</summary>
+            <div class="review-controls">
+              <input id="reviewTokenInput" type="password" placeholder="审阅 Token" autocomplete="off" />
+              <select id="reviewStatusSelect">
+                <option value="candidate">候选</option>
+                <option value="quarantine">观察区</option>
+                <option value="hidden,rejected">隐藏/拒绝</option>
+              </select>
+              <button id="loadReviewQueueBtn" class="ghost-btn" type="button">刷新队列</button>
+            </div>
+            <div id="reviewQueueStatus">输入审阅 Token 后刷新候选队列。</div>
+            <div id="reviewQueueList" class="review-list"></div>
+          </details>
         </div>
 
         <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
@@ -1973,8 +2147,17 @@ def make_index_html() -> str:
     const promptPreviewContent = document.getElementById("promptPreviewContent");
     const communityActions = document.getElementById("communityActions");
     const communitySource = document.getElementById("communitySource");
+    const communitySearchInput = document.getElementById("communitySearchInput");
+    const communitySearchBtn = document.getElementById("communitySearchBtn");
+    const communitySearchStatus = document.getElementById("communitySearchStatus");
+    const communitySearchList = document.getElementById("communitySearchList");
     const publishWorkBtn = document.getElementById("publishWorkBtn");
     const ratingButtons = Array.from(document.querySelectorAll(".rating-btn"));
+    const reviewTokenInput = document.getElementById("reviewTokenInput");
+    const reviewStatusSelect = document.getElementById("reviewStatusSelect");
+    const loadReviewQueueBtn = document.getElementById("loadReviewQueueBtn");
+    const reviewQueueStatus = document.getElementById("reviewQueueStatus");
+    const reviewQueueList = document.getElementById("reviewQueueList");
     const visionImageInput = document.getElementById("visionImageInput");
     const visionDropZone = document.getElementById("visionDropZone");
     const visionConfirmCard = document.getElementById("visionConfirmCard");
@@ -2304,23 +2487,123 @@ def make_index_html() -> str:
       communityActions.classList.add("visible");
       communitySource.textContent = message || "社区作品状态";
       publishWorkBtn.style.display = mode === "rendered" ? "" : "none";
-      ratingButtons.forEach((button) => button.style.display = communityWorkId ? "" : "none");
+      const canRate = Boolean(communityWorkId) && ["reused", "published", "featured"].includes(mode);
+      ratingButtons.forEach((button) => button.style.display = canRate ? "" : "none");
+    }}
+
+    function setCommunitySearchStatus(message, state = "") {{
+      communitySearchStatus.textContent = message || "";
+      if (state) {{
+        communitySearchStatus.dataset.state = state;
+      }} else {{
+        communitySearchStatus.removeAttribute("data-state");
+      }}
+    }}
+
+    function communityMetaLabel(key) {{
+      return {{
+        status: "状态",
+        reviewStatus: "审阅",
+        qualityScore: "质量分",
+        ratingAvg: "评分",
+        reuseCount: "复用"
+      }}[key] || key;
+    }}
+
+    function renderCommunitySearchResults(items, payload = {{}}) {{
+      communitySearchList.replaceChildren();
+      if (!items.length) {{
+        setCommunitySearchStatus("仓库里暂时没有可直接复用的作品，将继续生成新动画。", "warn");
+        return;
+      }}
+      setCommunitySearchStatus(`找到 ${{items.length}} 个可参考作品，优先复用高分或精选作品。`, "success");
+      items.forEach((item) => {{
+        const card = document.createElement("article");
+        card.className = "community-work-card";
+
+        const title = document.createElement("strong");
+        title.textContent = item.title || item.prompt || "未命名作品";
+
+        const prompt = document.createElement("div");
+        prompt.className = "community-work-prompt";
+        prompt.textContent = (item.prompt || "").slice(0, 180);
+
+        const meta = document.createElement("div");
+        meta.className = "review-meta";
+        ["status", "reviewStatus", "qualityScore", "ratingAvg", "reuseCount"].forEach((key) => {{
+          const value = item[key];
+          if (value === undefined || value === null || value === "") return;
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = `${{communityMetaLabel(key)}}: ${{value}}`;
+          meta.appendChild(tag);
+        }});
+
+        const actions = document.createElement("div");
+        actions.className = "community-work-actions";
+        const reuseBtn = document.createElement("button");
+        reuseBtn.type = "button";
+        reuseBtn.className = "ghost-btn";
+        reuseBtn.textContent = "复用这个动画";
+        reuseBtn.addEventListener("click", () => applyCommunityWork(item, {{
+          prompt: payload.prompt || promptInput.value.trim() || item.prompt || "",
+          sceneName: payload.sceneName || latestSceneName || "GeneratedScene"
+        }}));
+        actions.appendChild(reuseBtn);
+        const videoUrl = item.videoUrl || item.video_url || "";
+        if (videoUrl) {{
+          const openBtn = document.createElement("a");
+          openBtn.className = "ghost-btn";
+          openBtn.href = videoUrl;
+          openBtn.target = "_blank";
+          openBtn.rel = "noreferrer";
+          openBtn.textContent = "打开视频";
+          actions.appendChild(openBtn);
+        }}
+
+        card.appendChild(title);
+        card.appendChild(prompt);
+        card.appendChild(meta);
+        card.appendChild(actions);
+        communitySearchList.appendChild(card);
+      }});
+    }}
+
+    async function fetchCommunityWorks(query, limit = 6) {{
+      const cleanQuery = (query || "").trim();
+      if (!cleanQuery) {{
+        setCommunitySearchStatus("先输入题目或关键词，再搜索作品仓库。", "warn");
+        return [];
+      }}
+      const response = await fetch("/api/community/search?q=" + encodeURIComponent(cleanQuery) + "&limit=" + limit, {{
+        cache: "no-store"
+      }});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "仓库搜索失败");
+      return Array.isArray(data.items) ? data.items : [];
+    }}
+
+    async function searchCommunityRepository(payload = {{}}) {{
+      communitySearchBtn.disabled = true;
+      const query = communitySearchInput.value.trim() || payload.prompt || promptInput.value.trim();
+      setCommunitySearchStatus("正在搜索作品仓库...");
+      try {{
+        const items = await fetchCommunityWorks(query, 6);
+        renderCommunitySearchResults(items, payload);
+        return items;
+      }} catch (err) {{
+        setCommunitySearchStatus(err && err.message ? err.message : "仓库搜索失败，仍可直接生成。", "warn");
+        return [];
+      }} finally {{
+        communitySearchBtn.disabled = false;
+      }}
     }}
 
     async function searchCommunityWork(payload) {{
       if (payload.noRender || !payload.prompt) return null;
-      try {{
-        const response = await fetch("/api/community/search?q=" + encodeURIComponent(payload.prompt) + "&limit=1", {{
-          cache: "no-store"
-        }});
-        const data = await response.json();
-        if (!response.ok || !data.ok || !Array.isArray(data.items) || !data.items.length) {{
-          return null;
-        }}
-        return data.items[0];
-      }} catch (e) {{
-        return null;
-      }}
+      communitySearchInput.value = payload.prompt;
+      const items = await searchCommunityRepository(payload);
+      return items.length ? items[0] : null;
     }}
 
     async function applyCommunityWork(item, payload) {{
@@ -2340,7 +2623,8 @@ def make_index_html() -> str:
         videoCard.classList.add("visible");
         enterLearningMode();
       }}
-      setCommunityActions("reused", "已复用社区高分作品，可为它评分。");
+      setCommunityActions("reused", "已复用社区高分或精选作品，可为它评分。");
+      setCommunitySearchStatus("已从作品仓库复用这个动画。", "success");
       setStatus("已复用社区高分作品，无需重新生成和渲染。", "success");
       if (communityWorkId) {{
         fetch(`/api/community/works/${{communityWorkId}}/reuse`, {{
@@ -2371,12 +2655,13 @@ def make_index_html() -> str:
           }})
         }});
         const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "发布失败");
+        if (!response.ok || !data.ok) throw new Error(data.error || "提交失败");
         communityWorkId = data.work && data.work.workId ? data.work.workId : "";
-        setCommunityActions("published", "已发布到社区复用库，可继续评分。");
-        setStatus("已发布到社区复用库。", "success");
+        setCommunityActions("submitted", "已提交到候选仓库，审阅通过后进入社区复用库。");
+        setCommunitySearchStatus("已提交候选仓库，审阅通过后会出现在公开搜索里。", "success");
+        setStatus("已提交到候选仓库，审阅通过后进入社区复用库。", "success");
       }} catch (err) {{
-        setStatus(err && err.message ? err.message : "发布失败", "error");
+        setStatus(err && err.message ? err.message : "提交失败", "error");
       }} finally {{
         publishWorkBtn.disabled = false;
       }}
@@ -2395,6 +2680,113 @@ def make_index_html() -> str:
         setStatus("评分已保存，谢谢反馈。", "success");
       }} catch (err) {{
         setStatus(err && err.message ? err.message : "评分失败", "error");
+      }}
+    }}
+
+    function reviewDecisionLabel(decision) {{
+      return {{
+        approve: "通过公开",
+        feature: "设为精选",
+        quarantine: "退回观察",
+        hide: "隐藏",
+        reject: "拒绝"
+      }}[decision] || decision;
+    }}
+
+    function reviewToken() {{
+      const token = reviewTokenInput.value.trim();
+      if (token) localStorage.setItem("aegis.community.reviewToken", token);
+      return token;
+    }}
+
+    function setReviewStatus(message) {{
+      reviewQueueStatus.textContent = message;
+    }}
+
+    function renderReviewQueue(items) {{
+      reviewQueueList.replaceChildren();
+      if (!items.length) {{
+        setReviewStatus("当前状态下没有待处理作品。");
+        return;
+      }}
+      setReviewStatus(`待处理作品：${{items.length}} 个`);
+      items.forEach((item) => {{
+        const card = document.createElement("article");
+        card.className = "review-item";
+        const title = document.createElement("strong");
+        title.textContent = item.title || item.prompt || "未命名作品";
+        const prompt = document.createElement("div");
+        prompt.textContent = (item.prompt || "").slice(0, 180);
+        const meta = document.createElement("div");
+        meta.className = "review-meta";
+        ["status", "reviewStage", "reviewStatus", "qualityScore", "ratingAvg"].forEach((key) => {{
+          const value = item[key];
+          if (value === undefined || value === null || value === "") return;
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = `${{key}}: ${{value}}`;
+          meta.appendChild(tag);
+        }});
+        const actions = document.createElement("div");
+        actions.className = "review-actions";
+        ["approve", "feature", "quarantine", "hide", "reject"].forEach((decision) => {{
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "ghost-btn";
+          button.textContent = reviewDecisionLabel(decision);
+          button.addEventListener("click", () => reviewCommunityWork(item.workId || item.id, decision));
+          actions.appendChild(button);
+        }});
+        card.appendChild(title);
+        card.appendChild(prompt);
+        card.appendChild(meta);
+        card.appendChild(actions);
+        reviewQueueList.appendChild(card);
+      }});
+    }}
+
+    async function loadReviewQueue() {{
+      const token = reviewToken();
+      if (!token) {{
+        setReviewStatus("请先输入审阅 Token。");
+        return;
+      }}
+      loadReviewQueueBtn.disabled = true;
+      setReviewStatus("正在刷新候选队列...");
+      try {{
+        const status = encodeURIComponent(reviewStatusSelect.value || "candidate");
+        const response = await fetch(`/api/community/review/queue?status=${{status}}&limit=20&reviewToken=${{encodeURIComponent(token)}}`, {{
+          cache: "no-store"
+        }});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "刷新失败");
+        renderReviewQueue(Array.isArray(data.items) ? data.items : []);
+      }} catch (err) {{
+        setReviewStatus(err && err.message ? err.message : "刷新失败");
+      }} finally {{
+        loadReviewQueueBtn.disabled = false;
+      }}
+    }}
+
+    async function reviewCommunityWork(workId, decision) {{
+      const token = reviewToken();
+      if (!token || !workId) return;
+      try {{
+        const response = await fetch(`/api/community/works/${{workId}}/review`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            decision,
+            reviewToken: token,
+            reviewerLabel: "Aegis 管理员"
+          }})
+        }});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "审阅失败");
+        setReviewStatus(`已处理：${{reviewDecisionLabel(decision)}}`);
+        await loadReviewQueue();
+      }} catch (err) {{
+        setReviewStatus(err && err.message ? err.message : "审阅失败");
       }}
     }}
 
@@ -2509,7 +2901,7 @@ def make_index_html() -> str:
             videoPlayer.src = videoUrl;
             videoCard.classList.add("visible");
             enterLearningMode();
-            setCommunityActions("rendered", "视频已生成，可发布到社区复用库。");
+            setCommunityActions("rendered", "视频已生成，可提交入库审阅。");
             setStatus("视频渲染完成！", "success");
           }} else {{
             setStatus("渲染完成，但无法获取视频地址。", "warn");
@@ -2773,6 +3165,15 @@ def make_index_html() -> str:
       if (file) analyzeVisionFile(file);
     }});
 
+    communitySearchBtn.addEventListener("click", () => {{
+      searchCommunityRepository();
+    }});
+    communitySearchInput.addEventListener("keydown", (event) => {{
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      searchCommunityRepository();
+    }});
+
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
       const preset = activePreset();
@@ -2800,6 +3201,8 @@ def make_index_html() -> str:
       videoPlayer.load();
       clearAlignment();
       setCommunityActions();
+      communitySearchList.replaceChildren();
+      setCommunitySearchStatus("正在准备仓库检索...");
 
       const payload = {{
         provider: providerSelect.value,
@@ -2850,6 +3253,11 @@ def make_index_html() -> str:
     videoPlayer.addEventListener("loadedmetadata", updateActiveSegment);
     promptInput.addEventListener("input", updatePromptPreview);
     publishWorkBtn.addEventListener("click", publishCommunityWork);
+    reviewTokenInput.value = localStorage.getItem("aegis.community.reviewToken") || "";
+    loadReviewQueueBtn.addEventListener("click", loadReviewQueue);
+    reviewStatusSelect.addEventListener("change", () => {{
+      if (reviewTokenInput.value.trim()) loadReviewQueue();
+    }});
     ratingButtons.forEach((button) => {{
       button.addEventListener("click", () => rateCommunityWork(Number(button.dataset.rating || 0)));
     }});
@@ -3052,6 +3460,9 @@ def proxy_community_request(
     if route == "/api/community/search" and method == "GET":
         backend_path = "/community/search" + (f"?{query}" if query else "")
         return proxy_render_backend(backend_path, method="GET", timeout=15)
+    if route == "/api/community/review/queue" and method == "GET":
+        backend_path = "/community/review/queue" + (f"?{query}" if query else "")
+        return proxy_render_backend(backend_path, method="GET", timeout=20)
     if method != "POST":
         return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
     if route == "/api/community/works":
@@ -3060,12 +3471,12 @@ def proxy_community_request(
     if route.startswith(prefix):
         suffix = route[len(prefix):]
         parts = [part for part in suffix.split("/") if part]
-        if len(parts) == 2 and parts[1] in {"rating", "reuse"}:
+        if len(parts) == 2 and parts[1] in {"rating", "reuse", "review"}:
             return proxy_render_backend(
                 f"/community/works/{parts[0]}/{parts[1]}",
                 method="POST",
                 payload=payload or {},
-                timeout=15,
+                timeout=20,
             )
     return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
 
@@ -3136,6 +3547,11 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/community/search":
+            status, response = proxy_community_request(route, query=parsed.query)
+            self._send_json(status, response)
+            return
+
+        if route == "/api/community/review/queue":
             status, response = proxy_community_request(route, query=parsed.query)
             self._send_json(status, response)
             return

@@ -89,7 +89,7 @@ PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
 )
 PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS = int(
-    os.environ.get("PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "120"))
+    os.environ.get("PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "150"))
 )
 PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
@@ -1538,6 +1538,9 @@ def proxy_community_request(
     if route == "/api/community/search" and method == "GET":
         backend_path = "/community/search" + (f"?{query}" if query else "")
         return _proxy_to_render_backend(backend_path, method="GET", timeout=15)
+    if route == "/api/community/review/queue" and method == "GET":
+        backend_path = "/community/review/queue" + (f"?{query}" if query else "")
+        return _proxy_to_render_backend(backend_path, method="GET", timeout=20)
     if method != "POST":
         return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
     if route == "/api/community/works":
@@ -1546,12 +1549,12 @@ def proxy_community_request(
     if route.startswith(prefix):
         suffix = route[len(prefix):]
         parts = [part for part in suffix.split("/") if part]
-        if len(parts) == 2 and parts[1] in {"rating", "reuse"}:
+        if len(parts) == 2 and parts[1] in {"rating", "reuse", "review"}:
             return _proxy_to_render_backend(
                 f"/community/works/{parts[0]}/{parts[1]}",
                 method="POST",
                 payload=payload or {},
-                timeout=15,
+                timeout=20,
             )
     return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
 
@@ -1604,6 +1607,10 @@ class handler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, build_health_payload())
             return
         if route == "/api/community/search":
+            status, response = proxy_community_request(route, query=parsed.query)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/community/review/queue":
             status, response = proxy_community_request(route, query=parsed.query)
             self._send_json(HTTPStatus(status), response)
             return
