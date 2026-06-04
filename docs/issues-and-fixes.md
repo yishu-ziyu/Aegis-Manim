@@ -1,5 +1,31 @@
 # Aegis-Manim 问题与修复记录
 
+## 2026-05-28: Mimo Timeout 根治（P0-A）
+
+### 问题: Mimo 从 Vercel 访问不稳定，~50% 请求 timeout fallback
+
+**现象**: Mimo Direct trial 连续测试，约 50% 返回 `stable-template-fallback`，`模型失败类别：mimo:timeout`
+
+**根因分析**:
+- Vercel US-East → Mimo CN 网络延迟波动 40s~70s
+- 叠加 Mimo 代码生成 50s~60s
+- 总时间 55s~122s，原 timeout=120s 刚好在边缘
+- Vercel Function 默认 maxDuration 未显式配置
+
+**修复**:
+1. `api/index.py`: `PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS` 默认 "120" → "150"
+2. `vercel.json`: `functions["api/*.py"].maxDuration = 300`
+3. 部署 `dpl_GudJxiyL3hcgDjoWSH5kCiDy1aVx`
+
+**验证**: 连续 5 次 stress test 全部通过
+- 响应时间：27s, 47s, 41s, 101s, 32s
+- fallback 率：**0%**（之前 ~50%）
+- 全部返回 `model: "Mimo 编程试用"`，`codeFile: "vercel-generated-code"`
+
+**项目状态**: `Tasks/todo.md` P0-A 标记完成，`Tasks/review.md` Mimo 状态更新为 `production_verified`
+
+---
+
 ## 2026-05-28: Mimo 上线 + Kimi Code API 修复
 
 ### 问题 1: Kimi Code API 返回 `access` 错误

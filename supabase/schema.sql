@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS community_works (
     render_job_id text REFERENCES render_jobs(job_id) ON DELETE SET NULL,
     author_label text,
     tags text[] DEFAULT '{}',
-    status text NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'hidden', 'rejected')),
+    status text NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate', 'published', 'featured', 'quarantine', 'hidden', 'rejected')),
     rating_avg numeric(3,2) NOT NULL DEFAULT 0,
     rating_count int NOT NULL DEFAULT 0,
     reuse_count int NOT NULL DEFAULT 0,
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS community_work_ratings (
 CREATE TABLE IF NOT EXISTS community_work_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     work_id uuid NOT NULL REFERENCES community_works(id) ON DELETE CASCADE,
-    event_type text NOT NULL CHECK (event_type IN ('reuse')),
+    event_type text NOT NULL CHECK (event_type IN ('reuse', 'submit', 'review', 'promote', 'demote')),
     query text,
     metadata jsonb DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now()
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS community_work_events (
 
 CREATE INDEX IF NOT EXISTS idx_community_works_quality
     ON community_works (quality_score DESC, rating_avg DESC, reuse_count DESC, created_at DESC)
-    WHERE status = 'published';
+    WHERE status IN ('published', 'featured');
 CREATE INDEX IF NOT EXISTS idx_community_works_prompt_normalized ON community_works USING gin (prompt_normalized gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_community_work_ratings_work_id ON community_work_ratings(work_id);
 CREATE INDEX IF NOT EXISTS idx_community_work_events_work_id ON community_work_events(work_id);
@@ -151,7 +151,7 @@ CREATE POLICY allow_select_logs ON job_logs
 -- 社区表：浏览器不直接写入；公开读仅限已发布作品，写入由 Render service-role API 执行
 CREATE POLICY allow_select_published_community_works ON community_works
     FOR SELECT TO anon, authenticated
-    USING (status = 'published');
+    USING (status IN ('published', 'featured'));
 
 -- 创建一个函数用于清理旧任务（可选，通过 pg_cron 调用）
 CREATE OR REPLACE FUNCTION cleanup_old_render_jobs(older_than_days int DEFAULT 7)

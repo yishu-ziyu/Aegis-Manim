@@ -90,6 +90,13 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
         await send_json(send, HTTPStatus(status), response)
         return
 
+    if method == "GET" and path == "/api/community/review/queue":
+        raw_query = scope.get("query_string", b"")
+        query = raw_query.decode("utf-8", "replace") if isinstance(raw_query, bytes) else str(raw_query or "")
+        status, response = proxy_community_request(path, query=query)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
     if method == "GET" and path.startswith("/api/render/status/"):
         job_id = path.split("/api/render/status/", 1)[-1]
         status, response = _proxy_to_render_backend(f"/status/{job_id}")

@@ -70,6 +70,9 @@ def test_schema_defines_community_work_repository_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS community_work_ratings" in sql
     assert "CREATE TABLE IF NOT EXISTS community_work_events" in sql
     assert "idx_community_works_quality" in sql
+    assert "DEFAULT 'candidate'" in sql
+    assert "status IN ('candidate', 'published', 'featured', 'quarantine', 'hidden', 'rejected')" in sql
+    assert "status IN ('published', 'featured')" in sql
     assert "UNIQUE (work_id, rater_key)" in sql
     assert "ALTER TABLE community_works ENABLE ROW LEVEL SECURITY" in sql
 
@@ -80,8 +83,21 @@ def test_vercel_rewrites_include_community_proxy_routes() -> None:
 
     assert rewrites["/api/vision/analyze"] == "/api/index"
     assert rewrites["/api/community/search"] == "/api/index"
+    assert rewrites["/api/community/review/queue"] == "/api/index"
     assert rewrites["/api/community/works"] == "/api/index"
     assert rewrites["/api/community/works/(.*)"] == "/api/index"
+
+
+def test_economics_maturity_benchmark_captures_slutsky_hicks_case() -> None:
+    benchmark = (PROJECT_ROOT / "docs" / "specs" / "economics-maturity-benchmark.md").read_text(encoding="utf-8")
+
+    assert "Slutsky and Hicks Decomposition" in benchmark
+    assert "A = (6, 6)" in benchmark
+    assert "C = (0.6, 9.6)" in benchmark
+    assert "S = (1.5, 24)" in benchmark
+    assert "H = (0.96, 15.36)" in benchmark
+    assert "Slutsky compensation line `y=30-4x`" in benchmark
+    assert "Hicks compensation line `y=19.2-4x`" in benchmark
 
 
 def test_vercel_function_bundle_excludes_local_heavy_directories() -> None:

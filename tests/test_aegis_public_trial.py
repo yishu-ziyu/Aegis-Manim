@@ -73,9 +73,11 @@ class AegisPublicTrialTest(unittest.TestCase):
         self._old_kimi = os.environ.get("KIMI_CODE_API_KEY")
         self._old_deepseek = os.environ.get("DEEPSEEK_API_KEY")
         self._old_minimax = os.environ.get("MINIMAX_API_KEY")
+        self._old_mimo = os.environ.get("MIMO_API_KEY")
         os.environ.pop("KIMI_CODE_API_KEY", None)
         os.environ.pop("DEEPSEEK_API_KEY", None)
         os.environ.pop("MINIMAX_API_KEY", None)
+        os.environ.pop("MIMO_API_KEY", None)
 
     def tearDown(self) -> None:
         if self._old_kimi is None:
@@ -90,13 +92,17 @@ class AegisPublicTrialTest(unittest.TestCase):
             os.environ.pop("MINIMAX_API_KEY", None)
         else:
             os.environ["MINIMAX_API_KEY"] = self._old_minimax
+        if self._old_mimo is None:
+            os.environ.pop("MIMO_API_KEY", None)
+        else:
+            os.environ["MIMO_API_KEY"] = self._old_mimo
 
     def test_public_config_exposes_only_safe_trial_choices(self) -> None:
         config = gateway.public_provider_config()
         providers = config["providers"]
 
         assert config["defaultProvider"] == "trial-kimi-priority"
-        assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct"}
+        assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct", "trial-mimo-direct"}
         assert providers["trial-kimi-priority"]["serverManaged"] is True
         assert providers["trial-kimi-priority"]["requiresApiKey"] is False
         assert providers["trial-kimi-priority"]["hideApiKey"] is True
@@ -112,7 +118,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         diagnostics = payload["trialProviders"]
 
         assert diagnostics["defaultProvider"] == "trial-kimi-priority"
-        assert diagnostics["configured"] == {"kimiCode": True, "deepSeek": True, "miniMax": True}
+        assert diagnostics["configured"] == {"kimiCode": True, "deepSeek": True, "miniMax": True, "mimo": False}
         assert diagnostics["timeouts"]["kimi"] == gateway.PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS
         assert diagnostics["timeouts"]["deepSeek"] == gateway.PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
         assert "server-kimi-key" not in json.dumps(payload)
@@ -953,6 +959,37 @@ class AegisPublicTrialTest(unittest.TestCase):
             ("/community/works/work-1/rating", "POST", {"rating": 5, "raterKey": "anon-1"})
         ]
 
+    def test_community_review_proxy_forwards_queue_and_decision(self) -> None:
+        calls: list[tuple[str, str, dict[str, object] | None, int]] = []
+
+        def fake_proxy(path, method="GET", payload=None, timeout=15):
+            calls.append((path, method, payload, timeout))
+            return 200, {"ok": True, "items": []}
+
+        original = gateway._proxy_to_render_backend
+        gateway._proxy_to_render_backend = fake_proxy
+        try:
+            queue_status, queue_response = gateway.proxy_community_request(
+                "/api/community/review/queue",
+                query="status=candidate&limit=20&reviewToken=secret",
+            )
+            review_status, review_response = gateway.proxy_community_request(
+                "/api/community/works/work-1/review",
+                method="POST",
+                payload={"decision": "approve", "reviewToken": "secret"},
+            )
+        finally:
+            gateway._proxy_to_render_backend = original
+
+        assert queue_status == 200
+        assert queue_response["ok"] is True
+        assert review_status == 200
+        assert review_response["ok"] is True
+        assert calls == [
+            ("/community/review/queue?status=candidate&limit=20&reviewToken=secret", "GET", None, 20),
+            ("/community/works/work-1/review", "POST", {"decision": "approve", "reviewToken": "secret"}, 20),
+        ]
+
     def test_vercel_asgi_forwards_community_search_query(self) -> None:
         calls: list[tuple[str, str, str, dict[str, object] | None]] = []
 
@@ -1002,6 +1039,32 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert status == 200
         assert response["ok"] is True
         assert calls == [("/api/community/works/work-1/reuse", "POST", {"userKey": "anon-1"})]
+
+    def test_vercel_asgi_forwards_community_review_queue(self) -> None:
+        calls: list[tuple[str, str, str, dict[str, object] | None]] = []
+
+        def fake_community_proxy(route, query="", method="GET", payload=None):
+            calls.append((route, query, method, payload))
+            return 200, {"ok": True, "items": []}
+
+        original = vercel_asgi.proxy_community_request
+        vercel_asgi.proxy_community_request = fake_community_proxy
+        try:
+            status, response = asyncio.run(
+                call_asgi_app(
+                    "GET",
+                    "/api/community/review/queue",
+                    query_string=b"status=candidate&reviewToken=secret",
+                )
+            )
+        finally:
+            vercel_asgi.proxy_community_request = original
+
+        assert status == 200
+        assert response["ok"] is True
+        assert calls == [
+            ("/api/community/review/queue", "status=candidate&reviewToken=secret", "GET", None)
+        ]
 
     def test_download_proxy_extracts_safe_video_redirect_url(self) -> None:
         url = "https://example.supabase.co/storage/v1/object/public/manim-videos/job/video.mp4"

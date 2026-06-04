@@ -59,10 +59,16 @@ from supabase_client import (
     list_jobs_by_status as supa_list_jobs_by_status,
 )
 from supabase_client import (
+    list_community_review_queue as supa_list_community_review_queue,
+)
+from supabase_client import (
     rate_community_work as supa_rate_community_work,
 )
 from supabase_client import (
     record_community_reuse as supa_record_community_reuse,
+)
+from supabase_client import (
+    review_community_work as supa_review_community_work,
 )
 from supabase_client import (
     search_community_works as supa_search_community_works,
@@ -80,6 +86,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 # ---------------------------------------------------------------------------
 
 API_KEY = os.environ.get("MANIM_API_KEY", "dev-key-change-in-production")
+COMMUNITY_REVIEW_TOKEN = os.environ.get("AEGIS_COMMUNITY_REVIEW_TOKEN", os.environ.get("COMMUNITY_REVIEW_TOKEN", "")).strip()
 MAX_CODE_SIZE = 100 * 1024  # 100 KB
 DEFAULT_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT_SECONDS", "180"))
 SEGMENT_RENDER_THRESHOLD = int(os.environ.get("MANIM_SEGMENT_RENDER_THRESHOLD", "10"))
@@ -199,6 +206,25 @@ def require_api_key(view_func):
         return view_func(*args, **kwargs)
 
     return wrapper
+
+
+def _review_token_from_request(data: dict[str, Any] | None = None) -> str:
+    if data is None:
+        data = {}
+    return (
+        request.headers.get("X-Review-Token")
+        or request.args.get("reviewToken")
+        or request.args.get("review_token")
+        or str(data.get("reviewToken") or data.get("review_token") or "")
+    ).strip()
+
+
+def _require_review_token(data: dict[str, Any] | None = None) -> tuple[bool, tuple | None]:
+    if not COMMUNITY_REVIEW_TOKEN:
+        return False, (jsonify({"ok": False, "error": "Community review is not configured."}), 503)
+    if _review_token_from_request(data) != COMMUNITY_REVIEW_TOKEN:
+        return False, (jsonify({"ok": False, "error": "Unauthorized review token."}), 401)
+    return True, None
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +399,7 @@ def _get_job(job_id: str) -> RenderJob | None:
 
 
 def _community_work_payload(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     return {
         "workId": row.get("id"),
         "title": row.get("title"),
@@ -382,6 +409,10 @@ def _community_work_payload(row: dict[str, Any]) -> dict[str, Any]:
         "videoUrl": row.get("video_url"),
         "renderJobId": row.get("render_job_id"),
         "tags": row.get("tags") or [],
+        "status": row.get("status") or metadata.get("lifecycle_status") or "candidate",
+        "reviewStage": metadata.get("review_stage") or metadata.get("community_review_stage"),
+        "reviewStatus": metadata.get("review_status") or metadata.get("community_review_status"),
+        "repositoryDecision": metadata.get("repository_decision") or metadata.get("community_repository_decision"),
         "ratingAvg": row.get("rating_avg") or 0,
         "ratingCount": row.get("rating_count") or 0,
         "reuseCount": row.get("reuse_count") or 0,
@@ -1300,6 +1331,20 @@ def community_publish_work() -> tuple:
         return jsonify({"ok": False, "error": "videoUrl must be a Supabase manim-videos MP4 from this project."}), 400
     tags_raw = data.get("tags") or []
     tags = [str(tag).strip()[:40] for tag in tags_raw if str(tag).strip()][:8] if isinstance(tags_raw, list) else []
+    review_metadata = {
+        "source": "aegis-web",
+        "client_ip": request.remote_addr,
+        "review_stage": "candidate",
+        "review_status": "pending",
+        "repository_decision": "pending_review",
+        "review_checklist": [
+            "answers_original_question",
+            "economic_reasoning_is_coherent",
+            "visual_steps_are_clear",
+            "render_completed_successfully",
+        ],
+        "submitted_at": datetime.now(UTC).isoformat(),
+    }
     row = supa_insert_community_work(
         title=title,
         prompt=prompt,
@@ -1309,11 +1354,52 @@ def community_publish_work() -> tuple:
         render_job_id=render_job_id,
         author_label=_bounded_text(data.get("authorLabel", data.get("author_label")), 80) or None,
         tags=tags,
-        metadata={"source": "aegis-web", "client_ip": request.remote_addr},
+        metadata=review_metadata,
+        status="candidate",
     )
     if row is None:
-        return jsonify({"ok": False, "error": "Failed to publish community work."}), 500
+        return jsonify({"ok": False, "error": "Failed to submit community work."}), 500
     return jsonify({"ok": True, "work": _community_work_payload(row)}), 201
+
+
+@app.route("/community/review/queue", methods=["GET"])
+@require_api_key
+def community_review_queue() -> tuple:
+    ok, error = _require_review_token()
+    if not ok:
+        return error
+    if not _use_supabase():
+        return jsonify({"ok": False, "error": "Community repository is not configured."}), 503
+    status = _bounded_text(request.args.get("status"), 120) or "candidate"
+    try:
+        limit = int(request.args.get("limit", "20"))
+    except (TypeError, ValueError):
+        limit = 20
+    rows = supa_list_community_review_queue(status=status, limit=max(1, min(limit, 50)))
+    return jsonify({"ok": True, "items": [_community_work_payload(row) for row in rows]}), 200
+
+
+@app.route("/community/works/<work_id>/review", methods=["POST"])
+@require_api_key
+def community_review_work(work_id: str) -> tuple:
+    data = request.get_json(force=True, silent=True) or {}
+    ok, error = _require_review_token(data)
+    if not ok:
+        return error
+    if not _use_supabase():
+        return jsonify({"ok": False, "error": "Community repository is not configured."}), 503
+    decision = _bounded_text(data.get("decision"), 40).strip().lower()
+    if decision not in {"approve", "publish", "feature", "quarantine", "hide", "reject"}:
+        return jsonify({"ok": False, "error": "decision must be approve, feature, quarantine, hide, or reject."}), 400
+    row = supa_review_community_work(
+        _bounded_text(work_id, 80),
+        decision,
+        reviewer_label=_bounded_text(data.get("reviewerLabel", data.get("reviewer_label")), 80) or None,
+        note=_bounded_text(data.get("note"), 500) or None,
+    )
+    if row is None:
+        return jsonify({"ok": False, "error": "Failed to review community work."}), 500
+    return jsonify({"ok": True, "work": _community_work_payload(row)}), 200
 
 
 @app.route("/community/works/<work_id>/rating", methods=["POST"])
