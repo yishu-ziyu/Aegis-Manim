@@ -1143,43 +1143,6 @@ def generate_code_with_trial_plan(
             "error": "公开内测页只支持内置免费试用模型。",
             "requestId": request_id,
         }
-    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_two_part_pricing_prompt(prompt):
-        return build_trial_fallback_response(
-            trial_provider_id=trial_provider_id,
-            plan=plan,
-            prompt=prompt,
-            scene_name=scene_name,
-            request_id=request_id,
-            lead_warning="已识别为考研经济学二部定价题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
-        )
-    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_standard_monopoly_prompt(prompt):
-        return build_trial_fallback_response(
-            trial_provider_id=trial_provider_id,
-            plan=plan,
-            prompt=prompt,
-            scene_name=scene_name,
-            request_id=request_id,
-            lead_warning="已识别为考研经济学垄断定价题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
-        )
-    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_consumer_choice_prompt(prompt):
-        return build_trial_fallback_response(
-            trial_provider_id=trial_provider_id,
-            plan=plan,
-            prompt=prompt,
-            scene_name=scene_name,
-            request_id=request_id,
-            lead_warning="已识别为考研经济学消费者选择题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
-        )
-    if trial_provider_id == PUBLIC_TRIAL_DEFAULT_PROVIDER and is_tax_wedge_prompt(prompt):
-        return build_trial_fallback_response(
-            trial_provider_id=trial_provider_id,
-            plan=plan,
-            prompt=prompt,
-            scene_name=scene_name,
-            request_id=request_id,
-            lead_warning="已识别为考研经济学税收楔子题，优先使用中文稳定模板，避免模型长时间生成或跑题。",
-        )
-
     generation_prompt = trial_generation_prompt(prompt)
     skipped: list[str] = []
     failed_categories: list[str] = []

@@ -540,66 +540,30 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert "_AEGIS_CJK_FONT" in patched
         assert any("CJK-capable" in note for note in notes)
 
-    def test_default_trial_uses_fast_stable_template_for_two_part_pricing(self) -> None:
-        def fail_if_called(**kwargs: object) -> tuple[str, object, str]:
-            raise AssertionError("two-part pricing default path should not wait for external model calls")
+    def test_default_trial_calls_minimax_m3_before_topic_fallbacks(self) -> None:
+        calls: list[dict[str, object]] = []
 
-        original = gateway.generate_code_with_llm
-        gateway.generate_code_with_llm = fail_if_called
-        try:
-            status, response = gateway.generate_manim_code_for_gateway(
-                {
-                    "prompt": (
-                        "考研经济学题：比较普通线性垄断定价与二部定价，"
-                        "说明固定入场费如何提取消费者剩余并消除无谓损失。"
-                    ),
-                    "provider": "trial-minimax-direct",
-                    "sceneName": "GeneratedScene",
-                }
+        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
+            calls.append(kwargs)
+            provider = gateway.resolve_provider(str(kwargs["provider_id"]))
+            return (
+                "from manim import *\nclass GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                "        title = Text('消费者选择与价格效应', font_size=28)\n"
+                "        axes = Axes(x_range=[0, 10, 1], y_range=[0, 10, 1])\n"
+                "        budget = Line(axes.c2p(0, 8), axes.c2p(8, 0))\n"
+                "        indiff = axes.plot(lambda x: 9 / (x + 1), x_range=[1, 8])\n"
+                "        point_a = Dot(axes.c2p(2, 6)); point_b = Dot(axes.c2p(4, 4)); point_c = Dot(axes.c2p(6, 2))\n"
+                "        label_a = Text('A'); label_b = Text('B'); label_c = Text('C')\n"
+                "        label = Text('A点 B点 C点 预算线、无差异曲线、补偿预算线、替代效应、收入效应', font_size=22)\n"
+                "        self.play(Create(axes), Create(budget), Create(indiff), Write(title), Write(label), Write(label_a), Write(label_b), Write(label_c))\n",
+                provider,
+                "hidden",
             )
-        finally:
-            gateway.generate_code_with_llm = original
-
-        assert status == 200
-        assert response["model"] == "stable-template-fallback"
-        assert "二部定价" in str(response["code"])
-        assert "税收楔子" not in str(response["code"])
-        assert "优先使用中文稳定模板" in "\n".join(response["warnings"])
-
-    def test_default_trial_uses_fast_stable_template_for_standard_monopoly(self) -> None:
-        def fail_if_called(**kwargs: object) -> tuple[str, object, str]:
-            raise AssertionError("standard-monopoly default path should not wait for external model calls")
 
         original = gateway.generate_code_with_llm
-        gateway.generate_code_with_llm = fail_if_called
-        try:
-            status, response = gateway.generate_manim_code_for_gateway(
-                {
-                    "prompt": (
-                        "考研经济学题：解释垄断定价。请画出需求曲线D、边际收益MR、"
-                        "边际成本MC、垄断利润和无谓损失DWL。"
-                    ),
-                    "provider": "trial-minimax-direct",
-                    "sceneName": "GeneratedScene",
-                }
-            )
-        finally:
-            gateway.generate_code_with_llm = original
-
-        assert status == 200
-        assert response["model"] == "stable-template-fallback"
-        assert "垄断定价与福利损失" in str(response["code"])
-        assert "边际收益 MR" in str(response["code"])
-        assert "边际成本 MC" in str(response["code"])
-        assert "税收楔子" not in str(response["code"])
-        assert "优先使用中文稳定模板" in "\n".join(response["warnings"])
-
-    def test_default_trial_uses_fast_stable_template_for_consumer_choice(self) -> None:
-        def fail_if_called(**kwargs: object) -> tuple[str, object, str]:
-            raise AssertionError("consumer-choice default path should not wait for external model calls")
-
-        original = gateway.generate_code_with_llm
-        gateway.generate_code_with_llm = fail_if_called
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
@@ -607,7 +571,6 @@ class AegisPublicTrialTest(unittest.TestCase):
                         "考研经济学题：消费者选择与价格效应。请画预算线、无差异曲线、"
                         "补偿预算线，并解释替代效应和收入效应。"
                     ),
-                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -615,39 +578,10 @@ class AegisPublicTrialTest(unittest.TestCase):
             gateway.generate_code_with_llm = original
 
         assert status == 200
-        assert response["model"] == "stable-template-fallback"
-        assert "消费者选择与价格效应" in str(response["code"])
-        assert "替代效应" in str(response["code"])
-        assert "收入效应" in str(response["code"])
-        assert "税收楔子" not in str(response["code"])
-        assert "优先使用中文稳定模板" in "\n".join(response["warnings"])
-
-    def test_default_trial_uses_fast_stable_template_for_tax_wedge(self) -> None:
-        def fail_if_called(**kwargs: object) -> tuple[str, object, str]:
-            raise AssertionError("tax-wedge default path should not wait for external model calls")
-
-        original = gateway.generate_code_with_llm
-        gateway.generate_code_with_llm = fail_if_called
-        try:
-            status, response = gateway.generate_manim_code_for_gateway(
-                {
-                    "prompt": (
-                        "考研经济学题：解释从量税如何形成税收楔子，"
-                        "标出买方价格、卖方价格、税收收入和无谓损失。"
-                    ),
-                    "provider": "trial-minimax-direct",
-                    "sceneName": "GeneratedScene",
-                }
-            )
-        finally:
-            gateway.generate_code_with_llm = original
-
-        assert status == 200
-        assert response["model"] == "stable-template-fallback"
-        assert "税收楔子" in str(response["code"])
-        assert "税收收入" in str(response["code"])
-        assert "二部定价" not in str(response["code"])
-        assert "优先使用中文稳定模板" in "\n".join(response["warnings"])
+        assert response["provider"] == "trial-minimax-direct"
+        assert response["model"] == "MiniMax M3 试用"
+        assert calls[0]["provider_id"] == "minimax-coding-cn"
+        assert calls[0]["model"] == "MiniMax-M3"
 
     def test_tax_wedge_trial_falls_back_when_model_misses_required_economics_objects(self) -> None:
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
