@@ -86,6 +86,7 @@ def test_vercel_rewrites_include_community_proxy_routes() -> None:
     assert rewrites["/api/community/review/queue"] == "/api/index"
     assert rewrites["/api/community/works"] == "/api/index"
     assert rewrites["/api/community/works/(.*)"] == "/api/index"
+    assert rewrites["/api/community/(.*)"] == "/api/index"
 
 
 def test_economics_maturity_benchmark_captures_slutsky_hicks_case() -> None:
