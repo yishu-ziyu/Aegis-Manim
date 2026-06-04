@@ -56,13 +56,14 @@ def main() -> int:
     assert health["version"] == APP_VERSION
 
     html = build_index_html()
-    assert "Aegis Studio Web" in html
+    assert "Aegis 经济学动画工作台" in html
     assert "/api/health" in html
-    assert "Generate & Render" in html
+    assert "生成动画草稿" in html
     assert "Vercel 云端只展示能力入口" in html
-    assert "内测免费试用：Aegis 后端托管模型额度" in html
-    assert "免费试用 · Kimi 优先" in html
-    assert "免费试用 · MiniMax 稳定" in html
+    assert "API Key 只用于本次生成，不写入仓库。" in html
+    assert "MiniMax M3 与 Mimo 编程" in html
+    assert "免费试用 · Kimi 优先" not in html
+    assert "免费试用 · MiniMax M3" in html
     assert "Kimi Code API" not in html
     assert "Moonshot Kimi API" not in html
     assert "Codex CLI 登录态" not in html
@@ -80,11 +81,12 @@ def main() -> int:
     assert public_config["defaultProvider"] == "trial-minimax-direct"
     assert public_config["providerStorageKey"] == "aegis.provider.public.v4"
     assert "aegis.provider.public.v4" in html
-    assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct"}
-    assert providers["trial-kimi-priority"]["serverManaged"] is True
-    assert providers["trial-kimi-priority"]["hideApiKey"] is True
-    assert "baseURL" not in providers["trial-kimi-priority"]
-    assert "apiType" not in providers["trial-kimi-priority"]
+    assert set(providers) == {"trial-minimax-direct", "trial-mimo-direct"}
+    assert providers["trial-minimax-direct"]["serverManaged"] is True
+    assert providers["trial-minimax-direct"]["hideApiKey"] is True
+    assert providers["trial-minimax-direct"]["defaultModel"] == "MiniMax M3 试用"
+    assert "baseURL" not in providers["trial-minimax-direct"]
+    assert "apiType" not in providers["trial-minimax-direct"]
 
     status, missing_prompt = generate_manim_code_for_gateway({"prompt": ""})
     assert status == 400

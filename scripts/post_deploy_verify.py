@@ -23,13 +23,13 @@ DEFAULT_ENDPOINT = "https://manim.yishuziyu.cn"
 
 # Providers that must return generated code (not fallback)
 REQUIRED_TRIAL_PROVIDERS = (
-    "trial-kimi-priority",
     "trial-minimax-direct",
     "trial-mimo-direct",
 )
 
 # Providers that are expected to fail with a specific error
 EXPECTED_FAILURES = {
+    "trial-kimi-priority": "公开内测页只支持内置免费试用模型",
     "trial-deepseek-direct": "公开内测页只支持内置免费试用模型",
 }
 

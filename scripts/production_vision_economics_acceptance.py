@@ -13,7 +13,7 @@ from urllib import error
 
 
 DEFAULT_BASE_URL = "https://manim.yishuziyu.cn"
-DEFAULT_PROVIDER = "trial-kimi-priority"
+DEFAULT_PROVIDER = "trial-minimax-direct"
 RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
 ECONOMICS_MARKERS = (
     "供给",
