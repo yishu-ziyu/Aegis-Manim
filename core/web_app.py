@@ -947,10 +947,10 @@ def make_index_html() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Aegis Studio Web</title>
+  <title>Aegis 可视化工作台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet" />
   <script>
     window.MathJax = {{
       startup: {{ typeset: false }},
@@ -961,23 +961,26 @@ def make_index_html() -> str:
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <style>
     :root {{
-      --bg: #0f0f0f;
-      --bg-2: #161616;
-      --bg-3: #1c1c1c;
-      --fg: #d8d4cf;
-      --fg-bright: #e8e4df;
-      --muted: #6b6560;
-      --muted-2: #4a4540;
-      --accent: #5a8a7a;
-      --accent-2: #7a7a6a;
-      --accent-3: #6a7a8a;
-      --danger: #8a5a5a;
-      --ok: #5a7a6a;
-      --code-bg: #13181f;
-      --border: #252525;
-      --border-light: #2e2e2e;
-      --pixel: #d8d4cf;
-      --radius: 4px;
+      --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", Georgia, serif;
+      --sans: var(--serif);
+      --mono: "JetBrains Mono", "SF Mono", Consolas, "Noto Serif SC", monospace;
+      --bg: #f5f4ed;
+      --bg-2: #faf9f5;
+      --bg-3: #e8e6dc;
+      --fg: #141413;
+      --fg-bright: #141413;
+      --muted: #6b6a64;
+      --muted-2: #504e49;
+      --accent: #1B365D;
+      --accent-2: #2D5A8A;
+      --accent-3: #3d3d3a;
+      --danger: #8a4f3d;
+      --ok: #3f6b50;
+      --code-bg: #141413;
+      --border: #e8e6dc;
+      --border-light: #d6d2c4;
+      --pixel: #1B365D;
+      --radius: 8px;
       --speed: 200ms;
     }}
 
@@ -986,24 +989,25 @@ def make_index_html() -> str:
     body {{
       background: var(--bg);
       color: var(--fg);
-      font-family: 'Inter', -apple-system, sans-serif;
+      font-family: var(--serif);
       font-size: 14px;
       line-height: 1.55;
+      letter-spacing: 0.1pt;
       min-height: 100vh;
       overflow-x: hidden;
     }}
 
-    /* subtle pixel grid */
+    /* subtle paper grain */
     body::before {{
       content: '';
       position: fixed;
       inset: 0;
       pointer-events: none;
-      opacity: 0.25;
+      opacity: 0.5;
       background-image:
-        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-      background-size: 8px 8px;
+        linear-gradient(#f9f8f2 1px, transparent 1px),
+        linear-gradient(90deg, #eeece2 1px, transparent 1px);
+      background-size: 32px 32px;
       z-index: 0;
     }}
 
@@ -1011,11 +1015,11 @@ def make_index_html() -> str:
     .shell {{
       position: relative;
       z-index: 1;
-      width: min(1280px, 95vw);
-      margin: 28px auto 40px;
+      width: min(1180px, 94vw);
+      margin: 34px auto 44px;
       display: grid;
-      gap: 20px;
-      grid-template-columns: 1.05fr 0.95fr;
+      gap: 24px;
+      grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
       animation: shell-in 420ms ease-out both;
     }}
 
@@ -1029,8 +1033,10 @@ def make_index_html() -> str:
     .panel {{
       background: var(--bg-2);
       border: 1px solid var(--border);
+      border-radius: var(--radius);
       overflow: hidden;
       position: relative;
+      box-shadow: 0 12px 36px rgba(20, 20, 19, 0.06);
     }}
 
     .panel::after {{
@@ -1038,49 +1044,52 @@ def make_index_html() -> str:
       position: absolute;
       inset: 0;
       pointer-events: none;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+      box-shadow: inset 0 0 0 1px rgba(27,54,93,0.025);
     }}
 
     /* ── Hero ── */
     .hero {{
-      padding: 16px 22px 12px;
+      padding: 24px 28px 18px;
       border-bottom: 1px solid var(--border);
-      background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent);
+      border-left: 4px solid var(--accent);
+      background: var(--bg-2);
       position: relative;
     }}
 
     .hero h1 {{
-      margin: 0 0 4px;
-      font-size: 1.25rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
+      margin: 0 0 8px;
+      font-size: 1.9rem;
+      font-weight: 500;
+      line-height: 1.18;
+      letter-spacing: 0;
       color: var(--fg-bright);
     }}
 
     .hero p {{
       margin: 0;
       color: var(--muted);
-      font-size: 0.84rem;
-      max-width: 42ch;
-      line-height: 1.4;
+      font-size: 0.95rem;
+      max-width: 38ch;
+      line-height: 1.55;
     }}
 
     .hero small {{
       display: inline-flex;
-      margin-top: 6px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.68rem;
-      padding: 3px 6px;
-      color: var(--muted);
-      background: var(--bg-3);
-      border: 1px dashed var(--border-light);
+      margin-top: 12px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 4px 8px;
+      color: var(--accent);
+      background: #EEF2F7;
+      border: 1px solid #E4ECF5;
+      border-radius: 4px;
     }}
 
     /* ── Form ── */
     .form-wrap {{
-      padding: 16px 22px 18px;
+      padding: 18px 28px 26px;
       display: grid;
-      gap: 10px;
+      gap: 14px;
     }}
 
     .field {{
@@ -1094,9 +1103,9 @@ def make_index_html() -> str:
 
     label {{
       font-size: 0.8rem;
-      font-family: 'JetBrains Mono', monospace;
-      color: var(--muted);
-      letter-spacing: 0.3px;
+      font-family: var(--mono);
+      color: var(--accent);
+      letter-spacing: 0.5px;
       text-transform: uppercase;
     }}
 
@@ -1111,10 +1120,10 @@ def make_index_html() -> str:
       border: 1px solid var(--border);
       border-radius: var(--radius);
       font: inherit;
-      background: var(--bg);
+      background: #fffefa;
       color: var(--fg-bright);
-      padding: 8px 10px;
-      transition: border-color var(--speed);
+      padding: 10px 12px;
+      transition: border-color var(--speed), box-shadow var(--speed), background var(--speed);
       outline: none;
     }}
 
@@ -1126,20 +1135,22 @@ def make_index_html() -> str:
 
     input:focus, select:focus, textarea:focus {{
       border-color: var(--accent);
+      box-shadow: 0 0 0 3px #E4ECF5;
+      background: #ffffff;
     }}
 
     .vision-drop-zone {{
       border: 1px dashed var(--border);
       border-radius: var(--radius);
-      background: var(--bg);
-      padding: 12px;
+      background: #fffefa;
+      padding: 14px;
       display: grid;
       gap: 8px;
       color: var(--muted);
     }}
     .vision-drop-zone.drag-over {{
       border-color: var(--accent);
-      background: var(--bg-2);
+      background: #EEF2F7;
     }}
     .vision-drop-zone input {{
       padding: 0;
@@ -1151,7 +1162,7 @@ def make_index_html() -> str:
       border: 1px solid var(--border-light);
       border-radius: var(--radius);
       background: var(--bg-2);
-      padding: 12px;
+      padding: 14px;
       gap: 10px;
     }}
     .vision-confirm-card.visible {{
@@ -1177,7 +1188,7 @@ def make_index_html() -> str:
       display: none;
       border: 1px dashed var(--border-light);
       border-radius: var(--radius);
-      background: var(--bg);
+      background: #fffefa;
       padding: 10px 12px;
       color: var(--fg);
       font-size: 0.84rem;
@@ -1188,17 +1199,17 @@ def make_index_html() -> str:
       display: block;
       margin-bottom: 6px;
       color: var(--accent);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 0.7rem;
       text-transform: uppercase;
     }}
 
-    .rich-text strong {{ font-weight: 700; color: var(--fg-bright); }}
+    .rich-text strong {{ font-weight: 500; color: var(--fg-bright); }}
     .rich-text code {{
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       color: var(--accent-3);
-      background: rgba(106,122,138,0.1);
-      border: 1px solid rgba(106,122,138,0.15);
+      background: #EEF2F7;
+      border: 1px solid #E4ECF5;
       border-radius: 3px;
       padding: 1px 4px;
       font-size: 0.88em;
@@ -1229,24 +1240,24 @@ def make_index_html() -> str:
       display: inline-flex;
       align-items: center;
       border-radius: 999px;
-      border: 1px dashed var(--border-light);
+      border: 1px solid var(--border-light);
       padding: 3px 8px;
-      background: var(--bg);
-      font-family: 'JetBrains Mono', monospace;
+      background: #fffefa;
+      font-family: var(--mono);
       color: var(--muted);
       font-size: 0.72rem;
     }}
 
     .provider-doc {{
-      color: var(--accent-3);
+      color: var(--accent);
       text-decoration: none;
-      border-bottom: 1px solid rgba(106,122,138,0.3);
+      border-bottom: 1px solid #D0DCE9;
     }}
     .provider-doc.hidden {{ display: none; }}
 
     /* ── Buttons ── */
     .tiny-btn, .btn, .ghost-btn {{
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-weight: 600;
       border-radius: var(--radius);
       cursor: pointer;
@@ -1256,7 +1267,7 @@ def make_index_html() -> str:
 
     .tiny-btn {{
       padding: 0 12px;
-      color: var(--fg-bright);
+      color: #faf9f5;
       background: var(--accent);
       min-width: 56px;
       font-size: 0.78rem;
@@ -1266,10 +1277,10 @@ def make_index_html() -> str:
 
     .btn {{
       margin-top: 2px;
-      padding: 10px 14px;
-      color: var(--bg);
-      background: var(--fg-bright);
-      letter-spacing: 0.3px;
+      padding: 12px 16px;
+      color: #faf9f5;
+      background: var(--accent);
+      letter-spacing: 0.5px;
       font-size: 0.84rem;
       text-transform: uppercase;
     }}
@@ -1279,11 +1290,11 @@ def make_index_html() -> str:
     .ghost-btn {{
       padding: 6px 10px;
       border: 1px solid var(--border-light);
-      background: transparent;
-      color: var(--muted);
+      background: #fffefa;
+      color: var(--accent);
       font-size: 0.74rem;
     }}
-    .ghost-btn:hover {{ color: var(--fg); border-color: var(--muted); }}
+    .ghost-btn:hover {{ color: var(--fg); border-color: var(--accent); }}
 
     .check-row {{
       display: flex;
@@ -1304,7 +1315,7 @@ def make_index_html() -> str:
       padding: 10px 12px;
       border-radius: var(--radius);
       border: 1px solid var(--border);
-      background: var(--bg);
+      background: #fffefa;
       color: var(--muted);
       min-height: 44px;
       display: flex;
@@ -1319,8 +1330,9 @@ def make_index_html() -> str:
     .process-panel {{
       display: none;
       border: 1px solid var(--border-light);
-      background: var(--bg);
-      padding: 12px;
+      border-radius: var(--radius);
+      background: #fffefa;
+      padding: 14px;
       gap: 10px;
     }}
     .process-panel.visible {{ display: grid; animation: field-in 240ms ease-out; }}
@@ -1335,7 +1347,7 @@ def make_index_html() -> str:
     .process-time {{
       flex: 0 0 auto;
       color: var(--accent);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 0.74rem;
     }}
 
@@ -1353,7 +1365,7 @@ def make_index_html() -> str:
       color: var(--muted);
       font-size: 0.78rem;
       line-height: 1.35;
-      background: rgba(255,255,255,0.02);
+      background: #faf9f5;
     }}
     .process-feed-item.warn {{ border-left-color: var(--danger); }}
 
@@ -1361,7 +1373,7 @@ def make_index_html() -> str:
       border-top: 1px dashed var(--border);
       padding-top: 8px;
       color: var(--muted-2);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 0.72rem;
     }}
     .tech-details summary {{ cursor: pointer; color: var(--muted); }}
@@ -1385,6 +1397,7 @@ def make_index_html() -> str:
       height: 8px;
       border: 1px solid var(--border-light);
       background: var(--bg-3);
+      border-radius: 50%;
     }}
     .process-step.active {{ color: var(--fg); font-weight: 600; }}
     .process-step.active .process-dot {{
@@ -1400,15 +1413,16 @@ def make_index_html() -> str:
 
     /* ── Result Panel ── */
     .result-head {{
-      padding: 24px 26px 18px;
+      padding: 24px 28px 18px;
       border-bottom: 1px solid var(--border);
-      background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent);
+      border-left: 4px solid var(--accent);
+      background: var(--bg-2);
     }}
     .result-head h2 {{
       margin: 0 0 8px;
-      font-size: 1.35rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
+      font-size: 1.45rem;
+      font-weight: 500;
+      letter-spacing: 0;
       color: var(--fg-bright);
     }}
     .result-head p {{ margin: 0; color: var(--muted); font-size: 0.92rem; }}
@@ -1428,7 +1442,7 @@ def make_index_html() -> str:
     body.learning-mode .result-actions {{ display: flex; }}
 
     .result-wrap {{
-      padding: 20px 26px 24px;
+      padding: 22px 28px 28px;
       display: grid;
       gap: 14px;
     }}
@@ -1441,10 +1455,10 @@ def make_index_html() -> str:
       border-radius: 999px;
       border: 1px solid var(--border);
       padding: 4px 10px;
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 0.72rem;
-      color: var(--muted);
-      background: var(--bg);
+      color: var(--accent);
+      background: #EEF2F7;
     }}
 
     .warning-box {{
@@ -1466,7 +1480,7 @@ def make_index_html() -> str:
       gap: 8px;
     }}
     .code-header span {{
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 0.72rem;
       color: var(--muted);
       text-transform: uppercase;
@@ -1485,9 +1499,9 @@ def make_index_html() -> str:
       padding: 14px;
       border-radius: var(--radius);
       background: var(--code-bg);
-      border: 1px solid var(--border);
-      color: #b8c8d8;
-      font: 12px/1.6 'JetBrains Mono', monospace;
+      border: 1px solid #30302e;
+      color: #f5f4ed;
+      font: 12px/1.6 var(--mono);
       max-height: 320px;
       overflow: auto;
     }}
@@ -1506,7 +1520,8 @@ def make_index_html() -> str:
     .video-card {{
       display: none;
       border: 1px solid var(--border);
-      background: var(--code-bg);
+      border-radius: var(--radius);
+      background: #fffefa;
       padding: 10px;
     }}
     .video-card.visible {{
@@ -1522,7 +1537,7 @@ def make_index_html() -> str:
       width: 100%;
       border-radius: var(--radius);
       max-height: 520px;
-      background: var(--bg);
+      background: #141413;
     }}
     body.learning-mode video {{ max-height: 640px; }}
 
@@ -1547,7 +1562,8 @@ def make_index_html() -> str:
     .alignment-panel {{
       display: none;
       border: 1px solid var(--border-light);
-      background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+      border-radius: var(--radius);
+      background: #fffefa;
       padding: 14px;
       gap: 12px;
     }}
@@ -1566,6 +1582,7 @@ def make_index_html() -> str:
     .alignment-head h3 {{
       margin: 0 0 4px;
       font-size: 0.95rem;
+      font-weight: 500;
       color: var(--fg-bright);
     }}
     .alignment-summary {{
@@ -1599,7 +1616,8 @@ def make_index_html() -> str:
       text-align: left;
       width: 100%;
       border: 1px solid var(--border);
-      background: var(--bg);
+      border-radius: var(--radius);
+      background: var(--bg-2);
       padding: 11px 12px;
       color: var(--fg);
       cursor: pointer;
@@ -1619,11 +1637,11 @@ def make_index_html() -> str:
       align-items: baseline;
       margin-bottom: 5px;
     }}
-    .segment-title {{ font-weight: 600; color: var(--fg-bright); font-size: 0.88rem; }}
+    .segment-title {{ font-weight: 500; color: var(--fg-bright); font-size: 0.88rem; }}
     .segment-time {{
       flex: 0 0 auto;
       color: var(--muted);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 0.7rem;
     }}
     .segment-script {{
@@ -1641,7 +1659,7 @@ def make_index_html() -> str:
 
     .foot {{
       margin-top: 2px;
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 0.72rem;
       color: var(--muted-2);
       text-align: right;
@@ -1738,9 +1756,9 @@ def make_index_html() -> str:
   <main class="shell">
     <section class="panel">
       <header class="hero">
-        <h1>Aegis Studio Web</h1>
-        <p>用你的 Key + 自然语言问题，把抽象知识直接变成动态可视化视频。</p>
-        <small>Secure by design: API Key 仅用于本次请求，不落盘到仓库。</small>
+        <h1>Aegis 经济学动画工作台</h1>
+        <p>把一道经济学问题、一张图或一段文字，转成可播放的 Manim 教学动画。</p>
+        <small>API Key 只用于本次生成，不写入仓库。</small>
       </header>
 
       <form id="generate-form" class="form-wrap">
@@ -1821,7 +1839,7 @@ def make_index_html() -> str:
           只生成代码，不渲染视频（调试模式）
         </label>
 
-        <button id="submitBtn" class="btn" type="submit">Generate & Render</button>
+        <button id="submitBtn" class="btn" type="submit">生成动画草稿</button>
         <div id="processPanel" class="process-panel">
           <div class="process-head">
             <span id="processMessage">正在准备任务...</span>
@@ -1847,8 +1865,8 @@ def make_index_html() -> str:
       <header class="result-head">
         <div class="result-title-row">
           <div>
-            <h2>结果面板</h2>
-            <p>生成后自动切换为视频与讲稿优先的学习视图。</p>
+            <h2>动画与讲稿</h2>
+            <p>生成后会优先展示视频、同步讲稿和必要的诊断信息。</p>
           </div>
           <div class="result-actions">
             <button id="editAgainBtn" class="ghost-btn" type="button">返回编辑</button>
@@ -1869,7 +1887,7 @@ def make_index_html() -> str:
 
         <section class="code-section">
           <div class="code-header">
-            <span>Generated Python</span>
+            <span>生成的 Manim 代码</span>
             <button id="copyCodeBtn" class="ghost-btn" type="button">复制代码</button>
           </div>
 
