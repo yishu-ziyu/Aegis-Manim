@@ -49,6 +49,10 @@
       "destination": "/api/index"
     },
     {
+      "source": "/api/community/(.*)",
+      "destination": "/api/index"
+    },
+    {
       "source": "/api/health",
       "destination": "/api/index"
     }
