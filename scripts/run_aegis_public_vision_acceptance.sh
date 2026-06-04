@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-https://manim.yishuziyu.cn}"
-PROVIDER="${PROVIDER:-trial-kimi-priority}"
+PROVIDER="${PROVIDER:-trial-minimax-direct}"
 FIXTURE_DIR="${FIXTURE_DIR:-/tmp/aegis-public-vision-fixtures}"
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp/aegis-public-vision-acceptance}"
 JSONL="${JSONL:-$OUTPUT_DIR/full-render.jsonl}"

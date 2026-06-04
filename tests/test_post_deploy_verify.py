@@ -74,10 +74,10 @@ class TestEvaluateExpectedFailure:
 
 class TestBuildPayload:
     def test_payload_structure(self) -> None:
-        payload_bytes = pdv.build_payload("test prompt", "trial-kimi-priority")
+        payload_bytes = pdv.build_payload("test prompt", "trial-minimax-direct")
         payload = json.loads(payload_bytes.decode("utf-8"))
         assert payload["prompt"] == "test prompt"
-        assert payload["provider"] == "trial-kimi-priority"
+        assert payload["provider"] == "trial-minimax-direct"
         assert payload["sceneName"] == "GeneratedScene"
         assert payload["temperature"] == 0.2
 
@@ -100,7 +100,7 @@ class TestTestProvider:
         mock_resp.__exit__ = MagicMock(return_value=False)
 
         with patch("post_deploy_verify.request.urlopen", return_value=mock_resp):
-            result = pdv.test_provider("https://test.example.com", "trial-kimi-priority", 30)
+            result = pdv.test_provider("https://test.example.com", "trial-minimax-direct", 30)
 
         assert result["ok"] is True
         assert result["http"] == 200
@@ -120,7 +120,7 @@ class TestTestProvider:
 
     def test_timeout_error_handling(self) -> None:
         with patch("post_deploy_verify.request.urlopen", side_effect=TimeoutError("timed out")):
-            result = pdv.test_provider("https://test.example.com", "trial-kimi-priority", 1)
+            result = pdv.test_provider("https://test.example.com", "trial-minimax-direct", 1)
 
         assert result["ok"] is False
         assert result["http"] is None

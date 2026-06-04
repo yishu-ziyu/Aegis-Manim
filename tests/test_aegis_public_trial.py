@@ -101,31 +101,30 @@ class AegisPublicTrialTest(unittest.TestCase):
         config = gateway.public_provider_config()
         providers = config["providers"]
 
-        assert config["defaultProvider"] == "trial-kimi-priority"
-        assert set(providers) == {"trial-kimi-priority", "trial-minimax-direct", "trial-mimo-direct"}
-        assert providers["trial-kimi-priority"]["serverManaged"] is True
-        assert providers["trial-kimi-priority"]["requiresApiKey"] is False
-        assert providers["trial-kimi-priority"]["hideApiKey"] is True
-        assert "baseURL" not in providers["trial-kimi-priority"]
-        assert "apiType" not in providers["trial-kimi-priority"]
+        assert config["defaultProvider"] == "trial-minimax-direct"
+        assert set(providers) == {"trial-minimax-direct", "trial-mimo-direct"}
+        assert providers["trial-minimax-direct"]["serverManaged"] is True
+        assert providers["trial-minimax-direct"]["requiresApiKey"] is False
+        assert providers["trial-minimax-direct"]["hideApiKey"] is True
+        assert providers["trial-minimax-direct"]["defaultModel"] == "MiniMax M3 试用"
+        assert "baseURL" not in providers["trial-minimax-direct"]
+        assert "apiType" not in providers["trial-minimax-direct"]
 
     def test_health_exposes_safe_trial_provider_diagnostics(self) -> None:
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
-        os.environ["DEEPSEEK_API_KEY"] = "server-deepseek-key"
         os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        os.environ["MIMO_API_KEY"] = "server-mimo-key"
 
         payload = gateway.build_health_payload()
         diagnostics = payload["trialProviders"]
 
-        assert diagnostics["defaultProvider"] == "trial-kimi-priority"
-        assert diagnostics["configured"] == {"kimiCode": True, "deepSeek": True, "miniMax": True, "mimo": False}
-        assert diagnostics["timeouts"]["kimi"] == gateway.PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS
-        assert diagnostics["timeouts"]["deepSeek"] == gateway.PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
-        assert "server-kimi-key" not in json.dumps(payload)
-        assert "server-deepseek-key" not in json.dumps(payload)
+        assert diagnostics["defaultProvider"] == "trial-minimax-direct"
+        assert diagnostics["configured"] == {"miniMax": True, "mimo": True}
+        assert diagnostics["timeouts"]["miniMax"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
+        assert diagnostics["timeouts"]["mimo"] == gateway.PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS
         assert "server-minimax-key" not in json.dumps(payload)
+        assert "server-mimo-key" not in json.dumps(payload)
 
-    def test_trial_uses_server_kimi_key_without_client_key(self) -> None:
+    def test_trial_uses_server_minimax_m3_key_without_client_key(self) -> None:
         calls: list[dict[str, object]] = []
 
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
@@ -140,14 +139,13 @@ class AegisPublicTrialTest(unittest.TestCase):
             )
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
         os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
                     "prompt": "解释消费者剩余",
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "apiKey": "client-key-must-be-ignored",
                     "baseUrl": "https://evil.example/v1",
                     "endpoint": "https://evil.example/v1/chat/completions",
@@ -158,59 +156,29 @@ class AegisPublicTrialTest(unittest.TestCase):
 
         assert status == 200
         assert response["ok"] is True
-        assert response["provider"] == "trial-kimi-priority"
+        assert response["provider"] == "trial-minimax-direct"
         assert response["endpoint"] == "server-managed-trial"
-        assert calls[0]["provider_id"] == "kimi-code"
-        assert calls[0]["api_key"] == "server-kimi-key"
+        assert calls[0]["provider_id"] == "minimax-coding-cn"
+        assert calls[0]["api_key"] == "server-minimax-key"
+        assert calls[0]["model"] == "MiniMax-M3"
         assert calls[0]["base_url"] == ""
         assert calls[0]["endpoint"] == ""
 
-    def test_trial_falls_back_to_minimax_when_kimi_fails(self) -> None:
+    def test_removed_kimi_trial_provider_is_rejected(self) -> None:
+        status, response = gateway.generate_manim_code_for_gateway(
+            {"prompt": "解释消费者剩余", "provider": "trial-kimi-priority"}
+        )
+
+        assert status == 400
+        assert response["ok"] is False
+        assert "公开内测页只支持内置免费试用模型" in str(response["error"])
+
+    def test_trial_uses_minimax_m3_directly(self) -> None:
         calls: list[dict[str, object]] = []
 
         def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
             provider_id = str(kwargs["provider_id"])
             calls.append(kwargs)
-            if provider_id == "kimi-code":
-                raise RuntimeError("Kimi Code API HTTP 429: quota exceeded")
-            provider = gateway.resolve_provider(provider_id)
-            return (
-                "from manim import *\nclass GeneratedScene(Scene):\n"
-                "    def construct(self):\n"
-                "        self.play(Write(Text('消费者剩余', font_size=24)))\n",
-                provider,
-                "hidden",
-            )
-
-        original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
-        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
-        gateway.generate_code_with_llm = fake_generate_code_with_llm
-        try:
-            status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "解释消费者剩余", "provider": "trial-kimi-priority"}
-            )
-        finally:
-            gateway.generate_code_with_llm = original
-
-        assert status == 200
-        assert response["ok"] is True
-        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "minimax-coding-cn"]
-        assert calls[0]["timeout"] == gateway.PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS
-        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
-        assert "Public hosted quality contract" in str(calls[1]["user_prompt"])
-        assert "MiniMax" in "\n".join(response["warnings"])
-        assert "quota" in "\n".join(response["warnings"])
-        assert "detail" not in response
-
-    def test_trial_uses_minimax_between_kimi_and_deepseek(self) -> None:
-        calls: list[dict[str, object]] = []
-
-        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
-            provider_id = str(kwargs["provider_id"])
-            calls.append(kwargs)
-            if provider_id == "kimi-code":
-                raise RuntimeError("Kimi Code API HTTP 403: access denied")
             provider = gateway.resolve_provider(provider_id)
             return (
                 "from manim import *\nclass GeneratedScene(Scene):\n"
@@ -221,68 +189,23 @@ class AegisPublicTrialTest(unittest.TestCase):
             )
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
-        os.environ["DEEPSEEK_API_KEY"] = "server-deepseek-key"
         os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "解释消费者剩余", "provider": "trial-kimi-priority"}
+                {"prompt": "解释消费者剩余", "provider": "trial-minimax-direct"}
             )
         finally:
             gateway.generate_code_with_llm = original
 
         assert status == 200
         assert response["ok"] is True
-        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "minimax-coding-cn"]
-        assert calls[1]["api_key"] == "server-minimax-key"
-        assert calls[1]["model"] == "MiniMax-M2.7"
-        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
-        warnings = "\n".join(response["warnings"])
-        assert "MiniMax" in warnings
-        assert "权限/白名单/套餐额度问题" in warnings
-        assert "kimi-code:access" in warnings
-
-    def test_trial_falls_back_to_deepseek_after_minimax_failure(self) -> None:
-        calls: list[dict[str, object]] = []
-
-        def fake_generate_code_with_llm(**kwargs: object) -> tuple[str, object, str]:
-            provider_id = str(kwargs["provider_id"])
-            calls.append(kwargs)
-            if provider_id == "kimi-code":
-                raise RuntimeError("Kimi Code API HTTP 403: access denied")
-            if provider_id == "minimax-coding-cn":
-                raise TimeoutError("MiniMax timed out")
-            provider = gateway.resolve_provider(provider_id)
-            return (
-                "from manim import *\nclass GeneratedScene(Scene):\n"
-                "    def construct(self):\n"
-                "        self.play(Write(Text('消费者剩余', font_size=28)))\n",
-                provider,
-                "hidden",
-            )
-
-        original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
-        os.environ["DEEPSEEK_API_KEY"] = "server-deepseek-key"
-        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
-        gateway.generate_code_with_llm = fake_generate_code_with_llm
-        try:
-            status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "解释消费者剩余", "provider": "trial-kimi-priority"}
-            )
-        finally:
-            gateway.generate_code_with_llm = original
-
-        assert status == 200
-        assert response["ok"] is True
-        assert [str(call["provider_id"]) for call in calls] == ["kimi-code", "minimax-coding-cn", "deepseek"]
-        assert calls[1]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
-        assert calls[2]["timeout"] == gateway.PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
-        warnings = "\n".join(response["warnings"])
-        assert "DeepSeek" in warnings
-        assert "kimi-code:access" in warnings
-        assert "minimax-coding-cn:timeout" in warnings
+        assert [str(call["provider_id"]) for call in calls] == ["minimax-coding-cn"]
+        assert calls[0]["api_key"] == "server-minimax-key"
+        assert calls[0]["model"] == "MiniMax-M3"
+        assert calls[0]["timeout"] == gateway.PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
+        assert "Public hosted quality contract" in str(calls[0]["user_prompt"])
+        assert response["model"] == "MiniMax M3 试用"
 
     def test_minimax_direct_uses_longer_timeout_and_teaching_contract(self) -> None:
         calls: list[dict[str, object]] = []
@@ -303,7 +226,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "解释税收楔子如何造成无谓损失", "provider": "trial-minimax-direct"}
+                {"prompt": "解释消费者剩余如何表示为需求曲线下方面积", "provider": "trial-minimax-direct"}
             )
         finally:
             gateway.generate_code_with_llm = original
@@ -343,7 +266,7 @@ class AegisPublicTrialTest(unittest.TestCase):
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
-                {"prompt": "解释税收楔子", "provider": "trial-minimax-direct"}
+                {"prompt": "解释消费者剩余", "provider": "trial-minimax-direct"}
             )
         finally:
             gateway.generate_code_with_llm = original
@@ -367,13 +290,13 @@ class AegisPublicTrialTest(unittest.TestCase):
             )
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
                     "prompt": "将帕累托最优的过程可视化。",
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -407,13 +330,13 @@ class AegisPublicTrialTest(unittest.TestCase):
             )
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
                     "prompt": "将帕累托最优的过程可视化。",
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -484,7 +407,7 @@ class AegisPublicTrialTest(unittest.TestCase):
             gateway.generate_code_with_llm = original
 
         assert status == 200
-        assert response["model"] == "MiniMax 稳定试用"
+        assert response["model"] == "MiniMax M3 试用"
         assert response["codeFile"] == "vercel-generated-code"
         assert str(response["code"]).count("self.play(") == 30
         assert "略超软预算" in "\n".join(response["warnings"])
@@ -622,7 +545,6 @@ class AegisPublicTrialTest(unittest.TestCase):
             raise AssertionError("two-part pricing default path should not wait for external model calls")
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
         gateway.generate_code_with_llm = fail_if_called
         try:
             status, response = gateway.generate_manim_code_for_gateway(
@@ -631,7 +553,7 @@ class AegisPublicTrialTest(unittest.TestCase):
                         "考研经济学题：比较普通线性垄断定价与二部定价，"
                         "说明固定入场费如何提取消费者剩余并消除无谓损失。"
                     ),
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -649,7 +571,6 @@ class AegisPublicTrialTest(unittest.TestCase):
             raise AssertionError("standard-monopoly default path should not wait for external model calls")
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
         gateway.generate_code_with_llm = fail_if_called
         try:
             status, response = gateway.generate_manim_code_for_gateway(
@@ -658,7 +579,7 @@ class AegisPublicTrialTest(unittest.TestCase):
                         "考研经济学题：解释垄断定价。请画出需求曲线D、边际收益MR、"
                         "边际成本MC、垄断利润和无谓损失DWL。"
                     ),
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -678,7 +599,6 @@ class AegisPublicTrialTest(unittest.TestCase):
             raise AssertionError("consumer-choice default path should not wait for external model calls")
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
         gateway.generate_code_with_llm = fail_if_called
         try:
             status, response = gateway.generate_manim_code_for_gateway(
@@ -687,7 +607,7 @@ class AegisPublicTrialTest(unittest.TestCase):
                         "考研经济学题：消费者选择与价格效应。请画预算线、无差异曲线、"
                         "补偿预算线，并解释替代效应和收入效应。"
                     ),
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -707,7 +627,6 @@ class AegisPublicTrialTest(unittest.TestCase):
             raise AssertionError("tax-wedge default path should not wait for external model calls")
 
         original = gateway.generate_code_with_llm
-        os.environ["KIMI_CODE_API_KEY"] = "server-kimi-key"
         gateway.generate_code_with_llm = fail_if_called
         try:
             status, response = gateway.generate_manim_code_for_gateway(
@@ -716,7 +635,7 @@ class AegisPublicTrialTest(unittest.TestCase):
                         "考研经济学题：解释从量税如何形成税收楔子，"
                         "标出买方价格、卖方价格、税收收入和无谓损失。"
                     ),
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -744,13 +663,13 @@ class AegisPublicTrialTest(unittest.TestCase):
             )
 
         original = gateway.generate_code_with_llm
-        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        os.environ["MIMO_API_KEY"] = "server-mimo-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
                     "prompt": "解释税收楔子如何造成 deadweight loss，并展示 tax revenue。",
-                    "provider": "trial-minimax-direct",
+                    "provider": "trial-mimo-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -777,13 +696,13 @@ class AegisPublicTrialTest(unittest.TestCase):
             )
 
         original = gateway.generate_code_with_llm
-        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        os.environ["MIMO_API_KEY"] = "server-mimo-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
                     "prompt": "可视化垄断厂商的二部定价如何提取消费者剩余，并比较线性垄断定价。",
-                    "provider": "trial-minimax-direct",
+                    "provider": "trial-mimo-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -816,13 +735,13 @@ class AegisPublicTrialTest(unittest.TestCase):
             )
 
         original = gateway.generate_code_with_llm
-        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        os.environ["MIMO_API_KEY"] = "server-mimo-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
                     "prompt": "可视化垄断厂商的二部定价如何提取消费者剩余，并比较线性垄断定价。",
-                    "provider": "trial-minimax-direct",
+                    "provider": "trial-mimo-direct",
                     "sceneName": "GeneratedScene",
                 }
             )
@@ -851,13 +770,13 @@ class AegisPublicTrialTest(unittest.TestCase):
             return risky_code, provider, "hidden"
 
         original = gateway.generate_code_with_llm
-        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        os.environ["MIMO_API_KEY"] = "server-mimo-key"
         gateway.generate_code_with_llm = fake_generate_code_with_llm
         try:
             status, response = gateway.generate_manim_code_for_gateway(
                 {
                     "prompt": "可视化垄断厂商的二部定价如何提取消费者剩余，并比较线性垄断定价。",
-                    "provider": "trial-minimax-direct",
+                    "provider": "trial-mimo-direct",
                     "sceneName": "GeneratedScene",
                 }
             )

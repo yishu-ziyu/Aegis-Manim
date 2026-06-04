@@ -82,7 +82,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert 'fetch("/api/generate"' in html
         assert 'fetch("/api/generate/start"' not in html
         assert 'applyGenerateResult(data, payload, data.requestId || "-");' in html
-        assert "trial-kimi-priority" in config
+        assert "trial-minimax-direct" in config
+        assert "trial-kimi-priority" not in config
 
     def test_cloud_generate_proxy_only_forwards_safe_public_fields(self) -> None:
         old_url = web_app.AEGIS_CLOUD_GENERATE_URL
@@ -112,7 +113,7 @@ class AegisWebUiTest(unittest.TestCase):
             status, response = web_app.proxy_cloud_generate(
                 {
                     "prompt": "解释帕累托最优",
-                    "provider": "trial-kimi-priority",
+                    "provider": "trial-minimax-direct",
                     "sceneName": "GeneratedScene",
                     "temperature": 0.2,
                     "apiKey": "must-not-forward",

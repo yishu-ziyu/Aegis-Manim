@@ -10,7 +10,7 @@ from urllib import error, request
 
 
 DEFAULT_URL = "https://manim.yishuziyu.cn/api/generate"
-DEFAULT_PROVIDERS = ("trial-minimax-direct", "trial-kimi-priority", "trial-mimo-direct")
+DEFAULT_PROVIDERS = ("trial-minimax-direct", "trial-mimo-direct")
 DEFAULT_PROMPTS = (
     "用三步解释消费者剩余。",
     "可视化帕累托最优过程。",

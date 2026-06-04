@@ -94,39 +94,17 @@ PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS = int(
 PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MIMO_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
 )
-PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-kimi-priority"
+PUBLIC_TRIAL_DEFAULT_PROVIDER = "trial-minimax-direct"
 PUBLIC_TRIAL_PLANS = {
-    "trial-kimi-priority": {
-        "name": "免费试用 · Kimi 优先",
-        "description": "内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 MiniMax，再切换 DeepSeek。",
-        "model_label": "Kimi 优先 / MiniMax / DeepSeek 备用",
-        "attempts": (
-            {
-                "provider_id": "kimi-code",
-                "env": "KIMI_CODE_API_KEY",
-                "model": "kimi-for-coding",
-            },
-            {
-                "provider_id": "minimax-coding-cn",
-                "env": "MINIMAX_API_KEY",
-                "model": "MiniMax-M2.7",
-            },
-            {
-                "provider_id": "deepseek",
-                "env": "DEEPSEEK_API_KEY",
-                "model": "deepseek-v4-flash",
-            },
-        ),
-    },
     "trial-minimax-direct": {
-        "name": "免费试用 · MiniMax 稳定",
-        "description": "内测免费额度：直接使用 MiniMax，适合较长或更稳的教学脚本生成。",
-        "model_label": "MiniMax 稳定试用",
+        "name": "免费试用 · MiniMax M3",
+        "description": "内测免费额度：直接使用 MiniMax M3，作为默认教学脚本生成模型。",
+        "model_label": "MiniMax M3 试用",
         "attempts": (
             {
                 "provider_id": "minimax-coding-cn",
                 "env": "MINIMAX_API_KEY",
-                "model": "MiniMax-M2.7",
+                "model": "MiniMax-M3",
             },
         ),
     },
@@ -323,16 +301,10 @@ def build_health_payload() -> dict[str, object]:
         "trialProviders": {
             "defaultProvider": PUBLIC_TRIAL_DEFAULT_PROVIDER,
             "configured": {
-                "kimiCode": bool(read_server_key("KIMI_CODE_API_KEY")),
-                "deepSeek": bool(read_server_key("DEEPSEEK_API_KEY")),
                 "miniMax": bool(read_server_key("MINIMAX_API_KEY")),
                 "mimo": bool(read_server_key("MIMO_API_KEY")),
             },
             "timeouts": {
-                "kimi": PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS,
-                "kimiRepair": PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS,
-                "deepSeek": PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS,
-                "deepSeekRepair": PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS,
                 "miniMax": PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS,
                 "miniMaxRepair": PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS,
                 "mimo": PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS,
@@ -1334,7 +1306,7 @@ def generate_code_with_trial_plan(
             warnings.append("部分试用模型暂不可用，已自动使用可用的备用模型。")
         if provider.id != str(plan["attempts"][0]["provider_id"]):
             reason_text = failed_categories[0].split(":", 1)[1] if failed_categories else "request"
-            warnings.append(f"Kimi 本次未完成（{describe_trial_failure(reason_text)}），已自动切换到 {provider.name} 备用模型。")
+            warnings.append(f"{plan['name']} 首选模型本次未完成（{describe_trial_failure(reason_text)}），已自动切换到 {provider.name} 备用模型。")
         if failed_categories:
             warnings.append("模型失败类别：" + ", ".join(failed_categories[-3:]))
 
@@ -1489,7 +1461,7 @@ def build_index_html() -> str:
             "内测免费试用：Aegis 后端托管模型额度，页面不接收你的模型 Key。"
         ),
         "支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。": (
-            "当前提供 Kimi 优先与 MiniMax 稳定两种内测试用模型。"
+            "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型。"
         ),
         "Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。": (
             "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。"

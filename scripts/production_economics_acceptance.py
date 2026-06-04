@@ -11,7 +11,7 @@ from urllib import error
 
 
 DEFAULT_BASE_URL = "https://manim.yishuziyu.cn"
-DEFAULT_PROVIDER = "trial-kimi-priority"
+DEFAULT_PROVIDER = "trial-minimax-direct"
 DEFAULT_PROMPTS = (
     "考研经济学题：用中文动画解释垄断厂商实行二部定价时的福利变化。假设需求曲线向下倾斜、边际成本为常数。请比较普通线性垄断定价与二部定价：说明为什么二部定价会把单价降到边际成本，并标出消费者剩余、固定入场费、厂商利润和效率产量。",
     "考研经济学题：用中文动画解释从量税如何形成税收楔子。请画出需求曲线、供给曲线、税前均衡、买方支付价格、卖方得到价格、税收收入和无谓损失，并说明交易量为什么下降。",

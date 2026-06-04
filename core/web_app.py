@@ -70,22 +70,12 @@ JOB_STORE_LOCK = threading.Lock()
 
 # Local trial plans (auto-detect env keys)
 LOCAL_TRIAL_PLANS = {
-    "trial-kimi-priority": {
-        "name": "免费试用 · Kimi 优先",
-        "description": "本地内测免费额度：优先使用 Kimi，额度或调用失败时自动切换 MiniMax，再切换 DeepSeek。",
-        "model_label": "Kimi 优先 / MiniMax / DeepSeek 备用",
-        "attempts": (
-            {"provider_id": "kimi-code", "env": "KIMI_CODE_API_KEY", "model": "kimi-for-coding"},
-            {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M2.7"},
-            {"provider_id": "deepseek", "env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-flash"},
-        ),
-    },
     "trial-minimax-direct": {
-        "name": "免费试用 · MiniMax 稳定",
-        "description": "本地内测免费额度：直接使用 MiniMax，适合较长或更稳的教学脚本生成。",
-        "model_label": "MiniMax 稳定试用",
+        "name": "免费试用 · MiniMax M3",
+        "description": "本地内测免费额度：直接使用 MiniMax M3，作为默认教学脚本生成模型。",
+        "model_label": "MiniMax M3 试用",
         "attempts": (
-            {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M2.7"},
+            {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M3"},
         ),
     },
 }
@@ -941,8 +931,8 @@ def make_index_html() -> str:
             "trial": "内测免费试用",
             **provider_config.get("regionLabels", {}),
         }
-        if "trial-kimi-priority" in local_trial:
-            provider_config["defaultProvider"] = "trial-kimi-priority"
+        if "trial-minimax-direct" in local_trial:
+            provider_config["defaultProvider"] = "trial-minimax-direct"
     provider_config_json = json.dumps(provider_config, ensure_ascii=False)
     vision_enabled = is_vision_public_enabled()
     vision_hidden_attr = "" if vision_enabled else " hidden"
@@ -3318,7 +3308,7 @@ def proxy_cloud_generate(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         }
     allowed_payload = {
         "prompt": str(payload.get("prompt", "")),
-        "provider": str(payload.get("provider", "trial-kimi-priority")),
+        "provider": str(payload.get("provider", "trial-minimax-direct")),
         "sceneName": safe_scene_name(str(payload.get("sceneName", "GeneratedScene"))),
         "temperature": payload.get("temperature", 0.2),
         "noRender": bool(payload.get("noRender", False)),
