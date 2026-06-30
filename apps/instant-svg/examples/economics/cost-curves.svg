@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 500">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#4f46e5"/>
+    </marker>
+    
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;display=swap');
+      
+      .bg { fill: #1a1a2e; }
+      .axis { stroke: #4f46e5; stroke-width: 2; marker-end: url(#arrow); }
+      .grid { stroke: #2d2d4a; stroke-width: 1; }
+      .mc { fill: none; stroke: #ef4444; stroke-width: 3; }
+      .atc { fill: none; stroke: #22c55e; stroke-width: 3; }
+      .avc { fill: none; stroke: #3b82f6; stroke-width: 3; }
+      .afc { fill: none; stroke: #a855f7; stroke-width: 2; stroke-dasharray: 8,4; }
+      .label { font-family: 'Inter', sans-serif; fill: #e2e8f0; font-size: 14px; }
+      .label-large { font-family: 'Inter', sans-serif; fill: #e2e8f0; font-size: 18px; font-weight: 600; }
+      .point { fill: #fbbf24; }
+      
+      @keyframes draw {
+        from { stroke-dashoffset: 500; }
+        to { stroke-dashoffset: 0; }
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      
+      .mc { stroke-dasharray: 500; animation: draw 2s ease-out forwards; }
+      .atc { stroke-dasharray: 500; animation: draw 2s ease-out 0.5s forwards; stroke-dashoffset: 500; }
+      .avc { stroke-dasharray: 500; animation: draw 2s ease-out 1s forwards; stroke-dashoffset: 500; }
+      .afc { stroke-dasharray: 500; animation: draw 2s ease-out 1.5s forwards; stroke-dashoffset: 500; }
+      .legend { opacity: 0; animation: fadeIn 0.5s ease-out 2.5s forwards; }
+      .intersect { opacity: 0; animation: fadeIn 0.5s ease-out 2s forwards; }
+    </style>
+  </defs>
+  
+  <!-- 背景 -->
+  <rect class="bg" width="600" height="500"/>
+  
+  <!-- 标题 -->
+  <text x="300" y="40" text-anchor="middle" class="label-large">成本曲线 Cost Curves</text>
+  
+  <!-- 网格线 -->
+  <g class="grid">
+    <line x1="100" y1="100" x2="100" y2="400"/>
+    <line x1="150" y1="100" x2="150" y2="400"/>
+    <line x1="200" y1="100" x2="200" y2="400"/>
+    <line x1="250" y1="100" x2="250" y2="400"/>
+    <line x1="300" y1="100" x2="300" y2="400"/>
+    <line x1="350" y1="100" x2="350" y2="400"/>
+    <line x1="400" y1="100" x2="400" y2="400"/>
+    <line x1="450" y1="100" x2="450" y2="400"/>
+    <line x1="500" y1="100" x2="500" y2="400"/>
+  </g>
+  
+  <!-- 坐标轴 -->
+  <line class="axis" x1="100" y1="400" x2="520" y2="400"/>
+  <line class="axis" x1="100" y1="400" x2="100" y2="80"/>
+  
+  <!-- 轴标签 -->
+  <text x="540" y="405" class="label">Q</text>
+  <text x="95" y="70" class="label">$</text>
+  <text x="300" y="470" text-anchor="middle" class="label">产量 Quantity</text>
+  <text x="50" y="250" class="label" transform="rotate(-90, 50, 250)">成本 Cost</text>
+  
+  <!-- MC 边际成本曲线 (U形，穿过 ATC 和 AVC 最低点) -->
+  <path class="mc" d="M 130 120 Q 180 350, 230 280 Q 280 210, 350 180 Q 420 150, 500 100"/>
+  <text x="510" y="95" class="label" fill="#ef4444">MC</text>
+  
+  <!-- ATC 平均总成本曲线 (U形) -->
+  <path class="atc" d="M 130 120 Q 200 280, 300 220 Q 400 160, 500 170"/>
+  <text x="510" y="165" class="label" fill="#22c55e">ATC</text>
+  
+  <!-- AVC 平均可变成本曲线 (U形，低于 ATC) -->
+  <path class="avc" d="M 130 300 Q 200 340, 280 280 Q 360 220, 500 230"/>
+  <text x="510" y="225" class="label" fill="#3b82f6">AVC</text>
+  
+  <!-- AFC 平均固定成本曲线 (递减) -->
+  <path class="afc" d="M 130 150 Q 200 280, 300 330 Q 400 360, 500 375"/>
+  <text x="510" y="370" class="label" fill="#a855f7">AFC</text>
+  
+  <!-- MC 与 ATC 交点 -->
+  <g class="intersect">
+    <circle class="point" cx="300" cy="220" r="6"/>
+    <text x="310" y="210" class="label" fill="#fbbf24" font-size="12">ATC最低点</text>
+  </g>
+  
+  <!-- MC 与 AVC 交点 -->
+  <g class="intersect">
+    <circle class="point" cx="260" cy="280" r="6"/>
+    <text x="200" y="300" class="label" fill="#fbbf24" font-size="12">AVC最低点</text>
+  </g>
+  
+  <!-- 图例 -->
+  <g class="legend" transform="translate(120, 430)">
+    <line x1="0" y1="0" x2="25" y2="0" stroke="#ef4444" stroke-width="3"/>
+    <text x="30" y="5" class="label" font-size="11">MC 边际成本</text>
+    
+    <line x1="130" y1="0" x2="155" y2="0" stroke="#22c55e" stroke-width="3"/>
+    <text x="160" y="5" class="label" font-size="11">ATC 平均总成本</text>
+    
+    <line x1="280" y1="0" x2="305" y2="0" stroke="#3b82f6" stroke-width="3"/>
+    <text x="310" y="5" class="label" font-size="11">AVC 平均可变成本</text>
+    
+    <line x1="0" y1="20" x2="25" y2="20" stroke="#a855f7" stroke-width="2" stroke-dasharray="5,3"/>
+    <text x="30" y="25" class="label" font-size="11">AFC 平均固定成本</text>
+  </g>
+</svg>
