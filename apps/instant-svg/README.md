@@ -50,4 +50,4 @@ Instant SVG 不应发展成第二个孤立产品。它在 Aegis-Manim 中的长�
 3. 与 `motion-grammar` 的 scene schema / style tokens 对齐，形成 renderer-agnostic 的教学动画规格。
 4. 未来按同一主题同时沉淀 SVG 示例和 Manim Video 示例。
 
-原独立仓库：<https://github.com/yishu-ziyu/yishu-svg>
+历史来源：原独立仓库 `yishu-svg`。该仓库已完成迁移，不再作为独立项目维护。
