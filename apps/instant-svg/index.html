@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YiShu SVG · 智能教学动画生成器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        paper: '#fffdf5',
+                        ink: '#2d2d2d',
+                        brand: { DEFAULT: '#6366f1', 50: '#eef2ff', 100: '#e0e7ff', 600: '#4f46e5', 700: '#4338ca' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .aegis-app {
+            background-color: #fffdf5;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .aegis-sketchy-border {
+            border: 2px solid #2d2d2d;
+            border-radius: 2px 255px 3px 25px / 255px 5px 225px 3px;
+        }
+
+        .aegis-btn-sketchy {
+            border: 2px solid #2d2d2d;
+            border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+            box-shadow: 2px 3px 0px rgba(0, 0, 0, 0.8);
+            transition: all 0.1s ease-in-out;
+        }
+
+        .aegis-btn-sketchy:hover {
+            box-shadow: 1px 1px 0px rgba(0, 0, 0, 0.8);
+            transform: translate(1px, 2px);
+        }
+
+        .aegis-btn-sketchy.active,
+        .aegis-btn-sketchy:active {
+            background-color: #4f46e5;
+            color: white;
+        }
+
+        .aegis-btn-sketchy:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .aegis-card-sketchy {
+            border: 2px solid #2d2d2d;
+            border-radius: 5px;
+            box-shadow: 4px 4px 0px rgba(0, 0, 0, 0.15);
+            transition: all 0.2s;
+            background: white;
+        }
+
+        .aegis-card-sketchy:hover {
+            transform: rotate(-1deg) scale(1.02);
+            box-shadow: 6px 6px 0px #4f46e5;
+            z-index: 10;
+        }
+
+        .aegis-input-sketchy {
+            border: 2px solid #cbd5e1;
+            border-radius: 8px 2px 6px 3px;
+            background-color: #fff;
+        }
+
+        .aegis-input-sketchy:focus {
+            border-color: #4f46e5;
+            outline: none;
+            box-shadow: 2px 2px 0px #4f46e5;
+        }
+
+        .aegis-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .aegis-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 10px;
+        }
+
+        textarea {
+            resize: none;
+        }
+
+        .svg-canvas {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        .loading-pulse {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.connected { background: #22c55e; }
+        .status-dot.error { background: #ef4444; }
+        .status-dot.idle { background: #94a3b8; }
+    </style>
+</head>
+
+<body class="bg-slate-100 min-h-screen">
+    <div class="aegis-app w-full max-w-6xl mx-auto aegis-sketchy-border p-1 my-2 md:my-8 flex flex-col min-h-[700px] text-ink shadow-[5px_5px_0px_rgba(0,0,0,0.2)]">
+        
+        <!-- Header -->
+        <div class="px-4 py-4 md:px-6 md:py-6 border-b-2 border-dashed border-slate-300 md:flex justify-between items-start bg-paper relative overflow-hidden">
+            <div class="relative z-10">
+                <div class="flex items-center gap-3 mb-2">
+                    <span class="text-xs font-black bg-brand-600 text-white px-2 py-0.5 transform -rotate-2">AI POWERED</span>
+                    <h2 class="text-2xl md:text-3xl font-black text-ink">YiShu SVG 动画生成器</h2>
+                </div>
+                <div class="text-slate-600 text-sm md:text-base space-y-1 font-medium leading-relaxed">
+                    <p>用 <strong class="text-brand-600 bg-brand-50 px-1">自然语言</strong> 生成动态 SVG 教学动画。</p>
+                    <p>数学公式、物理定律、神经网络、时间轴 —— 一切皆可动画化。</p>
+                </div>
+            </div>
+            <div class="mt-4 md:mt-0 flex items-center gap-2">
+                <span class="status-dot idle" id="status-dot"></span>
+                <span class="text-xs text-slate-500" id="status-text">未连接</span>
+                <button id="settings-btn" class="aegis-btn-sketchy bg-white px-3 py-1 text-xs font-bold">⚙️ API 设置</button>
+            </div>
+        </div>
+
+        <!-- Style Selector -->
+        <div class="px-6 py-4 border-b-2 border-dashed border-slate-300 flex flex-wrap justify-between items-center bg-slate-50 gap-4">
+            <div>
+                <h3 class="text-lg font-black text-ink flex items-center gap-2">
+                    选择动画风格
+                    <span class="text-sm bg-brand-600 text-white px-2 py-0.5 rounded-full border-2 border-black rotate-2 shadow-[1px_1px_0px_black] text-xs">Pro</span>
+                </h3>
+            </div>
+            <div class="flex flex-wrap gap-2" id="style-buttons">
+                <button class="aegis-btn-sketchy bg-white px-4 py-2 text-sm font-bold active" data-style="manim">📐 Manim 风格</button>
+                <button class="aegis-btn-sketchy bg-white px-4 py-2 text-sm font-bold" data-style="timeline">📅 时间轴</button>
+                <button class="aegis-btn-sketchy bg-white px-4 py-2 text-sm font-bold" data-style="minimal">✨ 极简风格</button>
+                <button class="aegis-btn-sketchy bg-white px-4 py-2 text-sm font-bold" data-style="artistic">🎨 艺术风格</button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex flex-col lg:flex-row flex-1 overflow-hidden bg-white/50">
+            
+            <!-- Input Panel -->
+            <div class="w-full lg:w-96 border-b-2 lg:border-b-0 lg:border-r-2 border-slate-200 border-dashed flex-shrink-0 p-4 md:p-6 overflow-y-auto aegis-scrollbar">
+                <h4 class="text-sm font-black text-slate-500 uppercase mb-4">✏️ 动画描述</h4>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">教学主题</label>
+                        <input type="text" id="topic-input" 
+                               class="w-full aegis-input-sketchy p-3 text-sm" 
+                               placeholder="例如：二次函数、神经网络、动量守恒...">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">详细要求 <span class="text-slate-400 font-normal">(可选)</span></label>
+                        <textarea id="desc-input" 
+                                  class="w-full aegis-input-sketchy p-3 text-sm h-32" 
+                                  placeholder="描述你想要的动画效果...&#10;&#10;例如：&#10;- 展示 y = x² 的图像&#10;- 动态标注顶点位置&#10;- 使用深色背景"></textarea>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">📚 快捷模板</label>
+                        
+                        <!-- 通用模板 -->
+                        <div class="grid grid-cols-2 gap-2 mb-3">
+                            <button class="template-btn aegis-card-sketchy p-3 text-left" data-template="math">
+                                <span class="text-lg">📊</span>
+                                <span class="text-xs font-bold block mt-1">数学函数</span>
+                            </button>
+                            <button class="template-btn aegis-card-sketchy p-3 text-left" data-template="neural">
+                                <span class="text-lg">🧠</span>
+                                <span class="text-xs font-bold block mt-1">神经网络</span>
+                            </button>
+                            <button class="template-btn aegis-card-sketchy p-3 text-left" data-template="physics">
+                                <span class="text-lg">⚛️</span>
+                                <span class="text-xs font-bold block mt-1">物理过程</span>
+                            </button>
+                            <button class="template-btn aegis-card-sketchy p-3 text-left" data-template="timeline">
+                                <span class="text-lg">📅</span>
+                                <span class="text-xs font-bold block mt-1">历史时间轴</span>
+                            </button>
+                        </div>
+                        
+                        <!-- 经济学模板 -->
+                        <label class="block text-xs font-bold text-brand-600 mb-2">💰 经济学专区</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button class="template-btn aegis-card-sketchy p-3 text-left border-brand-200" data-template="supply-demand">
+                                <span class="text-lg">📈</span>
+                                <span class="text-xs font-bold block mt-1">供需曲线</span>
+                            </button>
+                            <button class="template-btn aegis-card-sketchy p-3 text-left border-brand-200" data-template="cost-curves">
+                                <span class="text-lg">📉</span>
+                                <span class="text-xs font-bold block mt-1">成本曲线</span>
+                            </button>
+                            <button class="template-btn aegis-card-sketchy p-3 text-left border-brand-200" data-template="is-lm">
+                                <span class="text-lg">🏦</span>
+                                <span class="text-xs font-bold block mt-1">IS-LM 模型</span>
+                            </button>
+                            <button class="template-btn aegis-card-sketchy p-3 text-left border-brand-200" data-template="ad-as">
+                                <span class="text-lg">📊</span>
+                                <span class="text-xs font-bold block mt-1">AD-AS 模型</span>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <button id="generate-btn" class="w-full aegis-btn-sketchy bg-brand-600 text-white font-bold py-4 px-6 text-lg mt-4">
+                        🚀 生成 SVG 动画
+                    </button>
+                    
+                    <div id="error-msg" class="hidden text-red-600 text-sm bg-red-50 p-3 rounded border border-red-200"></div>
+                </div>
+            </div>
+            
+            <!-- Preview Panel -->
+            <div class="flex-1 p-4 md:p-6 flex flex-col overflow-hidden">
+                <div class="flex justify-between items-center mb-4">
+                    <h4 class="text-sm font-black text-slate-500 uppercase">🎬 动画预览</h4>
+                    <div class="flex gap-2">
+                        <button id="view-code-btn" class="aegis-btn-sketchy bg-white px-3 py-1 text-xs font-bold">{ } 查看代码</button>
+                        <button id="download-btn" class="aegis-btn-sketchy bg-white px-3 py-1 text-xs font-bold">💾 下载 SVG</button>
+                        <button id="fullscreen-btn" class="aegis-btn-sketchy bg-white px-3 py-1 text-xs font-bold">⛶ 全屏</button>
+                    </div>
+                </div>
+                
+                <div id="svg-canvas" class="svg-canvas flex-1 flex items-center justify-center min-h-[400px] relative">
+                    <div id="svg-placeholder" class="text-center text-slate-400">
+                        <span class="text-6xl block mb-4 opacity-30">🎨</span>
+                        <p class="text-sm">输入教学主题，点击生成按钮</p>
+                        <p class="text-xs mt-2 opacity-60">AI 将为你创建动态 SVG 动画</p>
+                    </div>
+                    <div id="svg-loading" class="hidden absolute inset-0 flex items-center justify-center bg-black/50">
+                        <div class="text-center text-white">
+                            <span class="text-4xl block mb-4 loading-pulse">⚡</span>
+                            <p class="text-sm font-bold" id="loading-text">正在生成动画...</p>
+                        </div>
+                    </div>
+                    <div id="svg-render" class="w-full h-full"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="px-6 py-3 border-t-2 border-dashed border-slate-300 text-center text-xs text-slate-400 bg-paper">
+            <p>YiShu SVG · Powered by GLM-4.7-Flash</p>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="fixed inset-0 z-[9999] hidden bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-paper rounded-lg border-4 border-ink shadow-[8px_8px_0px_black] w-full max-w-lg flex flex-col overflow-hidden">
+            <div class="px-6 py-4 border-b-2 border-ink border-dashed flex justify-between items-center bg-brand-50">
+                <h3 class="font-bold text-xl text-ink">⚙️ API 设置</h3>
+                <button id="close-settings-btn" class="text-ink hover:text-brand-600 border-2 border-ink rounded-full w-8 h-8 flex items-center justify-center hover:bg-white shadow-[2px_2px_0px_black]">✕</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">API 提供商</label>
+                    <select id="api-provider" class="w-full aegis-input-sketchy p-3 text-sm">
+                        <option value="zhipu">智谱 AI (GLM-4.7-Flash)</option>
+                        <option value="nvidia">NVIDIA NIM (GLM-4.7 / MiniMax)</option>
+                    </select>
+                </div>
+                <div id="zhipu-config">
+                    <label class="block text-sm font-bold text-slate-700 mb-2">智谱 API Key</label>
+                    <input type="password" id="zhipu-key" class="w-full aegis-input-sketchy p-3 text-sm" placeholder="输入你的智谱 API Key">
+                    <p class="text-xs text-slate-500 mt-1">获取: <a href="https://open.bigmodel.cn" target="_blank" rel="noopener noreferrer" class="text-brand-600 underline">open.bigmodel.cn</a></p>
+                </div>
+                <div id="nvidia-config" class="hidden">
+                    <label class="block text-sm font-bold text-slate-700 mb-2">NVIDIA API Key</label>
+                    <input type="password" id="nvidia-key" class="w-full aegis-input-sketchy p-3 text-sm" placeholder="nvapi-xxx">
+                    <label class="block text-sm font-bold text-slate-700 mb-2 mt-4">模型选择</label>
+                    <select id="nvidia-model" class="w-full aegis-input-sketchy p-3 text-sm">
+                        <option value="z-ai/glm4.7">GLM-4.7</option>
+                        <option value="minimaxai/minimax-m2.1">MiniMax M2.1</option>
+                    </select>
+                </div>
+                <button id="save-settings-btn" class="w-full aegis-btn-sketchy bg-brand-600 text-white font-bold py-3 px-6">💾 保存设置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Code Modal -->
+    <div id="code-modal" class="fixed inset-0 z-[9999] hidden bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-paper rounded-lg border-4 border-ink shadow-[8px_8px_0px_black] w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden">
+            <div class="px-6 py-4 border-b-2 border-ink border-dashed flex justify-between items-center bg-brand-50">
+                <h3 class="font-bold text-xl text-ink">📝 SVG 源代码</h3>
+                <button id="close-modal-btn" class="text-ink hover:text-brand-600 border-2 border-ink rounded-full w-8 h-8 flex items-center justify-center hover:bg-white shadow-[2px_2px_0px_black]">✕</button>
+            </div>
+            <div class="flex-1 overflow-auto p-4">
+                <textarea id="code-editor" class="w-full h-full min-h-[400px] aegis-input-sketchy p-4 font-mono text-sm" spellcheck="false"></textarea>
+            </div>
+            <div class="px-6 py-4 border-t-2 border-ink border-dashed flex justify-end gap-2 bg-slate-50">
+                <button id="copy-code-btn" class="aegis-btn-sketchy bg-brand-600 text-white font-bold py-2 px-6">📋 复制代码</button>
+                <button id="apply-code-btn" class="aegis-btn-sketchy bg-white font-bold py-2 px-6">✅ 应用修改</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="./js/app.js" defer></script>
+</body>
+
+</html>

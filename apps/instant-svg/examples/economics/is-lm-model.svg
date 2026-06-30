@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 500">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#4f46e5"/>
+    </marker>
+    
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;display=swap');
+      
+      .bg { fill: #1a1a2e; }
+      .axis { stroke: #4f46e5; stroke-width: 2; marker-end: url(#arrow); }
+      .grid { stroke: #2d2d4a; stroke-width: 1; }
+      .is { fill: none; stroke: #ef4444; stroke-width: 3; }
+      .lm { fill: none; stroke: #22c55e; stroke-width: 3; }
+      .label { font-family: 'Inter', sans-serif; fill: #e2e8f0; font-size: 14px; }
+      .label-large { font-family: 'Inter', sans-serif; fill: #e2e8f0; font-size: 18px; font-weight: 600; }
+      .eq-point { fill: #fbbf24; }
+      .eq-line { stroke: #fbbf24; stroke-width: 1; stroke-dasharray: 5,5; }
+      
+      @keyframes drawIS {
+        from { stroke-dashoffset: 400; }
+        to { stroke-dashoffset: 0; }
+      }
+      @keyframes drawLM {
+        from { stroke-dashoffset: 400; }
+        to { stroke-dashoffset: 0; }
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes pulse {
+        0%, 100% { r: 8; }
+        50% { r: 12; }
+      }
+      
+      .is { stroke-dasharray: 400; animation: drawIS 2s ease-out forwards; }
+      .lm { stroke-dasharray: 400; animation: drawLM 2s ease-out 0.5s forwards; stroke-dashoffset: 400; }
+      .eq-group { opacity: 0; animation: fadeIn 0.5s ease-out 2.5s forwards; }
+      .eq-point { animation: pulse 2s ease-in-out 3s infinite; }
+    </style>
+  </defs>
+  
+  <!-- 背景 -->
+  <rect class="bg" width="600" height="500"/>
+  
+  <!-- 标题 -->
+  <text x="300" y="40" text-anchor="middle" class="label-large">IS-LM 模型</text>
+  <text x="300" y="60" text-anchor="middle" class="label" font-size="12" fill="#94a3b8">产品市场与货币市场均衡</text>
+  
+  <!-- 网格线 -->
+  <g class="grid">
+    <line x1="100" y1="100" x2="100" y2="400"/>
+    <line x1="150" y1="100" x2="150" y2="400"/>
+    <line x1="200" y1="100" x2="200" y2="400"/>
+    <line x1="250" y1="100" x2="250" y2="400"/>
+    <line x1="300" y1="100" x2="300" y2="400"/>
+    <line x1="350" y1="100" x2="350" y2="400"/>
+    <line x1="400" y1="100" x2="400" y2="400"/>
+    <line x1="450" y1="100" x2="450" y2="400"/>
+    <line x1="500" y1="100" x2="500" y2="400"/>
+    
+    <line x1="100" y1="100" x2="500" y2="100"/>
+    <line x1="100" y1="150" x2="500" y2="150"/>
+    <line x1="100" y1="200" x2="500" y2="200"/>
+    <line x1="100" y1="250" x2="500" y2="250"/>
+    <line x1="100" y1="300" x2="500" y2="300"/>
+    <line x1="100" y1="350" x2="500" y2="350"/>
+  </g>
+  
+  <!-- 坐标轴 -->
+  <line class="axis" x1="100" y1="400" x2="520" y2="400"/>
+  <line class="axis" x1="100" y1="400" x2="100" y2="80"/>
+  
+  <!-- 轴标签 -->
+  <text x="540" y="405" class="label">Y</text>
+  <text x="95" y="70" class="label">r</text>
+  <text x="300" y="470" text-anchor="middle" class="label">国民收入 Income (Y)</text>
+  <text x="50" y="250" class="label" transform="rotate(-90, 50, 250)">利率 Interest Rate (r)</text>
+  
+  <!-- IS 曲线 (向右下倾斜 - 产品市场均衡) -->
+  <path class="is" d="M 130 120 L 480 360"/>
+  <text x="490" y="370" class="label" fill="#ef4444">IS</text>
+  <text x="140" y="115" class="label" fill="#ef4444" font-size="11">产品市场</text>
+  
+  <!-- LM 曲线 (向右上倾斜 - 货币市场均衡) -->
+  <path class="lm" d="M 130 360 L 480 140"/>
+  <text x="490" y="135" class="label" fill="#22c55e">LM</text>
+  <text x="140" y="375" class="label" fill="#22c55e" font-size="11">货币市场</text>
+  
+  <!-- 均衡点 -->
+  <g class="eq-group">
+    <!-- 虚线到轴 -->
+    <line class="eq-line" x1="305" y1="250" x2="305" y2="400"/>
+    <line class="eq-line" x1="100" y1="250" x2="305" y2="250"/>
+    
+    <!-- 均衡点 -->
+    <circle class="eq-point" cx="305" cy="250" r="8"/>
+    
+    <!-- 均衡标签 -->
+    <text x="320" y="240" class="label" fill="#fbbf24">E</text>
+    <text x="305" y="420" text-anchor="middle" class="label" fill="#fbbf24">Y*</text>
+    <text x="85" y="255" text-anchor="end" class="label" fill="#fbbf24">r*</text>
+    
+    <!-- 说明文字 -->
+    <text x="380" y="240" class="label" font-size="11" fill="#94a3b8">一般均衡点：</text>
+    <text x="380" y="255" class="label" font-size="11" fill="#94a3b8">两市场同时均衡</text>
+  </g>
+  
+  <!-- 图例 -->
+  <g transform="translate(400, 430)">
+    <line x1="0" y1="0" x2="30" y2="0" stroke="#ef4444" stroke-width="3"/>
+    <text x="40" y="5" class="label" font-size="12">IS 曲线</text>
+    <line x1="0" y1="20" x2="30" y2="20" stroke="#22c55e" stroke-width="3"/>
+    <text x="40" y="25" class="label" font-size="12">LM 曲线</text>
+  </g>
+</svg>

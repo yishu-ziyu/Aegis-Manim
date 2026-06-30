@@ -8,15 +8,17 @@
 
 ## 项目定位
 
-Aegis-Manim 提供三条工作流：
+Aegis-Manim 提供四条工作流：
 
 - 场景库渲染：直接运行内置教学场景。
+- Instant SVG：自然语言 -> 动态 SVG，浏览器内预览、编辑和下载，适合快速教学图与讲义插图。
 - LLM 生成渲染（CLI）：自然语言 -> Manim 代码 -> 视频。
 - LLM 生成渲染（Web）：浏览器输入问题和自己的 API Key，返回代码和视频。
 
 ## 当前能力（v0.1.0）
 
 - 基于 `scene_registry.json` 的课程菜单与场景管理。
+- `apps/instant-svg/` 轻量 SVG 教学动画生成器，承接原 `yishu-svg` 项目资产。
 - 基于多 Provider 适配层的代码生成（默认智谱 `glm-5`，可切换 OpenAI-Compatible、Codex 本地代理、MiniMax Token/Coding Plan）。
 - Web 端支持“本次请求输入 API Key”，不写入仓库；Provider、模型与 Base URL 可在界面切换。
 - Manim 语法知识包：生成前会注入本地 Manim 0.19.2、官方文档与高质量社区写法的约束，降低模型生成过期/不可渲染 API 的概率。
@@ -27,6 +29,8 @@ Aegis-Manim 提供三条工作流：
 
 ```text
 Aegis-Manim/
+├── apps/
+│   └── instant-svg/        # 轻量动态 SVG 教学图生成器
 ├── core/
 │   ├── course_menu.py      # 场景菜单（CLI）
 │   ├── manim_agent.py      # LLM 生成与渲染（CLI）
@@ -84,7 +88,15 @@ cp .env.example .env
 ./.venv/bin/python core/course_menu.py
 ```
 
-### 4) CLI：自然语言生成并渲染
+### 4) Instant SVG：浏览器内快速生成动态图
+
+```bash
+open apps/instant-svg/index.html
+```
+
+Instant SVG 来自原 `yishu-svg` 项目，适合先做可编辑的动态 SVG 草图；完整视频仍使用 Manim 工作流。
+
+### 5) CLI：自然语言生成并渲染
 
 ```bash
 ./.venv/bin/python core/manim_agent.py "解释税收楔子如何导致无谓损失，并做动态演示"
@@ -125,7 +137,7 @@ MINIMAX_API_KEY=... ./.venv/bin/python core/manim_agent.py \
 ./.venv/bin/python core/manim_agent.py "讲解拉弗曲线" --no-render
 ```
 
-### 5) Web：浏览器交互
+### 6) Web：浏览器交互
 
 启动服务：
 

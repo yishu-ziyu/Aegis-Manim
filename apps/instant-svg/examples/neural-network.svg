@@ -1,0 +1,143 @@
+<!-- 示例：神经网络结构动画 -->
+<svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .bg { fill: #0f0f23; }
+    .node { fill: #1e1e3f; stroke: #4f46e5; stroke-width: 2; }
+    .node-input { fill: #1e3a5f; stroke: #22d3ee; }
+    .node-output { fill: #3f1e3f; stroke: #a78bfa; }
+    .connection { stroke: #2d3748; stroke-width: 1.5; fill: none; }
+    .label { font-family: 'Inter', sans-serif; font-size: 12px; fill: #a0aec0; text-anchor: middle; }
+    .title { font-family: 'Inter', sans-serif; font-size: 22px; fill: #e2e8f0; font-weight: bold; }
+    .layer-label { font-family: 'Inter', sans-serif; font-size: 14px; fill: #718096; text-anchor: middle; }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 1; }
+    }
+    
+    @keyframes dataFlow {
+      0% { stroke-dashoffset: 30; opacity: 0.3; }
+      50% { opacity: 1; }
+      100% { stroke-dashoffset: 0; opacity: 0.3; }
+    }
+    
+    .data-signal {
+      stroke: #22d3ee;
+      stroke-width: 3;
+      stroke-dasharray: 5 25;
+      animation: dataFlow 2s linear infinite;
+    }
+    
+    .node-glow {
+      animation: pulse 3s ease-in-out infinite;
+    }
+    
+    .delay-1 { animation-delay: 0.3s; }
+    .delay-2 { animation-delay: 0.6s; }
+    .delay-3 { animation-delay: 0.9s; }
+    .delay-4 { animation-delay: 1.2s; }
+  </style>
+  
+  <rect width="100%" height="100%" class="bg"/>
+  
+  <!-- 标题 -->
+  <text x="450" y="40" text-anchor="middle" class="title">人工神经网络 (ANN) 结构</text>
+  
+  <!-- 连接线 (底层) -->
+  <g class="connections">
+    <!-- 输入层到隐藏层1 -->
+    <line x1="150" y1="150" x2="300" y2="120" class="connection"/>
+    <line x1="150" y1="150" x2="300" y2="200" class="connection"/>
+    <line x1="150" y1="150" x2="300" y2="280" class="connection"/>
+    <line x1="150" y1="250" x2="300" y2="120" class="connection"/>
+    <line x1="150" y1="250" x2="300" y2="200" class="connection"/>
+    <line x1="150" y1="250" x2="300" y2="280" class="connection"/>
+    <line x1="150" y1="350" x2="300" y2="120" class="connection"/>
+    <line x1="150" y1="350" x2="300" y2="200" class="connection"/>
+    <line x1="150" y1="350" x2="300" y2="280" class="connection"/>
+    
+    <!-- 隐藏层1到隐藏层2 -->
+    <line x1="300" y1="120" x2="450" y2="150" class="connection"/>
+    <line x1="300" y1="120" x2="450" y2="250" class="connection"/>
+    <line x1="300" y1="200" x2="450" y2="150" class="connection"/>
+    <line x1="300" y1="200" x2="450" y2="250" class="connection"/>
+    <line x1="300" y1="280" x2="450" y2="150" class="connection"/>
+    <line x1="300" y1="280" x2="450" y2="250" class="connection"/>
+    
+    <!-- 隐藏层2到隐藏层3 -->
+    <line x1="450" y1="150" x2="600" y2="120" class="connection"/>
+    <line x1="450" y1="150" x2="600" y2="200" class="connection"/>
+    <line x1="450" y1="150" x2="600" y2="280" class="connection"/>
+    <line x1="450" y1="250" x2="600" y2="120" class="connection"/>
+    <line x1="450" y1="250" x2="600" y2="200" class="connection"/>
+    <line x1="450" y1="250" x2="600" y2="280" class="connection"/>
+    
+    <!-- 隐藏层3到输出层 -->
+    <line x1="600" y1="120" x2="750" y2="200" class="connection"/>
+    <line x1="600" y1="200" x2="750" y2="200" class="connection"/>
+    <line x1="600" y1="280" x2="750" y2="200" class="connection"/>
+  </g>
+  
+  <!-- 数据流动画 -->
+  <g class="data-flow">
+    <line x1="150" y1="150" x2="300" y2="200" class="data-signal"/>
+    <line x1="300" y1="200" x2="450" y2="150" class="data-signal delay-1"/>
+    <line x1="450" y1="150" x2="600" y2="200" class="data-signal delay-2"/>
+    <line x1="600" y1="200" x2="750" y2="200" class="data-signal delay-3"/>
+  </g>
+  
+  <!-- 输入层 -->
+  <g class="input-layer">
+    <circle cx="150" cy="150" r="25" class="node node-input node-glow"/>
+    <circle cx="150" cy="250" r="25" class="node node-input node-glow delay-1"/>
+    <circle cx="150" cy="350" r="25" class="node node-input node-glow delay-2"/>
+    <text x="150" y="155" class="label">x₁</text>
+    <text x="150" y="255" class="label">x₂</text>
+    <text x="150" y="355" class="label">x₃</text>
+  </g>
+  
+  <!-- 隐藏层 1 -->
+  <g class="hidden-layer-1">
+    <circle cx="300" cy="120" r="22" class="node"/>
+    <circle cx="300" cy="200" r="22" class="node"/>
+    <circle cx="300" cy="280" r="22" class="node"/>
+  </g>
+  
+  <!-- 隐藏层 2 -->
+  <g class="hidden-layer-2">
+    <circle cx="450" cy="150" r="22" class="node"/>
+    <circle cx="450" cy="250" r="22" class="node"/>
+  </g>
+  
+  <!-- 隐藏层 3 -->
+  <g class="hidden-layer-3">
+    <circle cx="600" cy="120" r="22" class="node"/>
+    <circle cx="600" cy="200" r="22" class="node"/>
+    <circle cx="600" cy="280" r="22" class="node"/>
+  </g>
+  
+  <!-- 输出层 -->
+  <g class="output-layer">
+    <circle cx="750" cy="200" r="28" class="node node-output node-glow delay-4"/>
+    <text x="750" y="205" class="label">ŷ</text>
+  </g>
+  
+  <!-- 层标签 -->
+  <text x="150" y="420" class="layer-label">输入层</text>
+  <text x="300" y="420" class="layer-label">隐藏层</text>
+  <text x="450" y="420" class="layer-label">隐藏层</text>
+  <text x="600" y="420" class="layer-label">隐藏层</text>
+  <text x="750" y="420" class="layer-label">输出层</text>
+  
+  <!-- 图例 -->
+  <g transform="translate(50, 460)">
+    <circle cx="0" cy="0" r="8" class="node node-input"/>
+    <text x="20" y="5" class="label" text-anchor="start">输入</text>
+    <circle cx="100" cy="0" r="8" class="node"/>
+    <text x="120" y="5" class="label" text-anchor="start">隐藏神经元</text>
+    <circle cx="250" cy="0" r="8" class="node node-output"/>
+    <text x="270" y="5" class="label" text-anchor="start">输出</text>
+    <line x1="350" y1="0" x2="380" y2="0" class="data-signal"/>
+    <text x="400" y="5" class="label" text-anchor="start">数据流</text>
+  </g>
+</svg>
