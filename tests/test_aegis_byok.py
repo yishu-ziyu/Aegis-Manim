@@ -298,6 +298,54 @@ class AegisByokTest(unittest.TestCase):
         assert preflight_body["authMode"] == "byok"
         assert secret not in json.dumps(preflight_body)
 
+    def test_local_generate_job_redacts_key_and_marks_byok(self) -> None:
+        secret = "sk-live-secret-key"
+
+        def boom(**kwargs: object):
+            raise RuntimeError("upstream rejected " + str(kwargs["api_key"]))
+
+        job_id = web_app.create_job("解释消费者剩余为什么重要")
+        with patch.object(web_app, "generate_code_with_llm", boom):
+            web_app.run_generate_job(
+                job_id,
+                {
+                    "prompt": "解释消费者剩余为什么重要",
+                    "provider": "openai",
+                    "apiKey": secret,
+                    "noRender": True,
+                },
+            )
+        snapshot = web_app.job_snapshot(job_id)
+        dumped = json.dumps(snapshot)
+        assert snapshot is not None
+        assert snapshot["status"] == "failed"
+        assert secret not in dumped
+        assert "[redacted]" in json.dumps(snapshot.get("error") or {})
+
+    def test_local_generate_job_success_sets_byok_auth_mode(self) -> None:
+        secret = "sk-live-secret-key"
+
+        def fake_generate_code_with_llm(**kwargs: object):
+            return _scene(), "OpenAI API", "https://api.openai.com/v1/chat/completions"
+
+        job_id = web_app.create_job("解释消费者剩余为什么重要")
+        with patch.object(web_app, "generate_code_with_llm", fake_generate_code_with_llm):
+            web_app.run_generate_job(
+                job_id,
+                {
+                    "prompt": "解释消费者剩余为什么重要",
+                    "provider": "openai",
+                    "apiKey": secret,
+                    "noRender": True,
+                },
+            )
+        snapshot = web_app.job_snapshot(job_id)
+        dumped = json.dumps(snapshot)
+        assert snapshot is not None
+        assert snapshot["status"] == "succeeded"
+        assert snapshot["result"]["authMode"] == "byok"
+        assert secret not in dumped
+
     def test_local_web_exposes_preflight_route(self) -> None:
         source = Path(web_app.__file__).read_text(encoding="utf-8")
         assert 'if route == "/api/byok/preflight":' in source
