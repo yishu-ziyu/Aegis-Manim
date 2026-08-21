@@ -128,6 +128,8 @@ class AegisByokTest(unittest.TestCase):
             assert 'fetch("/api/byok/preflight"' in html
             assert 'id="communityDrawer"' in html
             assert "测试连通" in html
+            assert "粘贴完整 API Key，不要填环境变量名" in html
+            assert "模型与接口" in html
 
     def test_gateway_byok_redacts_key_from_value_error(self) -> None:
         def boom(**kwargs: object):

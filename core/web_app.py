@@ -1027,7 +1027,7 @@ def make_index_html() -> str:
     .brand strong {{
       display: block;
       font-family: var(--serif);
-      font-size: 1.15rem;
+      font-size: 1.02rem;
       font-weight: 600;
       letter-spacing: 0.01em;
     }}
@@ -1174,8 +1174,8 @@ def make_index_html() -> str:
       border: 1px solid var(--border);
       border-radius: 12px;
       background: #fffaf1;
-      padding: 14px;
-      gap: 12px;
+      padding: 16px;
+      gap: 14px;
     }}
     .byok-panel.visible {{ display: grid; }}
     .vault-head {{
@@ -1244,19 +1244,23 @@ def make_index_html() -> str:
       margin-top: 12px;
     }}
     .quiet-box {{
-      border: 1px dashed var(--border);
-      border-radius: 12px;
-      padding: 10px 12px;
-      background: rgba(255, 250, 241, 0.55);
+      border: 0;
+      border-top: 1px dashed var(--border);
+      border-radius: 0;
+      padding: 8px 0 2px;
+      background: transparent;
     }}
     .quiet-box > summary {{
       cursor: pointer;
-      color: var(--muted-2);
-      font-size: 0.82rem;
+      color: var(--muted);
+      font-size: 0.78rem;
       font-weight: 600;
     }}
     .quiet-box[open] {{
-      background: #fffaf1;
+      background: transparent;
+    }}
+    .result-wrap > .quiet-box + .quiet-box {{
+      margin-top: 0;
     }}
     .preflight-status {{
       min-height: 1.2em;
@@ -2174,19 +2178,18 @@ def make_index_html() -> str:
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">Æ</span>
       <div>
-        <strong>Aegis</strong>
-        <small>经济学动画工作台</small>
+        <strong>Aegis 经济学动画工作台</strong>
+        <small>把问题变成可播放的教学动画</small>
       </div>
     </div>
     <div class="app-bar-meta">
       <span id="authChip" class="auth-chip trial">试用</span>
-      <button id="vaultToggle" class="ghost-btn" type="button">打开密钥库</button>
+      <button id="vaultToggle" class="ghost-btn" type="button" hidden>打开密钥库</button>
     </div>
   </header>
   <main class="shell">
     <section class="panel">
       <header class="hero">
-        <p class="eyebrow">Aegis · 教学动画</p>
         <h1>写下一道经济学问题</h1>
         <p>免费试用可直接生成。自带密钥只存在这台浏览器，生成时才发给对应模型服务。</p>
         <div class="mode-switch" role="tablist" aria-label="生成方式">
@@ -2257,12 +2260,12 @@ def make_index_html() -> str:
             </div>
             <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
           </div>
-          <div class="field">
-            <label for="model">模型</label>
-            <input id="model" name="model" value="{DEFAULT_MODEL}" />
-          </div>
           <details id="endpointDetails" class="advanced-box">
-            <summary>接口地址</summary>
+            <summary>模型与接口</summary>
+            <div class="field">
+              <label for="model">模型</label>
+              <input id="model" name="model" value="{DEFAULT_MODEL}" />
+            </div>
             <div id="baseUrlField" class="field">
               <label for="baseUrl">Base URL</label>
               <input id="baseUrl" name="baseUrl" value="{DEFAULT_ZHIPU_ENDPOINT}" />
@@ -2647,7 +2650,10 @@ def make_index_html() -> str:
         ? (saved ? "自带密钥 · " + maskKey(savedVaultKey(providerSelect.value)) : "自带密钥")
         : "免费试用";
       authChip.className = "auth-chip " + (currentMode === "byok" ? "byok" : "trial");
-      vaultToggle.textContent = currentMode === "byok" ? "收起密钥库" : "打开密钥库";
+      if (vaultToggle) {{
+        vaultToggle.hidden = currentMode !== "byok";
+        vaultToggle.textContent = byokPanel.classList.contains("visible") ? "收起密钥库" : "打开密钥库";
+      }}
       renderVaultList();
     }}
 
@@ -2708,7 +2714,7 @@ def make_index_html() -> str:
       providerDoc.classList.toggle("hidden", !preset.doc);
       providerHelp.textContent = preset.description || `${{preset.name || providerSelect.value}} · ${{preset.apiType || "compatible"}} · 模型 ID 可手动改写。`;
       apiKeyLabel.textContent = `${{preset.name || "Provider"}} API Key`;
-      apiKeyInput.placeholder = preset.apiKeyPlaceholder || "API Key...";
+      apiKeyInput.placeholder = "粘贴完整 API Key，不要填环境变量名";
       apiKeyInput.required = false;
       const usesCodexCli = preset.apiType === "codex-cli";
       const serverManaged = Boolean(preset.serverManaged);
