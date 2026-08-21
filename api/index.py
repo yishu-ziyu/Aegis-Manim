@@ -1600,7 +1600,13 @@ def build_index_html() -> str:
         "支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。": (
             "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型，也可切换到自带密钥。"
         ),
+        "免费试用走内置额度；自带密钥可接入智谱、OpenAI、DeepSeek、Kimi、MiniMax。": (
+            "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型，也可切换到自带密钥。"
+        ),
         "Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。": (
+            "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。"
+        ),
+        "密钥只存在这台浏览器。请粘贴完整 Key，不要填环境变量名。": (
             "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。"
         ),
         "使用本机 codex login 登录态，不需要在页面粘贴 API Key。": (
