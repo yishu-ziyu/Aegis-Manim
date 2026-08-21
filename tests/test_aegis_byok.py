@@ -137,6 +137,12 @@ class AegisByokTest(unittest.TestCase):
             assert "writeVaultEntry" in html
             assert 'id="keyNotice"' in html
             assert "keyNotice.hidden" in html
+            assert "function secretInPayload" in html
+            assert "function hideSecret" in html
+            assert 'id="authTag"' in html
+            assert "Auth: 自带密钥" in html
+            assert "生成接口返回了不该出现的密钥" in html
+            assert "对齐接口返回了不该出现的密钥" in html
             assert "verifiedAt" in html
             assert "已连通" in html
             assert "function customEndpointReady" in html

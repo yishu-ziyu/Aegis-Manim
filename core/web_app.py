@@ -2375,6 +2375,7 @@ def make_index_html() -> str:
           <span id="sceneTag" class="tag">Scene: -</span>
           <span id="fileTag" class="tag">File: -</span>
           <span id="requestTag" class="tag">Req: -</span>
+          <span id="authTag" class="tag">Auth: -</span>
           <span class="tag">Version: {APP_VERSION}</span>
         </div>
 
@@ -2483,6 +2484,7 @@ def make_index_html() -> str:
     const sceneTag = document.getElementById("sceneTag");
     const fileTag = document.getElementById("fileTag");
     const requestTag = document.getElementById("requestTag");
+    const authTag = document.getElementById("authTag");
     const videoCard = document.getElementById("videoCard");
     const videoPlayer = document.getElementById("videoPlayer");
     const toggleKey = document.getElementById("toggleKey");
@@ -2649,6 +2651,23 @@ def make_index_html() -> str:
     function savedVaultKey(providerId) {{
       const entry = vaultEntry(providerId);
       return entry && typeof entry.key === "string" ? entry.key : "";
+    }}
+
+    function secretInPayload(payload, key) {{
+      const secret = String(key || "");
+      if (secret.length < 6) return false;
+      try {{
+        return JSON.stringify(payload).includes(secret);
+      }} catch (err) {{
+        return false;
+      }}
+    }}
+
+    function hideSecret(text, key) {{
+      const value = String(text || "");
+      const secret = String(key || "");
+      if (secret.length < 6) return value;
+      return value.split(secret).join("[redacted]");
     }}
 
     function keyLooksUsable(key, preset) {{
@@ -2916,12 +2935,11 @@ def make_index_html() -> str:
           }})
         }});
         const data = await response.json();
-        const dumped = JSON.stringify(data);
-        if (key && dumped.includes(key)) {{
+        if (secretInPayload(data, key)) {{
           throw new Error("连通检测返回了不该出现的密钥，已中止。");
         }}
         if (!response.ok || !data.ok) {{
-          throw new Error(data.error || "连通失败");
+          throw new Error(hideSecret(data.error || "连通失败", key));
         }}
         if (key && keyLooksUsable(key, preset)) {{
           writeVaultEntry(providerSelect.value, key, {{
@@ -3653,6 +3671,9 @@ def make_index_html() -> str:
         : "";
       const reqText = requestId && requestId !== "-" ? " | 诊断ID: " + requestId : "";
       const authText = data.authMode === "byok" ? "已使用你的密钥，未写入服务器。" : "";
+      if (authTag) {{
+        authTag.textContent = data.authMode === "byok" ? "Auth: 自带密钥" : "Auth: 免费试用";
+      }}
       if (data.authMode === "byok" && payload && payload.apiKey) {{
         writeVaultEntry(payload.provider, payload.apiKey, {{ verifiedAt: Date.now() }});
         updateVaultStatus();
@@ -3975,10 +3996,13 @@ def make_index_html() -> str:
           body: JSON.stringify(payload)
         }});
         const data = await response.json();
+        if (secretInPayload(data, payload.apiKey)) {{
+          throw new Error("生成接口返回了不该出现的密钥，已中止。");
+        }}
         if (!response.ok || !data.ok) {{
           const detail = data.detail ? " | " + data.detail : "";
           const reqText = data.requestId ? " | 诊断ID: " + data.requestId : "";
-          throw new Error((data.error || "请求失败") + detail + reqText);
+          throw new Error(hideSecret((data.error || "请求失败") + detail + reqText, payload.apiKey));
         }}
         requestTag.textContent = "Req: " + (data.requestId || data.jobId || "-");
         await waitForJob(data.statusUrl, payload);
@@ -4021,13 +4045,20 @@ def make_index_html() -> str:
           body: JSON.stringify(payload)
         }});
         const data = await response.json();
+        const alignKey = latestProviderPayload.apiKey || "";
+        if (secretInPayload(data, alignKey)) {{
+          throw new Error("对齐接口返回了不该出现的密钥，已中止。");
+        }}
+        if (secretInPayload(data.alignment, alignKey)) {{
+          throw new Error("对齐结果含有不该出现的密钥，已中止。");
+        }}
         if (!response.ok || !data.ok) {{
-          throw new Error(data.error || "重新对齐失败");
+          throw new Error(hideSecret(data.error || "重新对齐失败", alignKey));
         }}
         setAlignment(data.alignment);
         setStatus("讲稿已重新对齐。", "success");
       }} catch (err) {{
-        setStatus(err && err.message ? err.message : "重新对齐失败", "error");
+        setStatus(hideSecret(err && err.message ? err.message : "重新对齐失败", latestProviderPayload && latestProviderPayload.apiKey), "error");
       }} finally {{
         realignBtn.textContent = previousText;
         realignBtn.disabled = !latestCode;

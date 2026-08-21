@@ -58,6 +58,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert "先写下一道要讲清楚的问题" in html
         assert 'id="keyNotice"' in html
         assert "keyNotice.hidden" in html
+        assert "function secretInPayload" in html
+        assert 'id="authTag"' in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
