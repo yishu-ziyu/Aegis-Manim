@@ -130,6 +130,11 @@ class AegisByokTest(unittest.TestCase):
             assert "测试连通" in html
             assert "粘贴完整 API Key，不要填环境变量名" in html
             assert "模型与接口" in html
+            assert "writeVaultEntry" in html
+            assert "verifiedAt" in html
+            assert "已连通" in html
+            assert "function customEndpointReady" in html
+            assert "已使用你的密钥，未写入服务器。" in html
 
     def test_gateway_byok_redacts_key_from_value_error(self) -> None:
         def boom(**kwargs: object):
