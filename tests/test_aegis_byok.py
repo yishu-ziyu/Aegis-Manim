@@ -122,3 +122,174 @@ class AegisByokTest(unittest.TestCase):
             assert 'id="vaultList"' in html
             assert "forgetAllKeys" in html
             assert "keyLooksUsable" in html
+            assert 'id="preflightBtn"' in html
+            assert 'id="preflightStatus"' in html
+            assert "function preflightCurrentKey" in html
+            assert 'fetch("/api/byok/preflight"' in html
+            assert 'id="communityDrawer"' in html
+            assert "测试连通" in html
+
+    def test_gateway_byok_redacts_key_from_value_error(self) -> None:
+        def boom(**kwargs: object):
+            raise ValueError("upstream rejected " + str(kwargs["api_key"]))
+
+        with patch.object(gateway, "generate_code_with_llm", boom):
+            status, response = gateway.generate_manim_code_for_gateway(
+                {
+                    "prompt": "解释消费者剩余",
+                    "provider": "openai",
+                    "apiKey": "sk-live-secret-key",
+                }
+            )
+
+        dumped = json.dumps(response)
+        assert status == 400
+        assert response["ok"] is False
+        assert "sk-live-secret-key" not in dumped
+        assert "[redacted]" in response["error"]
+
+    def test_preflight_uses_client_key_and_does_not_echo_it(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_generate_code_with_provider(**kwargs: object):
+            calls.append(kwargs)
+            return "ok", gateway.resolve_provider("openai"), "https://api.openai.com/v1/chat/completions"
+
+        with patch.object(gateway, "generate_code_with_provider", fake_generate_code_with_provider):
+            status, response = gateway.preflight_byok_provider(
+                {
+                    "provider": "openai",
+                    "apiKey": "sk-live-secret-key",
+                    "model": "gpt-4o-mini",
+                    "baseUrl": "https://api.openai.com/v1",
+                }
+            )
+
+        dumped = json.dumps(response)
+        assert status == 200
+        assert response["ok"] is True
+        assert response["authMode"] == "byok"
+        assert response["provider"] == "openai"
+        assert calls[0]["api_key"] == "sk-live-secret-key"
+        assert calls[0]["max_tokens"] == gateway.BYOK_PREFLIGHT_MAX_TOKENS
+        assert "sk-live-secret-key" not in dumped
+
+    def test_preflight_requires_key_and_rejects_trial(self) -> None:
+        missing = gateway.preflight_byok_provider({"provider": "openai"})
+        assert missing[0] == 400
+        assert "API Key" in str(missing[1]["error"])
+
+        trial = gateway.preflight_byok_provider(
+            {"provider": "trial-minimax-direct", "apiKey": "sk-live-secret-key"}
+        )
+        assert trial[0] == 400
+        assert "免费试用" in trial[1]["error"]
+        assert "sk-live-secret-key" not in json.dumps(trial[1])
+
+        local_only = gateway.preflight_byok_provider(
+            {"provider": "codex-cli", "apiKey": "sk-live-secret-key"}
+        )
+        assert local_only[0] == 400
+        assert "只能在本机使用" in local_only[1]["error"]
+
+    def test_preflight_redacts_key_from_value_error(self) -> None:
+        def boom(**kwargs: object):
+            raise ValueError("probe failed for " + str(kwargs["api_key"]))
+
+        with patch.object(gateway, "generate_code_with_provider", boom):
+            status, response = gateway.preflight_byok_provider(
+                {
+                    "provider": "openai",
+                    "apiKey": "sk-live-secret-key",
+                    "baseUrl": "https://api.openai.com/v1",
+                }
+            )
+
+        assert status == 400
+        assert "sk-live-secret-key" not in json.dumps(response)
+        assert "[redacted]" in response["error"]
+
+    def test_asgi_byok_generate_and_preflight_do_not_echo_key(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("aegis_vercel_asgi_app", PROJECT_ROOT / "app.py")
+        assert spec and spec.loader
+        vercel_asgi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vercel_asgi)
+
+        async def call_asgi(path: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+            raw = json.dumps(payload).encode("utf-8")
+            messages = [{"type": "http.request", "body": raw, "more_body": False}]
+            events: list[dict[str, object]] = []
+
+            async def receive() -> dict[str, object]:
+                if messages:
+                    return messages.pop(0)
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message: dict[str, object]) -> None:
+                events.append(message)
+
+            await vercel_asgi.app(
+                {"type": "http", "method": "POST", "path": path, "query_string": b""},
+                receive,
+                send,
+            )
+            status = next(event["status"] for event in events if event["type"] == "http.response.start")
+            body = b"".join(event.get("body", b"") for event in events if event["type"] == "http.response.body")
+            return int(status), json.loads(body.decode("utf-8")) if body else {}
+
+        secret = "sk-http-smoke-secret-key"
+
+        def fake_generate_code_with_llm(**kwargs: object):
+            return (
+                _scene(),
+                "OpenAI API",
+                "https://api.openai.com/v1/chat/completions",
+            )
+
+        def fake_generate_code_with_provider(**kwargs: object):
+            return "ok", gateway.resolve_provider("openai"), "https://api.openai.com/v1/chat/completions"
+
+        import asyncio
+
+        with patch.object(gateway, "generate_code_with_llm", fake_generate_code_with_llm):
+            generate_status, generate_body = asyncio.run(
+                call_asgi(
+                    "/api/generate",
+                    {
+                        "prompt": "解释消费者剩余",
+                        "provider": "openai",
+                        "apiKey": secret,
+                        "model": "gpt-4o-mini",
+                        "baseUrl": "https://api.openai.com/v1",
+                    },
+                )
+            )
+        with patch.object(gateway, "generate_code_with_provider", fake_generate_code_with_provider):
+            preflight_status, preflight_body = asyncio.run(
+                call_asgi(
+                    "/api/byok/preflight",
+                    {
+                        "provider": "openai",
+                        "apiKey": secret,
+                        "model": "gpt-4o-mini",
+                        "baseUrl": "https://api.openai.com/v1",
+                    },
+                )
+            )
+
+        assert generate_status == 200
+        assert generate_body["ok"] is True
+        assert generate_body["authMode"] == "byok"
+        assert secret not in json.dumps(generate_body)
+        assert preflight_status == 200
+        assert preflight_body["ok"] is True
+        assert preflight_body["authMode"] == "byok"
+        assert secret not in json.dumps(preflight_body)
+
+    def test_local_web_exposes_preflight_route(self) -> None:
+        source = Path(web_app.__file__).read_text(encoding="utf-8")
+        assert 'if route == "/api/byok/preflight":' in source
+        assert "proxy_cloud_preflight" in source
+        assert "preflight_byok_provider" in source

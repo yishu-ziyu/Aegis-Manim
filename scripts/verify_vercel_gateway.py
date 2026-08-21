@@ -69,6 +69,9 @@ def main() -> int:
     assert "Codex CLI 登录态" not in html
     assert "aegis.byok.vault.v1" in html
     assert 'data-mode="byok"' in html
+    assert "测试连通" in html
+    assert 'fetch("/api/byok/preflight"' in html
+    assert 'id="communityDrawer"' in html
     assert 'fetch("/api/generate"' in html
     assert 'fetch("/api/generate/start"' not in html
     assert "await waitForJob(data.statusUrl, payload);" not in html
