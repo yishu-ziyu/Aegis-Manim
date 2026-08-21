@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from api import index as gateway  # noqa: E402
 import llm_providers  # noqa: E402
+from manim_agent import is_placeholder_api_key  # noqa: E402
 import web_app  # noqa: E402
 
 
@@ -129,6 +130,8 @@ class AegisByokTest(unittest.TestCase):
             assert 'id="communityDrawer"' in html
             assert "测试连通" in html
             assert "粘贴完整 API Key，不要填环境变量名" in html
+            assert 'placeholder="粘贴完整 API Key，不要填环境变量名"' in html
+            assert "输入你自己的 API Key" not in html
             assert "模型与接口" in html
             assert "writeVaultEntry" in html
             assert "verifiedAt" in html
@@ -351,3 +354,56 @@ class AegisByokTest(unittest.TestCase):
         assert 'if route == "/api/byok/preflight":' in source
         assert "proxy_cloud_preflight" in source
         assert "preflight_byok_provider" in source
+
+    def test_placeholder_api_key_rejects_env_names_and_examples(self) -> None:
+        assert is_placeholder_api_key("OPENAI_API_KEY")
+        assert is_placeholder_api_key("BIGMODEL_API_KEY")
+        assert is_placeholder_api_key("your_api_key")
+        assert is_placeholder_api_key("sk-xxx")
+        assert not is_placeholder_api_key("")
+        assert not is_placeholder_api_key("sk-live-secret-key-123456")
+
+    def test_gateway_rejects_placeholder_and_env_name_keys(self) -> None:
+        for key in ("OPENAI_API_KEY", "your_api_key_here"):
+            status, response = gateway.generate_manim_code_for_gateway(
+                {
+                    "prompt": "解释消费者剩余",
+                    "provider": "openai",
+                    "apiKey": key,
+                }
+            )
+            assert status == 400
+            assert response["ok"] is False
+            assert "真实 API Key" in response["error"]
+            assert key not in json.dumps(response)
+
+            preflight = gateway.preflight_byok_provider({"provider": "openai", "apiKey": key})
+            assert preflight[0] == 400
+            assert "真实 API Key" in preflight[1]["error"]
+            assert key not in json.dumps(preflight[1])
+
+    def test_alignment_fallback_redacts_key(self) -> None:
+        secret = "sk-align-secret-key"
+        handler = object.__new__(web_app.AegisWebHandler)
+
+        def boom(**kwargs: object):
+            raise RuntimeError("upstream rejected " + str(kwargs["api_key"]))
+
+        with patch.object(web_app, "generate_code_with_llm", boom):
+            alignment = handler._build_alignment_response(
+                request_id="align-test",
+                prompt="解释消费者剩余为什么会出现",
+                code=_scene(),
+                scene_name="GeneratedScene",
+                video_duration=8.0,
+                provider_id="openai",
+                api_key=secret,
+                base_url="https://api.openai.com/v1",
+                endpoint=None,
+                model="gpt-4o-mini",
+                temperature=0.2,
+            )
+
+        dumped = json.dumps(alignment, ensure_ascii=False)
+        assert secret not in dumped
+        assert "[redacted]" in dumped

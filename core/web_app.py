@@ -450,6 +450,10 @@ def probe_video_duration(path: Path) -> float | None:
     return optional_positive_float((result.stdout or "").strip())
 
 
+def redact_json_secrets(value: object, *secrets: object) -> object:
+    return json.loads(redact_client_secrets(json.dumps(value, ensure_ascii=False), *secrets))
+
+
 def json_error(
     message: str,
     status: int = 400,
@@ -947,7 +951,7 @@ def make_index_html() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Aegis 可视化工作台</title>
+  <title>Aegis 经济学动画工作台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet" />
@@ -1205,6 +1209,21 @@ def make_index_html() -> str:
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      align-items: center;
+    }}
+    .vault-actions-danger {{
+      margin-left: auto;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .tiny-btn.secondary {{
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid rgba(194, 65, 45, 0.28);
+    }}
+    .ghost-btn.danger {{
+      color: var(--danger);
     }}
     .vault-list {{
       display: none;
@@ -2254,14 +2273,14 @@ def make_index_html() -> str:
             <span id="providerProtocol" class="provider-pill">-</span>
             <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
           </div>
-          <div id="providerHelp" class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。</div>
+          <div id="providerHelp" class="help">免费试用走内置额度；自带密钥可接入智谱、OpenAI、DeepSeek、Kimi、MiniMax。</div>
         </div>
 
         <div id="byokPanel" class="byok-panel">
           <div class="vault-head">
             <div>
               <h3>密钥库</h3>
-              <p>密钥只存在这台浏览器。生成时才发给你选择的模型服务，不会写入仓库或服务器。</p>
+              <p>先保存，再测连通。生成时才发给对应模型服务。</p>
             </div>
             <span id="vaultStatus" class="provider-pill">未保存</span>
           </div>
@@ -2269,10 +2288,10 @@ def make_index_html() -> str:
           <div id="apiKeyField" class="field">
             <label id="apiKeyLabel" for="apiKey">API Key</label>
             <div class="key-row">
-              <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" autocomplete="off" />
-              <button id="toggleKey" class="tiny-btn" type="button">显示</button>
+              <input id="apiKey" name="apiKey" type="password" placeholder="粘贴完整 API Key，不要填环境变量名" autocomplete="off" />
+              <button id="toggleKey" class="tiny-btn secondary" type="button">显示</button>
             </div>
-            <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
+            <div id="apiKeyHelp" class="help">密钥只存在这台浏览器。请粘贴完整 Key，不要填环境变量名。</div>
           </div>
           <details id="endpointDetails" class="advanced-box">
             <summary>模型与接口</summary>
@@ -2287,10 +2306,12 @@ def make_index_html() -> str:
             </div>
           </details>
           <div class="vault-actions">
-            <button id="saveKeyBtn" class="tiny-btn" type="button">保存到本机</button>
+            <button id="saveKeyBtn" class="tiny-btn secondary" type="button">保存到本机</button>
             <button id="preflightBtn" class="tiny-btn" type="button">测试连通</button>
-            <button id="forgetKeyBtn" class="ghost-btn" type="button">清除此 Key</button>
-            <button id="forgetAllBtn" class="ghost-btn" type="button">清空密钥库</button>
+            <div class="vault-actions-danger">
+              <button id="forgetKeyBtn" class="ghost-btn" type="button">清除此 Key</button>
+              <button id="forgetAllBtn" class="ghost-btn danger" type="button">清空密钥库</button>
+            </div>
           </div>
           <div id="preflightStatus" class="preflight-status"></div>
         </div>
@@ -4845,6 +4866,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             video_duration=video_duration,
             llm_call=call_alignment_model,
         )
+        alignment = redact_json_secrets(alignment, api_key)
         event_name = "ALIGNMENT_FALLBACK" if alignment.get("confidence") == "low" else "ALIGNMENT_OK"
         append_runtime_log(
             event_name,
@@ -4904,19 +4926,39 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             self._send_json(status, err)
             return
 
-        alignment = self._build_alignment_response(
-            request_id=request_id,
-            prompt=prompt,
-            code=code,
-            scene_name=scene_name,
-            video_duration=video_duration,
-            provider_id=provider.id,
-            api_key=api_key,
-            base_url=base_url or None,
-            endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
-            model=model,
-            temperature=temperature,
-        )
+        if api_key and is_placeholder_api_key(api_key):
+            status, err = json_error(
+                "请粘贴真实 API Key，不要填环境变量名或示例占位符。",
+                status=HTTPStatus.BAD_REQUEST,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        try:
+            alignment = self._build_alignment_response(
+                request_id=request_id,
+                prompt=prompt,
+                code=code,
+                scene_name=scene_name,
+                video_duration=video_duration,
+                provider_id=provider.id,
+                api_key=api_key,
+                base_url=base_url or None,
+                endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
+                model=model,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            status, err = json_error(
+                "讲稿对齐失败。请检查 Key、额度与 Base URL。",
+                status=HTTPStatus.BAD_GATEWAY,
+                detail=redact_client_secrets(str(exc), api_key),
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
         self._send_json(
             HTTPStatus.OK,
             {
