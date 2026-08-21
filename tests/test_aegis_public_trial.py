@@ -97,18 +97,26 @@ class AegisPublicTrialTest(unittest.TestCase):
         else:
             os.environ["MIMO_API_KEY"] = self._old_mimo
 
-    def test_public_config_exposes_only_safe_trial_choices(self) -> None:
+    def test_public_config_exposes_safe_trial_and_byok_choices(self) -> None:
         config = gateway.public_provider_config()
         providers = config["providers"]
 
         assert config["defaultProvider"] == "trial-minimax-direct"
-        assert set(providers) == {"trial-minimax-direct", "trial-mimo-direct"}
+        assert config["defaultMode"] == "trial"
+        assert config["cloudMode"] is True
+        assert config["providerStorageKey"] == "aegis.provider.public.v5"
+        assert {"trial-minimax-direct", "trial-mimo-direct"} <= set(providers)
         assert providers["trial-minimax-direct"]["serverManaged"] is True
         assert providers["trial-minimax-direct"]["requiresApiKey"] is False
         assert providers["trial-minimax-direct"]["hideApiKey"] is True
         assert providers["trial-minimax-direct"]["defaultModel"] == "MiniMax M3 试用"
         assert "baseURL" not in providers["trial-minimax-direct"]
         assert "apiType" not in providers["trial-minimax-direct"]
+        assert providers["openai"]["byok"] is True
+        assert providers["openai"]["requiresApiKey"] is True
+        assert providers["custom-openai"]["byok"] is True
+        assert "codex-cli" not in providers
+        assert "codex-local-proxy" not in providers
 
     def test_health_exposes_safe_trial_provider_diagnostics(self) -> None:
         os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
@@ -171,7 +179,7 @@ class AegisPublicTrialTest(unittest.TestCase):
 
         assert status == 400
         assert response["ok"] is False
-        assert "公开内测页只支持内置免费试用模型" in str(response["error"])
+        assert "这个试用模型已下线" in str(response["error"])
 
     def test_trial_uses_minimax_m3_directly(self) -> None:
         calls: list[dict[str, object]] = []
@@ -724,12 +732,12 @@ class AegisPublicTrialTest(unittest.TestCase):
         assert "LaggedStart" not in str(response["code"])
         assert "topic-budget" in warnings
 
-    def test_public_gateway_rejects_arbitrary_provider_and_long_prompt(self) -> None:
+    def test_public_gateway_rejects_incomplete_byok_and_long_prompt(self) -> None:
         status, response = gateway.generate_manim_code_for_gateway(
             {"prompt": "解释消费者剩余", "provider": "custom-openai"}
         )
         assert status == 400
-        assert "内置免费试用模型" in response["error"]
+        assert "自定义 Provider 需要填写" in response["error"]
 
         status, response = gateway.generate_manim_code_for_gateway(
             {"prompt": "x" * (gateway.MAX_PUBLIC_PROMPT_CHARS + 1)}

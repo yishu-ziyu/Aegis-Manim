@@ -33,7 +33,7 @@
 **Given** 自动化测试调用 `trial-deepseek-direct`
 **When** API 返回
 **Then** 返回 `ok: false`
-**And** `error` 包含 "只支持内置免费试用模型"
+**And** `error` 包含 "这个试用模型已下线"
 **And** 测试脚本将该结果标记为 "expected_failure"
 
 ## 技术设计

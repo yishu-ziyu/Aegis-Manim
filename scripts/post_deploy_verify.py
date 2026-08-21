@@ -29,8 +29,8 @@ REQUIRED_TRIAL_PROVIDERS = (
 
 # Providers that are expected to fail with a specific error
 EXPECTED_FAILURES = {
-    "trial-kimi-priority": "公开内测页只支持内置免费试用模型",
-    "trial-deepseek-direct": "公开内测页只支持内置免费试用模型",
+    "trial-kimi-priority": "这个试用模型已下线",
+    "trial-deepseek-direct": "这个试用模型已下线",
 }
 
 DEFAULT_PROMPT = "Draw a red circle and label it"
