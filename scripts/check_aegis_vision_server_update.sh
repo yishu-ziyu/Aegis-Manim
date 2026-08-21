@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE_HOST="${REMOTE_HOST:-root@121.89.90.68}"
+if [[ -z "${REMOTE_HOST:-}" ]]; then
+  echo "REMOTE_HOST is required (example: export REMOTE_HOST=root@YOUR_HOST)" >&2
+  exit 1
+fi
 REMOTE_DOCTOR_LOG="${REMOTE_DOCTOR_LOG:-/opt/aegis/vision-doctor.log}"
 REMOTE_DOCTOR_PID="${REMOTE_DOCTOR_PID:-/opt/aegis/vision-doctor.pid}"
 TAIL_LINES="${TAIL_LINES:-160}"
