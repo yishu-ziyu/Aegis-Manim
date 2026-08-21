@@ -135,6 +135,9 @@ class AegisByokTest(unittest.TestCase):
             assert "已连通" in html
             assert "function customEndpointReady" in html
             assert "已使用你的密钥，未写入服务器。" in html
+            assert "currentMode !== \"byok\"" in html
+            assert "用自带密钥生成" in html
+            assert "用已连通的密钥生成" in html
 
     def test_gateway_byok_redacts_key_from_value_error(self) -> None:
         def boom(**kwargs: object):

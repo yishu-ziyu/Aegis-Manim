@@ -2673,6 +2673,11 @@ def make_index_html() -> str:
         vaultToggle.hidden = currentMode !== "byok";
         vaultToggle.textContent = byokPanel.classList.contains("visible") ? "收起密钥库" : "打开密钥库";
       }}
+      if (submitBtn) {{
+        submitBtn.textContent = currentMode === "byok"
+          ? (verified ? "用已连通的密钥生成" : "用自带密钥生成")
+          : "生成动画草稿";
+      }}
       renderVaultList();
     }}
 
@@ -3894,7 +3899,9 @@ def make_index_html() -> str:
       clearAlignment();
       setCommunityActions();
       communitySearchList.replaceChildren();
-      setCommunitySearchStatus("正在准备仓库检索...");
+      setCommunitySearchStatus(currentMode === "byok"
+        ? "自带密钥模式会直接用你的模型生成；需要复用时再打开作品仓库。"
+        : "正在准备仓库检索...");
 
       const payload = {{
         provider: providerSelect.value,
@@ -3920,10 +3927,12 @@ def make_index_html() -> str:
       }}
 
       try {{
-        const communityWork = await searchCommunityWork(payload);
-        if (communityWork) {{
-          await applyCommunityWork(communityWork, payload);
-          return;
+        if (currentMode !== "byok") {{
+          const communityWork = await searchCommunityWork(payload);
+          if (communityWork) {{
+            await applyCommunityWork(communityWork, payload);
+            return;
+          }}
         }}
         const response = await fetch("/api/generate/start", {{
           method: "POST",
