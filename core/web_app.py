@@ -2229,7 +2229,7 @@ def make_index_html() -> str:
           <button id="modeTrialBtn" class="mode-btn active" type="button" data-mode="trial">免费试用</button>
           <button id="modeByokBtn" class="mode-btn" type="button" data-mode="byok">自带密钥</button>
         </div>
-        <small>API Key 只用于本次生成，不写入仓库。</small>
+        <small id="keyNotice" hidden>API Key 只用于本次生成，不写入仓库。</small>
       </header>
 
       <form id="generate-form" class="form-wrap" novalidate>
@@ -2542,6 +2542,7 @@ def make_index_html() -> str:
     const vaultToggle = document.getElementById("vaultToggle");
     const modeTrialBtn = document.getElementById("modeTrialBtn");
     const modeByokBtn = document.getElementById("modeByokBtn");
+    const keyNotice = document.getElementById("keyNotice");
     const byokPanel = document.getElementById("byokPanel");
     const trialHint = document.getElementById("trialHint");
     const vaultStatus = document.getElementById("vaultStatus");
@@ -2718,6 +2719,7 @@ def make_index_html() -> str:
       modeByokBtn.style.display = hasByokProviders() ? "" : "none";
       byokPanel.classList.toggle("visible", next === "byok");
       trialHint.classList.toggle("visible", next === "trial");
+      if (keyNotice) keyNotice.hidden = next !== "byok";
       renderProviderOptions();
       updateProviderUI(false);
       updateVaultStatus();
@@ -4056,6 +4058,13 @@ def cloud_preflight_url() -> str:
     return ""
 
 
+def cloud_align_url() -> str:
+    generate_url = (AEGIS_CLOUD_GENERATE_URL or "").rstrip("/")
+    if generate_url.endswith("/api/generate"):
+        return generate_url[: -len("generate")] + "align"
+    return ""
+
+
 def proxy_cloud_preflight(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     preflight_url = cloud_preflight_url()
     if not preflight_url:
@@ -4093,6 +4102,47 @@ def proxy_cloud_preflight(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
             "error": "云端连通检测暂不可用，请稍后重试。",
+        }
+
+
+def proxy_cloud_align(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    align_url = cloud_align_url()
+    if not align_url:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "Cloud align proxy is not configured.",
+        }
+    provider_id = str(payload.get("provider", "")).strip()
+    allowed_payload = {
+        "prompt": str(payload.get("prompt", "")),
+        "code": str(payload.get("code", "")),
+        "sceneName": safe_scene_name(str(payload.get("sceneName", "GeneratedScene"))),
+        "videoDuration": payload.get("videoDuration"),
+        "provider": provider_id,
+        "model": str(payload.get("model", "")).strip(),
+        "temperature": payload.get("temperature", 0.2),
+    }
+    if provider_id and not provider_id.startswith("trial-"):
+        allowed_payload["apiKey"] = str(payload.get("apiKey", "")).strip()
+        allowed_payload["baseUrl"] = str(payload.get("baseUrl", "")).strip()
+        allowed_payload["endpoint"] = str(payload.get("endpoint") or payload.get("baseUrl") or "").strip()
+    body = json.dumps(allowed_payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(
+        align_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=90) as resp:
+            raw = resp.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else {}
+            return resp.status, parsed if isinstance(parsed, dict) else {"ok": False, "error": "Invalid cloud response."}
+    except Exception as exc:
+        append_runtime_log("CLOUD_ALIGN_FAIL", f"error={type(exc).__name__}")
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": "云端讲稿对齐暂不可用，请稍后重试。",
         }
 
 
@@ -4406,6 +4456,15 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         route = parsed.path
 
         if route == "/api/align":
+            if AEGIS_CLOUD_GENERATE_URL:
+                try:
+                    payload = self._read_json_body()
+                except ValueError as exc:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                    return
+                status, response = proxy_cloud_align(payload)
+                self._send_json(status, response)
+                return
             self._handle_align()
             return
 

@@ -13,6 +13,7 @@ from api.index import (
     build_health_payload,
     build_index_html,
     disabled_vision_response,
+    align_script_for_gateway,
     generate_manim_code_for_gateway,
     is_vision_public_enabled,
     preflight_byok_provider,
@@ -141,6 +142,20 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             return
 
         status, response = preflight_byok_provider(payload)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method == "POST" and path == "/api/align":
+        try:
+            raw_body = await read_body(receive)
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception as exc:
+            await send_json(send, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        status, response = align_script_for_gateway(payload)
         await send_json(send, HTTPStatus(status), response)
         return
 

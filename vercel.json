@@ -21,6 +21,10 @@
       "destination": "/api/index"
     },
     {
+      "source": "/api/align",
+      "destination": "/api/index"
+    },
+    {
       "source": "/api/render",
       "destination": "/api/index"
     },

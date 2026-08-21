@@ -73,6 +73,7 @@ def main() -> int:
     assert 'fetch("/api/byok/preflight"' in html
     vercel_config = (PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8")
     assert '"/api/byok/preflight"' in vercel_config
+    assert '"/api/align"' in vercel_config
     assert 'id="communityDrawer"' in html
     assert 'fetch("/api/generate"' in html
     assert 'fetch("/api/generate/start"' not in html

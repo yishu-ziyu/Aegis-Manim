@@ -83,6 +83,7 @@ def test_vercel_rewrites_include_community_proxy_routes() -> None:
 
     assert rewrites["/api/generate"] == "/api/index"
     assert rewrites["/api/byok/preflight"] == "/api/index"
+    assert rewrites["/api/align"] == "/api/index"
     assert rewrites["/api/vision/analyze"] == "/api/index"
     assert rewrites["/api/community/search"] == "/api/index"
     assert rewrites["/api/community/review/queue"] == "/api/index"

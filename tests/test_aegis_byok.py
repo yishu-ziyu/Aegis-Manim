@@ -135,6 +135,8 @@ class AegisByokTest(unittest.TestCase):
             assert "输入你自己的 API Key" not in html
             assert "模型与接口" in html
             assert "writeVaultEntry" in html
+            assert 'id="keyNotice"' in html
+            assert "keyNotice.hidden" in html
             assert "verifiedAt" in html
             assert "已连通" in html
             assert "function customEndpointReady" in html
@@ -350,11 +352,106 @@ class AegisByokTest(unittest.TestCase):
         assert snapshot["result"]["authMode"] == "byok"
         assert secret not in dumped
 
+    def test_gateway_align_uses_client_key_and_does_not_echo_it(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_generate_code_with_llm(**kwargs: object):
+            calls.append(kwargs)
+            return (
+                '{"mode":"posthoc_metadata","confidence":"high","warnings":[],'
+                '"segments":[{"id":"seg_1","title":"剩余","script":"解释消费者剩余",'
+                '"visualIntent":"标出剩余","startTime":0,"endTime":2,"confidence":"high"}]}',
+                "OpenAI API",
+                "https://api.openai.com/v1/chat/completions",
+            )
+
+        with patch.object(gateway, "generate_code_with_llm", fake_generate_code_with_llm):
+            status, response = gateway.align_script_for_gateway(
+                {
+                    "prompt": "解释消费者剩余为什么会出现",
+                    "code": _scene(),
+                    "provider": "openai",
+                    "apiKey": "sk-live-secret-key",
+                    "model": "gpt-4o-mini",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "videoDuration": 8,
+                }
+            )
+
+        dumped = json.dumps(response)
+        assert status == 200
+        assert response["ok"] is True
+        assert response["authMode"] == "byok"
+        assert calls[0]["api_key"] == "sk-live-secret-key"
+        assert "sk-live-secret-key" not in dumped
+
+    def test_gateway_align_trial_ignores_client_key(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_generate_code_with_llm(**kwargs: object):
+            calls.append(kwargs)
+            return (
+                '{"mode":"posthoc_metadata","confidence":"medium","warnings":[],'
+                '"segments":[{"id":"seg_1","title":"剩余","script":"解释消费者剩余",'
+                '"visualIntent":"标出剩余","startTime":0,"endTime":2,"confidence":"medium"}]}',
+                "MiniMax",
+                "hidden",
+            )
+
+        old_key = os.environ.get("MINIMAX_API_KEY")
+        os.environ["MINIMAX_API_KEY"] = "server-minimax-key"
+        try:
+            with patch.object(gateway, "generate_code_with_llm", fake_generate_code_with_llm):
+                status, response = gateway.align_script_for_gateway(
+                    {
+                        "prompt": "解释消费者剩余为什么会出现",
+                        "code": _scene(),
+                        "provider": "trial-minimax-direct",
+                        "apiKey": "client-key-must-be-ignored",
+                        "videoDuration": 8,
+                    }
+                )
+        finally:
+            if old_key is None:
+                os.environ.pop("MINIMAX_API_KEY", None)
+            else:
+                os.environ["MINIMAX_API_KEY"] = old_key
+
+        dumped = json.dumps(response)
+        assert status == 200
+        assert response["authMode"] == "trial"
+        assert calls[0]["api_key"] == "server-minimax-key"
+        assert "client-key-must-be-ignored" not in dumped
+        assert "server-minimax-key" not in dumped
+
+    def test_gateway_align_redacts_key_from_fallback_warning(self) -> None:
+        def boom(**kwargs: object):
+            raise RuntimeError("upstream rejected " + str(kwargs["api_key"]))
+
+        with patch.object(gateway, "generate_code_with_llm", boom):
+            status, response = gateway.align_script_for_gateway(
+                {
+                    "prompt": "解释消费者剩余为什么会出现",
+                    "code": _scene(),
+                    "provider": "openai",
+                    "apiKey": "sk-live-secret-key",
+                    "baseUrl": "https://api.openai.com/v1",
+                }
+            )
+
+        dumped = json.dumps(response, ensure_ascii=False)
+        assert status == 200
+        assert response["ok"] is True
+        assert "sk-live-secret-key" not in dumped
+        assert "[redacted]" in dumped
+
     def test_local_web_exposes_preflight_route(self) -> None:
         source = Path(web_app.__file__).read_text(encoding="utf-8")
         assert 'if route == "/api/byok/preflight":' in source
         assert "proxy_cloud_preflight" in source
         assert "preflight_byok_provider" in source
+        assert "proxy_cloud_align" in source
+        assert "align_script_for_gateway" in Path(PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
 
     def test_placeholder_api_key_rejects_env_names_and_examples(self) -> None:
         assert is_placeholder_api_key("OPENAI_API_KEY")
