@@ -1254,7 +1254,8 @@ def make_index_html() -> str:
     .vault-list {{
       display: none;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 8px;
+      margin: 2px 0 4px;
     }}
     .vault-list.visible {{ display: flex; }}
     .vault-chip {{
@@ -1262,9 +1263,18 @@ def make_index_html() -> str:
       background: #fffdfa;
       color: var(--muted-2);
       border-radius: 999px;
-      padding: 5px 9px;
+      padding: 6px 10px;
       font-size: 0.72rem;
       cursor: pointer;
+      transition: border-color var(--speed), color var(--speed), background var(--speed);
+    }}
+    .vault-chip:hover {{
+      border-color: rgba(194, 65, 45, 0.28);
+      color: var(--accent);
+    }}
+    .vault-chip:focus-visible {{
+      outline: 2px solid rgba(194, 65, 45, 0.4);
+      outline-offset: 2px;
     }}
     .vault-chip.active {{
       border-color: rgba(194, 65, 45, 0.35);
@@ -1273,10 +1283,13 @@ def make_index_html() -> str:
     }}
     .vault-chip.verified {{
       border-color: rgba(44, 83, 71, 0.28);
+      color: var(--ok);
+    }}
+    .vault-chip.verified.active {{
+      background: rgba(44, 83, 71, 0.08);
     }}
     .vault-chip.empty {{
       border-style: dashed;
-      opacity: 0.78;
     }}
     .provider-pill.ok {{
       border-color: rgba(44, 83, 71, 0.24);
@@ -1480,9 +1493,9 @@ def make_index_html() -> str:
     .rich-text strong {{ font-weight: 500; color: var(--fg-bright); }}
     .rich-text code {{
       font-family: var(--mono);
-      color: var(--accent-3);
-      background: #EEF2F7;
-      border: 1px solid #E4ECF5;
+      color: var(--accent-2);
+      background: rgba(194, 65, 45, 0.06);
+      border: 1px solid rgba(194, 65, 45, 0.12);
       border-radius: 3px;
       padding: 1px 4px;
       font-size: 0.88em;
@@ -1524,7 +1537,7 @@ def make_index_html() -> str:
     .provider-doc {{
       color: var(--accent);
       text-decoration: none;
-      border-bottom: 1px solid #D0DCE9;
+      border-bottom: 1px solid rgba(194, 65, 45, 0.28);
     }}
     .provider-doc.hidden {{ display: none; }}
 
@@ -1540,11 +1553,14 @@ def make_index_html() -> str:
 
     .tiny-btn {{
       padding: 0 12px;
-      color: #faf9f5;
+      color: #fffdf8;
       background: var(--accent);
       min-width: 56px;
       font-size: 0.78rem;
-      height: 36px;
+      height: 42px;
+    }}
+    .key-row .tiny-btn {{
+      min-width: 72px;
     }}
     .tiny-btn:hover {{ opacity: 0.85; }}
 
@@ -1734,7 +1750,7 @@ def make_index_html() -> str:
       font-family: var(--mono);
       font-size: 0.72rem;
       color: var(--accent);
-      background: #EEF2F7;
+      background: rgba(194, 65, 45, 0.06);
     }}
 
     .warning-box {{
@@ -2310,7 +2326,7 @@ def make_index_html() -> str:
           <div class="vault-head">
             <div>
               <h3>密钥库</h3>
-              <p>点选服务后粘贴 Key。先保存，再测连通；生成时才发给对应模型服务。</p>
+              <p>点选下方服务商，粘贴 Key。先保存到本机，再测连通；生成时才发给对应模型服务。</p>
             </div>
             <span id="vaultStatus" class="provider-pill">未保存</span>
           </div>
@@ -2717,11 +2733,11 @@ def make_index_html() -> str:
         isByokPreset(PROVIDERS[id], id) && !PROVIDERS[id].hideApiKey
       ));
       const savedIds = byokIds.filter((id) => savedVaultKey(id));
-      const featured = ["zhipu", "openai", "deepseek", "kimi-code", "minimax-coding-cn"].filter((id) => (
+      const featured = ["zhipu", "openai", "deepseek", "kimi-code", "minimax-coding-cn", "mimo"].filter((id) => (
         byokIds.includes(id)
       ));
       const ids = [];
-      [providerSelect.value, ...savedIds, ...(savedIds.length ? [] : featured)].forEach((id) => {{
+      [providerSelect.value, ...savedIds, ...featured].forEach((id) => {{
         if (id && byokIds.includes(id) && !ids.includes(id)) ids.push(id);
       }});
       vaultList.classList.toggle("visible", currentMode === "byok" && ids.length > 0);
@@ -2734,15 +2750,19 @@ def make_index_html() -> str:
           + (id === providerSelect.value ? " active" : "")
           + (verified ? " verified" : "")
           + (!key ? " empty" : "");
-        const status = !key ? "未保存" : (verified ? maskKey(key) + " · 已连通" : maskKey(key));
-        button.textContent = (PROVIDERS[id].name || id) + " · " + status;
+        const name = PROVIDERS[id].name || id;
+        button.textContent = verified ? name + " · 已连通" : name;
+        button.title = !key ? "填写 " + name + " 的密钥" : (verified ? name + " 已连通" : name + " 已保存");
+        button.setAttribute("aria-pressed", id === providerSelect.value ? "true" : "false");
         button.addEventListener("click", () => {{
           if (currentMode !== "byok") applyMode("byok");
+          byokPanel.classList.add("visible");
           providerSelect.value = id;
           const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
           localStorage.setItem(providerStorageKey, id);
           apiKeyInput.value = key;
           updateProviderUI(false);
+          apiKeyInput.focus();
         }});
         vaultList.appendChild(button);
       }});

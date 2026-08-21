@@ -150,6 +150,8 @@ class AegisByokTest(unittest.TestCase):
             assert '" empty"' in html
             assert "const featured" in html
             assert "minimax-coding-cn" in html
+            assert '"mimo"' in html
+            assert "密钥只存在这台浏览器。请粘贴完整 Key，不要填环境变量名。" in html
             assert 'localStorage.getItem("aegis.mode")' in html
             assert "Auth: 自带密钥" in html
             assert "生成接口返回了不该出现的密钥" in html
