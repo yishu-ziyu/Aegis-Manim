@@ -47,6 +47,9 @@ class AegisWebUiTest(unittest.TestCase):
         assert "测试连通" in html
         assert "粘贴完整 API Key，不要填环境变量名" in html
         assert "模型与接口" in html
+        assert "writeVaultEntry" in html
+        assert "verifiedAt" in html
+        assert "function customEndpointReady" in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")

@@ -1220,6 +1220,14 @@ def make_index_html() -> str:
       color: var(--accent);
       background: rgba(194, 65, 45, 0.06);
     }}
+    .vault-chip.verified {{
+      border-color: rgba(44, 83, 71, 0.28);
+    }}
+    .provider-pill.ok {{
+      border-color: rgba(44, 83, 71, 0.24);
+      color: var(--ok);
+      background: rgba(44, 83, 71, 0.06);
+    }}
     .trial-hint {{
       display: none;
       padding: 10px 12px;
@@ -2590,6 +2598,14 @@ def make_index_html() -> str:
       localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(vault));
     }}
 
+    function writeVaultEntry(providerId, key, extra) {{
+      const vault = readVault();
+      const previous = vault[providerId] && typeof vault[providerId] === "object" ? vault[providerId] : {{}};
+      vault[providerId] = Object.assign({{}}, previous, extra || {{}}, {{ key: key, updatedAt: Date.now() }});
+      writeVault(vault);
+      return vault[providerId];
+    }}
+
     function maskKey(key) {{
       const value = String(key || "");
       if (!value) return "未保存";
@@ -2628,8 +2644,9 @@ def make_index_html() -> str:
       ids.forEach((id) => {{
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "vault-chip" + (id === providerSelect.value ? " active" : "");
-        button.textContent = (PROVIDERS[id].name || id) + " · " + maskKey(vault[id].key);
+        const verified = Boolean(vault[id].verifiedAt);
+        button.className = "vault-chip" + (id === providerSelect.value ? " active" : "") + (verified ? " verified" : "");
+        button.textContent = (PROVIDERS[id].name || id) + " · " + maskKey(vault[id].key) + (verified ? " · 已连通" : "");
         button.addEventListener("click", () => {{
           if (currentMode !== "byok") applyMode("byok");
           providerSelect.value = id;
@@ -2644,7 +2661,9 @@ def make_index_html() -> str:
 
     function updateVaultStatus() {{
       const key = savedVaultKey(providerSelect.value) || apiKeyInput.value.trim();
-      vaultStatus.textContent = key ? maskKey(key) : "未保存";
+      const verified = Boolean(vaultEntry(providerSelect.value) && vaultEntry(providerSelect.value).verifiedAt);
+      vaultStatus.textContent = !key ? "未保存" : (verified ? "已连通 · " + maskKey(key) : maskKey(key));
+      vaultStatus.classList.toggle("ok", verified);
       const saved = Boolean(savedVaultKey(providerSelect.value));
       authChip.textContent = currentMode === "byok"
         ? (saved ? "自带密钥 · " + maskKey(savedVaultKey(providerSelect.value)) : "自带密钥")
@@ -2780,8 +2799,7 @@ def make_index_html() -> str:
         setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
         return;
       }}
-      vault[providerId] = {{ key, updatedAt: Date.now() }};
-      writeVault(vault);
+      writeVaultEntry(providerId, key);
       updateVaultStatus();
       setStatus("密钥已保存到这台浏览器，不会写入服务器。", "success");
     }}
@@ -2842,6 +2860,12 @@ def make_index_html() -> str:
         setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
         return;
       }}
+      if (!customEndpointReady()) {{
+        if (endpointDetails) endpointDetails.open = true;
+        setPreflightStatus("自定义 Provider 需要填写 HTTPS Base URL。", "err");
+        setStatus("自定义 Provider 需要填写可公网访问的 HTTPS Base URL。", "error");
+        return;
+      }}
       if (preflightBtn) preflightBtn.disabled = true;
       setPreflightStatus("正在测试连通...");
       setStatus("正在用你的密钥测试模型服务连通...", "");
@@ -2865,6 +2889,13 @@ def make_index_html() -> str:
         if (!response.ok || !data.ok) {{
           throw new Error(data.error || "连通失败");
         }}
+        if (key && keyLooksUsable(key, preset)) {{
+          writeVaultEntry(providerSelect.value, key, {{
+            verifiedAt: Date.now(),
+            lastEndpoint: data.endpoint || ""
+          }});
+          updateVaultStatus();
+        }}
         const latency = Number.isFinite(data.latencyMs) ? " · " + data.latencyMs + "ms" : "";
         setPreflightStatus((data.message || "密钥可用。") + latency, "ok");
         setStatus((data.message || "密钥可用，已连通模型服务。") + latency, "success");
@@ -2881,7 +2912,17 @@ def make_index_html() -> str:
     forgetKeyBtn.addEventListener("click", forgetCurrentKey);
     forgetAllBtn.addEventListener("click", forgetAllKeys);
     if (preflightBtn) preflightBtn.addEventListener("click", preflightCurrentKey);
-    apiKeyInput.addEventListener("input", updateVaultStatus);
+    apiKeyInput.addEventListener("input", () => {{
+      const entry = vaultEntry(providerSelect.value);
+      if (entry && entry.verifiedAt && apiKeyInput.value.trim() !== entry.key) {{
+        const vault = readVault();
+        if (vault[providerSelect.value]) {{
+          delete vault[providerSelect.value].verifiedAt;
+          writeVault(vault);
+        }}
+      }}
+      updateVaultStatus();
+    }});
 
     function setStatus(message, type = "") {{
       statusBox.className = "status-box" + (type ? " " + type : "");
@@ -2894,6 +2935,12 @@ def make_index_html() -> str:
 
     function currentByokKey() {{
       return apiKeyInput.value.trim() || savedVaultKey(providerSelect.value);
+    }}
+
+    function customEndpointReady() {{
+      const providerId = providerSelect.value || "";
+      if (!providerId.startsWith("custom-")) return true;
+      return Boolean(baseUrlInput.value.trim());
     }}
 
     function textHasRichSyntax(text) {{
@@ -3571,7 +3618,12 @@ def make_index_html() -> str:
         ? " | 已自动做兼容修复"
         : "";
       const reqText = requestId && requestId !== "-" ? " | 诊断ID: " + requestId : "";
-      setStatus((data.message || "处理完成") + warningText + reqText, "success");
+      const authText = data.authMode === "byok" ? "已使用你的密钥，未写入服务器。" : "";
+      if (data.authMode === "byok" && payload && payload.apiKey) {{
+        writeVaultEntry(payload.provider, payload.apiKey, {{ verifiedAt: Date.now() }});
+        updateVaultStatus();
+      }}
+      setStatus((data.message || authText || "处理完成") + warningText + reqText, "success");
 
       // Auto-trigger render if code was generated and noRender is not checked
       if (latestCode && !payload.noRender && !data.videoId) {{
@@ -3814,6 +3866,12 @@ def make_index_html() -> str:
           setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
           return;
         }}
+        if (!customEndpointReady()) {{
+          applyMode("byok");
+          if (endpointDetails) endpointDetails.open = true;
+          setStatus("自定义 Provider 需要填写可公网访问的 HTTPS Base URL。", "error");
+          return;
+        }}
       }}
       submitBtn.disabled = true;
       document.body.classList.remove("learning-mode", "show-code", "has-result");
@@ -3856,9 +3914,7 @@ def make_index_html() -> str:
         localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
         localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
         if (payload.apiKey) {{
-          const vault = readVault();
-          vault[payload.provider] = {{ key: payload.apiKey, updatedAt: Date.now() }};
-          writeVault(vault);
+          writeVaultEntry(payload.provider, payload.apiKey);
           updateVaultStatus();
         }}
       }}
