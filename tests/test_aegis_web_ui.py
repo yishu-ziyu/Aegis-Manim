@@ -54,6 +54,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert "function customEndpointReady" in html
         assert "currentMode !== \"byok\"" in html
         assert "用自带密钥生成" in html
+        assert 'id="generate-form" class="form-wrap" novalidate' in html
+        assert "先写下一道要讲清楚的问题" in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")

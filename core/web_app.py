@@ -2232,10 +2232,10 @@ def make_index_html() -> str:
         <small>API Key 只用于本次生成，不写入仓库。</small>
       </header>
 
-      <form id="generate-form" class="form-wrap">
+      <form id="generate-form" class="form-wrap" novalidate>
         <div class="field">
           <label for="prompt">你要讲清楚的问题</label>
-          <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。" required></textarea>
+          <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。"></textarea>
           <div id="promptPreview" class="prompt-preview">
             <span class="prompt-preview-label">公式预览</span>
             <div id="promptPreviewContent" class="rich-text"></div>
@@ -3881,6 +3881,12 @@ def make_index_html() -> str:
 
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
+      const promptValue = promptInput.value.trim();
+      if (promptValue.length < 6) {{
+        setStatus("先写下一道要讲清楚的问题，至少把概念或例子说清楚。", "error");
+        promptInput.focus();
+        return;
+      }}
       const preset = activePreset();
       if (preset.cloudUnavailable) {{
         setStatus("这个 Provider 需要下载项目后在本地运行；Vercel 云端无法访问你的本机 Codex 或 127.0.0.1 服务。", "error");
