@@ -124,7 +124,7 @@ def test_vision_server_doctor_runs_probe_then_installer() -> None:
     assert "Persisting tested CLI settings" in script
     assert "vision-economics-acceptance.jsonl" in script
     assert "scripts/install_aegis_vision_server.sh" in script
-    assert "VISION_BACKEND_URL=http://121.89.90.68:5050" in script
+    assert "VISION_BACKEND_URL=http://YOUR_HOST:5050" in script
     assert "VISION_BACKEND_API_KEY" in script
     assert "do not paste it into chat" in script
 
@@ -146,7 +146,7 @@ def test_vision_server_package_script_includes_server_files() -> None:
     assert "scripts/production_vision_economics_acceptance.py" in script
     assert "fixtures/vision-test.png" in script
     assert "tar -C" in script
-    assert "scp $OUTPUT root@121.89.90.68" in script
+    assert "scp $OUTPUT \$REMOTE_HOST" in script
 
     subprocess.run(["bash", "-n", str(script_path)], check=True)
 

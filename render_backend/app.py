@@ -85,7 +85,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 # Configuration
 # ---------------------------------------------------------------------------
 
-API_KEY = os.environ.get("MANIM_API_KEY", "dev-key-change-in-production")
+API_KEY = os.environ.get("MANIM_API_KEY", "").strip()
 COMMUNITY_REVIEW_TOKEN = os.environ.get("AEGIS_COMMUNITY_REVIEW_TOKEN", os.environ.get("COMMUNITY_REVIEW_TOKEN", "")).strip()
 MAX_CODE_SIZE = 100 * 1024  # 100 KB
 DEFAULT_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT_SECONDS", "180"))
@@ -198,10 +198,17 @@ def _cleanup_old_rate_limits() -> None:
 def require_api_key(view_func):
     @functools.wraps(view_func)
     def wrapper(*args, **kwargs):
+        expected = (API_KEY or "").strip()
+        debug = bool(getattr(app, "debug", False)) or os.environ.get("FLASK_DEBUG", "0") == "1"
+        allow_insecure = os.environ.get("MANIM_ALLOW_INSECURE_DEV", "") == "1" and debug
+        if not expected:
+            if allow_insecure:
+                return view_func(*args, **kwargs)
+            return jsonify({"error": "Render API is disabled until MANIM_API_KEY is set"}), 401
         key = request.headers.get("X-API-Key", "")
         if not key:
             return jsonify({"error": "Missing X-API-Key header"}), 401
-        if key != API_KEY:
+        if key != expected:
             return jsonify({"error": "Invalid API key"}), 403
         return view_func(*args, **kwargs)
 
@@ -1480,4 +1487,5 @@ if __name__ == "__main__":
     initialize_app()
     port = int(os.environ.get("PORT", "5000"))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    host = os.environ.get("HOST", "127.0.0.1")
+    app.run(host=host, port=port, debug=debug)

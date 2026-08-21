@@ -31,7 +31,7 @@ fi
 if [[ ! -f "$IMAGE_PATH" ]]; then
   echo "Test image not found: $IMAGE_PATH"
   echo "Upload or copy one Chinese economics question/chart image to that path, then rerun."
-  echo "Example: scp ./your-image.png root@121.89.90.68:$IMAGE_PATH"
+  echo "Example: scp ./your-image.png \$REMOTE_HOST:$IMAGE_PATH"
   exit 2
 fi
 
@@ -206,5 +206,5 @@ echo "== Next =="
 echo "1. Verify: curl -sS http://127.0.0.1:5050/health"
 echo "2. Configure public gateway only after the probe and 5-image acceptance pass:"
 echo "   AEGIS_VISION_PUBLIC_ENABLED=1"
-echo "   VISION_BACKEND_URL=http://121.89.90.68:5050"
+echo "   VISION_BACKEND_URL=http://YOUR_HOST:5050"
 echo "   VISION_BACKEND_API_KEY=(read from /opt/aegis/vision.env; do not paste it into chat)"

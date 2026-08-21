@@ -51,7 +51,7 @@ echo "  scripts/check_aegis_vision_server_update.sh"
 echo "  # Reads remote pid, doctor log, systemd status, and local health"
 echo
 echo "Upload to server:"
-echo "  scp $OUTPUT root@121.89.90.68:/opt/aegis/aegis-vision-server-update.tgz"
+echo "  scp $OUTPUT \$REMOTE_HOST:/opt/aegis/aegis-vision-server-update.tgz"
 echo
 echo "Then run on server:"
 echo "  cd /opt/aegis/Aegis-Manim"

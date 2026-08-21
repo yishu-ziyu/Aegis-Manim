@@ -72,12 +72,18 @@ class AegisWebUiTest(unittest.TestCase):
 
     def test_cloud_generate_mode_uses_direct_generate_flow(self) -> None:
         old_url = web_app.AEGIS_CLOUD_GENERATE_URL
+        old_trial = os.environ.get("AEGIS_ALLOW_TRIAL")
         web_app.AEGIS_CLOUD_GENERATE_URL = "https://manim-main.vercel.app/api/generate"
+        os.environ["AEGIS_ALLOW_TRIAL"] = "1"
         try:
             html = web_app.make_index_html()
             config = web_app.build_local_trial_config()
         finally:
             web_app.AEGIS_CLOUD_GENERATE_URL = old_url
+            if old_trial is None:
+                os.environ.pop("AEGIS_ALLOW_TRIAL", None)
+            else:
+                os.environ["AEGIS_ALLOW_TRIAL"] = old_trial
 
         assert 'fetch("/api/generate"' in html
         assert 'fetch("/api/generate/start"' not in html
