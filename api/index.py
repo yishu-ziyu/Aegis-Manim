@@ -23,6 +23,7 @@ from llm_providers import (  # noqa: E402
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     PROVIDER_PRESETS,
+    generate_code_with_provider,
     is_local_only_provider,
     provider_presets_for_ui,
     resolve_provider,
@@ -131,6 +132,9 @@ UNKNOWN_TRIAL_ERROR = "这个试用模型已下线，请改用当前免费试用
 UNKNOWN_PROVIDER_ERROR = "未知的模型服务。请选择免费试用，或使用自带密钥的公开 Provider。"
 LOCAL_ONLY_PROVIDER_ERROR = "这个 Provider 只能在本机使用，不能在 Vercel 云端运行。"
 BYOK_CUSTOM_URL_REQUIRED_ERROR = "自定义 Provider 需要填写可公网访问的 HTTPS Base URL。"
+BYOK_TRIAL_PREFLIGHT_ERROR = "免费试用无需测试密钥。请改用自带密钥模式。"
+BYOK_PREFLIGHT_TIMEOUT_SECONDS = 20
+BYOK_PREFLIGHT_MAX_TOKENS = 16
 
 # Render backend configuration
 RENDER_BACKEND_URL = os.environ.get("RENDER_BACKEND_URL", "").rstrip("/")
@@ -1099,6 +1103,28 @@ def is_private_or_local_host(host: str) -> bool:
     )
 
 
+def redact_client_secrets(text: str, *secrets: object) -> str:
+    redacted = str(text or "")
+    for secret in secrets:
+        value = str(secret or "").strip()
+        if len(value) >= 6:
+            redacted = redacted.replace(value, "[redacted]")
+    return redacted
+
+
+def resolve_public_byok_provider(provider_id: str) -> tuple[object | None, str | None]:
+    cleaned = (provider_id or "").strip()
+    if not cleaned:
+        return None, "请选择模型服务。"
+    if cleaned in PUBLIC_TRIAL_PLANS or cleaned.startswith("trial-"):
+        return None, BYOK_TRIAL_PREFLIGHT_ERROR
+    if is_local_only_provider(cleaned) or cleaned in DISABLED_CLOUD_PROVIDERS:
+        return None, LOCAL_ONLY_PROVIDER_ERROR
+    if cleaned not in PROVIDER_PRESETS:
+        return None, UNKNOWN_PROVIDER_ERROR
+    return resolve_provider(cleaned), None
+
+
 def validate_cloud_model_endpoint(raw_url: str, *, field_name: str) -> str | None:
     cleaned = raw_url.strip()
     if not cleaned:
@@ -1450,7 +1476,7 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
     except ValueError as exc:
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
-            "error": str(exc),
+            "error": redact_client_secrets(str(exc), api_key),
             "requestId": request_id,
         }
     except Exception:
@@ -1477,6 +1503,80 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
         "renderBackend": "external-required",
         "authMode": "byok",
         "message": "已使用你的密钥生成 Manim 代码；密钥未写入服务器。",
+    }
+
+
+def preflight_byok_provider(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    request_id = build_request_id()
+    provider, provider_error = resolve_public_byok_provider(str(payload.get("provider", "")).strip())
+    if provider_error or provider is None:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": provider_error or UNKNOWN_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
+
+    api_key = str(payload.get("apiKey", "")).strip()
+    model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
+    base_url = str(payload.get("baseUrl", "")).strip()
+    endpoint = str(payload.get("endpoint", "")).strip()
+
+    if provider.requires_api_key and not api_key:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
+            "requestId": request_id,
+        }
+    if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_CUSTOM_URL_REQUIRED_ERROR,
+            "requestId": request_id,
+        }
+
+    for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
+        endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
+        if endpoint_error:
+            return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error, "requestId": request_id}
+
+    started = time.monotonic()
+    try:
+        _probe, _used_provider, used_endpoint = generate_code_with_provider(
+            provider_id=provider.id,
+            api_key=api_key,
+            base_url=base_url,
+            endpoint=endpoint,
+            model=model,
+            system_prompt="You are a connectivity probe. Reply with the single word ok.",
+            user_prompt="ok",
+            temperature=0,
+            timeout=BYOK_PREFLIGHT_TIMEOUT_SECONDS,
+            max_tokens=BYOK_PREFLIGHT_MAX_TOKENS,
+        )
+    except ValueError as exc:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": redact_client_secrets(str(exc), api_key),
+            "requestId": request_id,
+        }
+    except Exception:
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": "连通失败。请检查 Key、额度与 Base URL。",
+            "requestId": request_id,
+        }
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    return HTTPStatus.OK, {
+        "ok": True,
+        "authMode": "byok",
+        "provider": provider.id,
+        "providerName": provider.name,
+        "model": model,
+        "endpoint": used_endpoint,
+        "latencyMs": latency_ms,
+        "requestId": request_id,
+        "message": "密钥可用，已连通模型服务。密钥未写入服务器。",
     }
 
 
@@ -1667,6 +1767,15 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
             status, response = generate_manim_code_for_gateway(payload)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/byok/preflight":
+            try:
+                payload = self._read_json_body()
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = preflight_byok_provider(payload)
             self._send_json(HTTPStatus(status), response)
             return
         if route == "/api/vision/analyze":

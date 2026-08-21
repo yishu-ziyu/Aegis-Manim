@@ -589,6 +589,7 @@ def generate_code_with_provider(
     user_prompt: str,
     temperature: float,
     timeout: int | None = None,
+    max_tokens: int | None = None,
 ) -> tuple[str, ProviderPreset, str]:
     preset = resolve_provider(provider_id)
     validate_api_key(api_key, preset)
@@ -596,6 +597,7 @@ def generate_code_with_provider(
     selected_model = (model or preset.default_model).strip()
     if not selected_model:
         raise ValueError(f"{preset.name} model is required.")
+    token_limit = max_tokens if max_tokens is not None else max_tokens_for_provider(preset.id, selected_model)
 
     if preset.api_type == "codex-cli":
         return (
@@ -633,7 +635,7 @@ def generate_code_with_provider(
                 temperature=temperature,
                 provider_name=preset.name,
                 timeout=timeout,
-                max_tokens=max_tokens_for_provider(preset.id, selected_model),
+                max_tokens=token_limit,
                 extra_payload=extra_openai_payload_for_provider(
                     preset.id,
                     selected_model,
@@ -660,7 +662,7 @@ def generate_code_with_provider(
                 temperature=temperature,
                 provider_name=preset.name,
                 timeout=timeout,
-                max_tokens=max_tokens_for_provider(preset.id, selected_model),
+                max_tokens=token_limit,
             ),
             preset,
             anthropic_messages_url(normalized_base),

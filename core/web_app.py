@@ -1102,6 +1102,15 @@ def make_index_html() -> str:
       position: relative;
     }}
 
+    .hero .eyebrow {{
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+
     .hero h1 {{
       margin: 0 0 8px;
       font-family: var(--serif);
@@ -1116,7 +1125,7 @@ def make_index_html() -> str:
       margin: 0;
       color: var(--muted);
       font-size: 0.94rem;
-      max-width: 40ch;
+      max-width: 42ch;
       line-height: 1.6;
     }}
 
@@ -1234,6 +1243,29 @@ def make_index_html() -> str:
     .advanced-box .row {{
       margin-top: 12px;
     }}
+    .quiet-box {{
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255, 250, 241, 0.55);
+    }}
+    .quiet-box > summary {{
+      cursor: pointer;
+      color: var(--muted-2);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }}
+    .quiet-box[open] {{
+      background: #fffaf1;
+    }}
+    .preflight-status {{
+      min-height: 1.2em;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }}
+    .preflight-status.ok {{ color: var(--ok); }}
+    .preflight-status.err {{ color: var(--danger); }}
 
     /* ── Form ── */
     .form-wrap {{
@@ -1667,13 +1699,57 @@ def make_index_html() -> str:
     .result-empty {{
       display: grid;
       gap: 8px;
-      padding: 28px 18px;
+      padding: 36px 22px;
       border: 1px dashed var(--border);
       border-radius: 12px;
-      background: #fffaf1;
+      background:
+        radial-gradient(280px 120px at 50% 0%, rgba(194, 65, 45, 0.06), transparent 70%),
+        #fffaf1;
       text-align: center;
       color: var(--muted);
     }}
+    .result-empty .empty-mark {{
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 6px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: #fffdf8;
+      font-family: var(--serif);
+      font-size: 1.2rem;
+      border-radius: 12px;
+    }}
+    .empty-steps {{
+      margin: 8px auto 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 6px;
+      max-width: 28ch;
+      text-align: left;
+      font-size: 0.8rem;
+    }}
+    .empty-steps li {{
+      display: flex;
+      gap: 8px;
+    }}
+    .empty-steps li::before {{
+      content: counter(step);
+      counter-increment: step;
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: rgba(194, 65, 45, 0.1);
+      color: var(--accent);
+      font-size: 0.7rem;
+      font-weight: 700;
+      display: grid;
+      place-items: center;
+      flex: 0 0 18px;
+      margin-top: 1px;
+    }}
+    .empty-steps {{ counter-reset: step; }}
     .result-empty strong {{
       color: var(--fg-bright);
       font-family: var(--serif);
@@ -1737,6 +1813,12 @@ def make_index_html() -> str:
     }}
     body.learning-mode video {{ max-height: 640px; }}
 
+    .quiet-box .community-hub {{
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      padding: 12px 0 0;
+    }}
     .community-hub {{
       border: 1px solid var(--border);
       border-radius: var(--radius);
@@ -2104,8 +2186,9 @@ def make_index_html() -> str:
   <main class="shell">
     <section class="panel">
       <header class="hero">
-        <h1>Aegis 经济学动画工作台</h1>
-        <p>把一道经济学问题、一张图或一段文字，转成可播放的 Manim 教学动画。</p>
+        <p class="eyebrow">Aegis · 教学动画</p>
+        <h1>写下一道经济学问题</h1>
+        <p>免费试用可直接生成。自带密钥只存在这台浏览器，生成时才发给对应模型服务。</p>
         <div class="mode-switch" role="tablist" aria-label="生成方式">
           <button id="modeTrialBtn" class="mode-btn active" type="button" data-mode="trial">免费试用</button>
           <button id="modeByokBtn" class="mode-btn" type="button" data-mode="byok">自带密钥</button>
@@ -2188,9 +2271,11 @@ def make_index_html() -> str:
           </details>
           <div class="vault-actions">
             <button id="saveKeyBtn" class="tiny-btn" type="button">保存到本机</button>
+            <button id="preflightBtn" class="tiny-btn" type="button">测试连通</button>
             <button id="forgetKeyBtn" class="ghost-btn" type="button">清除此 Key</button>
             <button id="forgetAllBtn" class="ghost-btn" type="button">清空密钥库</button>
           </div>
+          <div id="preflightStatus" class="preflight-status"></div>
         </div>
 
         <details class="advanced-box">
@@ -2258,8 +2343,14 @@ def make_index_html() -> str:
         <div id="warningBox" class="warning-box"></div>
 
         <div id="resultEmpty" class="result-empty">
-          <strong>左边写下问题，右边出现动画</strong>
-          <div>免费试用可直接生成；自带密钥会只存在这台浏览器，生成时才发给对应模型服务。</div>
+          <span class="empty-mark" aria-hidden="true">Æ</span>
+          <strong>动画会显示在这里</strong>
+          <div>左边写下问题后点生成。试用走内置额度；自带密钥先保存，再测连通。</div>
+          <ol class="empty-steps">
+            <li>写下要讲清楚的问题</li>
+            <li>选择免费试用或自带密钥</li>
+            <li>生成草稿，再看动画与讲稿</li>
+          </ol>
         </div>
 
         <section class="code-section">
@@ -2276,21 +2367,24 @@ def make_index_html() -> str:
             <video id="videoPlayer" controls preload="metadata"></video>
           </div>
 
-          <section id="communityHub" class="community-hub">
-            <div class="community-hub-head">
-              <div>
-                <h3>作品仓库</h3>
-                <div class="community-hub-copy">先查已有高分或精选作品；生成完成后可以提交候选，公开作品可复用、评分和再审阅。</div>
+          <details class="quiet-box" id="communityDrawer">
+            <summary>作品仓库 · 可选复用已有动画</summary>
+            <section id="communityHub" class="community-hub">
+              <div class="community-hub-head">
+                <div>
+                  <h3>作品仓库</h3>
+                  <div class="community-hub-copy">先查已有高分或精选作品；生成完成后可以提交候选，公开作品可复用、评分和再审阅。</div>
+                </div>
+                <span class="tag">公开作品优先复用</span>
               </div>
-              <span class="tag">公开作品优先复用</span>
-            </div>
-            <div class="community-search-row">
-              <input id="communitySearchInput" type="search" placeholder="搜索仓库：如 Slutsky 补偿、税收归宿、Edgeworth 盒" autocomplete="off" />
-              <button id="communitySearchBtn" class="ghost-btn" type="button">搜索仓库</button>
-            </div>
-            <div id="communitySearchStatus" class="community-search-status">输入题目后可以先查找已有作品；生成完成后可提交入库审阅。</div>
-            <div id="communitySearchList" class="community-search-list"></div>
-          </section>
+              <div class="community-search-row">
+                <input id="communitySearchInput" type="search" placeholder="搜索仓库：如 Slutsky 补偿、税收归宿、Edgeworth 盒" autocomplete="off" />
+                <button id="communitySearchBtn" class="ghost-btn" type="button">搜索仓库</button>
+              </div>
+              <div id="communitySearchStatus" class="community-search-status">输入题目后可以先查找已有作品；生成完成后可提交入库审阅。</div>
+              <div id="communitySearchList" class="community-search-list"></div>
+            </section>
+          </details>
 
           <div id="communityActions" class="community-actions">
             <span id="communitySource">社区作品状态</span>
@@ -2316,7 +2410,7 @@ def make_index_html() -> str:
             <div id="alignmentList" class="alignment-list"></div>
           </section>
 
-          <details id="reviewPanel" class="review-panel">
+          <details id="reviewPanel" class="review-panel quiet-box">
             <summary>管理员审阅队列 · 候选仓库审阅</summary>
             <div class="review-controls">
               <input id="reviewTokenInput" type="password" placeholder="审阅 Token" autocomplete="off" />
@@ -2332,7 +2426,10 @@ def make_index_html() -> str:
           </details>
         </div>
 
-        <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
+        <details class="quiet-box">
+          <summary>诊断入口</summary>
+          <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
+        </details>
       </div>
     </section>
   </main>
@@ -2402,6 +2499,8 @@ def make_index_html() -> str:
     const visionUseBtn = document.getElementById("visionUseBtn");
     const visionReuploadBtn = document.getElementById("visionReuploadBtn");
     const authChip = document.getElementById("authChip");
+    const preflightBtn = document.getElementById("preflightBtn");
+    const preflightStatus = document.getElementById("preflightStatus");
     const vaultToggle = document.getElementById("vaultToggle");
     const modeTrialBtn = document.getElementById("modeTrialBtn");
     const modeByokBtn = document.getElementById("modeByokBtn");
@@ -2707,9 +2806,75 @@ def make_index_html() -> str:
       setStatus("已清空本机密钥库。", "success");
     }}
 
+    function setPreflightStatus(message, type = "") {{
+      if (!preflightStatus) return;
+      preflightStatus.className = "preflight-status" + (type ? " " + type : "");
+      preflightStatus.textContent = message;
+    }}
+
+    async function preflightCurrentKey() {{
+      const preset = activePreset();
+      if (preset.serverManaged || currentMode !== "byok") {{
+        applyMode("byok");
+        setPreflightStatus("请先切换到自带密钥。", "err");
+        setStatus("请先切换到自带密钥，再测试连通。", "error");
+        return;
+      }}
+      if (preset.cloudUnavailable) {{
+        setPreflightStatus("这个 Provider 只能在本机使用。", "err");
+        setStatus("这个 Provider 需要下载项目后在本地运行。", "error");
+        return;
+      }}
+      const key = currentByokKey();
+      if (preset.requiresApiKey && !key) {{
+        setPreflightStatus("先填写 API Key。", "err");
+        setStatus("先在密钥库填写 API Key，或改回免费试用。", "error");
+        return;
+      }}
+      if (preset.requiresApiKey && !keyLooksUsable(key, preset)) {{
+        setPreflightStatus("这个 Key 看起来不像可用密钥。", "err");
+        setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
+        return;
+      }}
+      if (preflightBtn) preflightBtn.disabled = true;
+      setPreflightStatus("正在测试连通...");
+      setStatus("正在用你的密钥测试模型服务连通...", "");
+      try {{
+        const response = await fetch("/api/byok/preflight", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            provider: providerSelect.value,
+            apiKey: key,
+            model: modelInput.value.trim() || preset.defaultModel || "{DEFAULT_MODEL}",
+            baseUrl: baseUrlInput.value.trim(),
+            endpoint: baseUrlInput.value.trim()
+          }})
+        }});
+        const data = await response.json();
+        const dumped = JSON.stringify(data);
+        if (key && dumped.includes(key)) {{
+          throw new Error("连通检测返回了不该出现的密钥，已中止。");
+        }}
+        if (!response.ok || !data.ok) {{
+          throw new Error(data.error || "连通失败");
+        }}
+        const latency = Number.isFinite(data.latencyMs) ? " · " + data.latencyMs + "ms" : "";
+        setPreflightStatus((data.message || "密钥可用。") + latency, "ok");
+        setStatus((data.message || "密钥可用，已连通模型服务。") + latency, "success");
+      }} catch (err) {{
+        const message = err && err.message ? err.message : "连通失败";
+        setPreflightStatus(message, "err");
+        setStatus(message, "error");
+      }} finally {{
+        if (preflightBtn) preflightBtn.disabled = false;
+      }}
+    }}
+
     saveKeyBtn.addEventListener("click", saveCurrentKey);
     forgetKeyBtn.addEventListener("click", forgetCurrentKey);
     forgetAllBtn.addEventListener("click", forgetAllKeys);
+    if (preflightBtn) preflightBtn.addEventListener("click", preflightCurrentKey);
     apiKeyInput.addEventListener("input", updateVaultStatus);
 
     function setStatus(message, type = "") {{
@@ -3780,6 +3945,53 @@ def make_index_html() -> str:
     return html
 
 
+def cloud_preflight_url() -> str:
+    generate_url = (AEGIS_CLOUD_GENERATE_URL or "").rstrip("/")
+    if generate_url.endswith("/api/generate"):
+        return generate_url[: -len("generate")] + "byok/preflight"
+    return ""
+
+
+def proxy_cloud_preflight(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    preflight_url = cloud_preflight_url()
+    if not preflight_url:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "Cloud preflight proxy is not configured.",
+        }
+    provider_id = str(payload.get("provider", "")).strip()
+    if not provider_id or provider_id.startswith("trial-"):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": "免费试用无需测试密钥。请改用自带密钥模式。",
+        }
+    allowed_payload = {
+        "provider": provider_id,
+        "apiKey": str(payload.get("apiKey", "")).strip(),
+        "model": str(payload.get("model", "")).strip(),
+        "baseUrl": str(payload.get("baseUrl", "")).strip(),
+        "endpoint": str(payload.get("endpoint") or payload.get("baseUrl") or "").strip(),
+    }
+    body = json.dumps(allowed_payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(
+        preflight_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=45) as resp:
+            raw = resp.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else {}
+            return resp.status, parsed if isinstance(parsed, dict) else {"ok": False, "error": "Invalid cloud response."}
+    except Exception as exc:
+        append_runtime_log("CLOUD_PREFLIGHT_FAIL", f"error={type(exc).__name__}")
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": "云端连通检测暂不可用，请稍后重试。",
+        }
+
+
 def proxy_cloud_generate(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     if not AEGIS_CLOUD_GENERATE_URL:
         return HTTPStatus.SERVICE_UNAVAILABLE, {
@@ -4091,6 +4303,22 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if route == "/api/align":
             self._handle_align()
+            return
+
+        if route == "/api/byok/preflight":
+            try:
+                payload = self._read_json_body()
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            if AEGIS_CLOUD_GENERATE_URL:
+                status, response = proxy_cloud_preflight(payload)
+                self._send_json(status, response)
+                return
+            from api.index import preflight_byok_provider
+
+            status, response = preflight_byok_provider(payload)
+            self._send_json(status, response)
             return
 
         if route == "/api/generate/start":
