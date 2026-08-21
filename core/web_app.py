@@ -944,7 +944,7 @@ def make_index_html() -> str:
   <title>Aegis 可视化工作台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet" />
   <script>
     window.MathJax = {{
       startup: {{ typeset: false }},
@@ -955,64 +955,123 @@ def make_index_html() -> str:
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <style>
     :root {{
-      --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", Georgia, serif;
-      --sans: var(--serif);
-      --mono: "JetBrains Mono", "SF Mono", Consolas, "Noto Serif SC", monospace;
-      --bg: #f5f4ed;
-      --bg-2: #faf9f5;
-      --bg-3: #e8e6dc;
-      --fg: #141413;
-      --fg-bright: #141413;
-      --muted: #6b6a64;
-      --muted-2: #504e49;
-      --accent: #1B365D;
-      --accent-2: #2D5A8A;
-      --accent-3: #3d3d3a;
-      --danger: #8a4f3d;
-      --ok: #3f6b50;
-      --code-bg: #141413;
-      --border: #e8e6dc;
-      --border-light: #d6d2c4;
-      --pixel: #1B365D;
-      --radius: 8px;
-      --speed: 200ms;
+      --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+      --sans: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", sans-serif;
+      --mono: "IBM Plex Mono", "JetBrains Mono", "SF Mono", Consolas, monospace;
+      --bg: #f3eee4;
+      --bg-2: #fffdf8;
+      --bg-3: #ebe3d4;
+      --fg: #1a1612;
+      --fg-bright: #14110e;
+      --muted: #6e675c;
+      --muted-2: #534d44;
+      --accent: #c2412d;
+      --accent-2: #9a3222;
+      --accent-3: #2c5347;
+      --danger: #a33b2c;
+      --ok: #2c5347;
+      --gold: #c4a46a;
+      --code-bg: #161310;
+      --border: #e3d8c4;
+      --border-light: #d7ccb6;
+      --pixel: #c2412d;
+      --radius: 14px;
+      --speed: 180ms;
     }}
 
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
     body {{
-      background: var(--bg);
+      background:
+        radial-gradient(1200px 520px at 8% -10%, rgba(194, 65, 45, 0.08), transparent 55%),
+        radial-gradient(900px 420px at 100% 0%, rgba(44, 83, 71, 0.07), transparent 46%),
+        var(--bg);
       color: var(--fg);
-      font-family: var(--serif);
+      font-family: var(--sans);
       font-size: 14px;
-      line-height: 1.55;
-      letter-spacing: 0.1pt;
+      line-height: 1.6;
+      letter-spacing: 0.01em;
       min-height: 100vh;
       overflow-x: hidden;
     }}
 
-    /* subtle paper grain */
-    body::before {{
-      content: '';
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.5;
-      background-image:
-        linear-gradient(#f9f8f2 1px, transparent 1px),
-        linear-gradient(90deg, #eeece2 1px, transparent 1px);
-      background-size: 32px 32px;
-      z-index: 0;
+    /* ── Shell ── */
+    .app-bar {{
+      position: relative;
+      z-index: 2;
+      width: min(1180px, 94vw);
+      margin: 22px auto 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }}
+    .brand {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }}
+    .brand-mark {{
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: #fffdf8;
+      font-family: var(--serif);
+      font-weight: 600;
+      font-size: 1.2rem;
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(194, 65, 45, 0.22);
+    }}
+    .brand strong {{
+      display: block;
+      font-family: var(--serif);
+      font-size: 1.15rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }}
+    .brand small {{
+      display: block;
+      margin-top: 1px;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }}
+    .app-bar-meta {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }}
+    .auth-chip {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-2);
+      color: var(--muted-2);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }}
+    .auth-chip.byok {{
+      border-color: rgba(194, 65, 45, 0.28);
+      color: var(--accent);
+      background: rgba(194, 65, 45, 0.06);
+    }}
+    .auth-chip.trial {{
+      border-color: rgba(44, 83, 71, 0.24);
+      color: var(--ok);
+      background: rgba(44, 83, 71, 0.06);
     }}
 
-    /* ── Shell ── */
     .shell {{
       position: relative;
       z-index: 1;
       width: min(1180px, 94vw);
-      margin: 34px auto 44px;
+      margin: 18px auto 44px;
       display: grid;
-      gap: 24px;
+      gap: 22px;
       grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
       animation: shell-in 420ms ease-out both;
     }}
@@ -1030,31 +1089,25 @@ def make_index_html() -> str:
       border-radius: var(--radius);
       overflow: hidden;
       position: relative;
-      box-shadow: 0 12px 36px rgba(20, 20, 19, 0.06);
-    }}
-
-    .panel::after {{
-      content: '';
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      box-shadow: inset 0 0 0 1px rgba(27,54,93,0.025);
+      box-shadow: 0 16px 40px rgba(26, 22, 18, 0.06);
     }}
 
     /* ── Hero ── */
     .hero {{
-      padding: 24px 28px 18px;
+      padding: 26px 28px 20px;
       border-bottom: 1px solid var(--border);
-      border-left: 4px solid var(--accent);
-      background: var(--bg-2);
+      background:
+        linear-gradient(180deg, rgba(194, 65, 45, 0.045), transparent 72%),
+        var(--bg-2);
       position: relative;
     }}
 
     .hero h1 {{
       margin: 0 0 8px;
-      font-size: 1.9rem;
-      font-weight: 500;
-      line-height: 1.18;
+      font-family: var(--serif);
+      font-size: 1.85rem;
+      font-weight: 600;
+      line-height: 1.2;
       letter-spacing: 0;
       color: var(--fg-bright);
     }}
@@ -1062,9 +1115,9 @@ def make_index_html() -> str:
     .hero p {{
       margin: 0;
       color: var(--muted);
-      font-size: 0.95rem;
-      max-width: 38ch;
-      line-height: 1.55;
+      font-size: 0.94rem;
+      max-width: 40ch;
+      line-height: 1.6;
     }}
 
     .hero small {{
@@ -1073,10 +1126,93 @@ def make_index_html() -> str:
       font-family: var(--mono);
       font-size: 0.72rem;
       padding: 4px 8px;
+      color: var(--accent-2);
+      background: rgba(194, 65, 45, 0.06);
+      border: 1px solid rgba(194, 65, 45, 0.14);
+      border-radius: 999px;
+    }}
+
+    .mode-switch {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 16px;
+      padding: 4px;
+      border-radius: 12px;
+      background: var(--bg-3);
+    }}
+    .mode-btn {{
+      border: 0;
+      border-radius: 9px;
+      padding: 9px 10px;
+      background: transparent;
+      color: var(--muted-2);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .mode-btn.active {{
+      background: var(--bg-2);
+      color: var(--fg-bright);
+      box-shadow: 0 4px 12px rgba(26, 22, 18, 0.06);
+    }}
+    .mode-btn[data-mode="byok"].active {{
       color: var(--accent);
-      background: #EEF2F7;
-      border: 1px solid #E4ECF5;
-      border-radius: 4px;
+    }}
+
+    .byok-panel {{
+      display: none;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fffaf1;
+      padding: 14px;
+      gap: 12px;
+    }}
+    .byok-panel.visible {{ display: grid; }}
+    .vault-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }}
+    .vault-head h3 {{
+      margin: 0 0 4px;
+      font-size: 0.92rem;
+      font-weight: 650;
+    }}
+    .vault-head p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }}
+    .vault-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .trial-hint {{
+      display: none;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(44, 83, 71, 0.06);
+      color: var(--ok);
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }}
+    .trial-hint.visible {{ display: block; }}
+    .advanced-box {{
+      border-top: 1px dashed var(--border);
+      padding-top: 10px;
+    }}
+    .advanced-box summary {{
+      cursor: pointer;
+      color: var(--muted-2);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }}
+    .advanced-box .row {{
+      margin-top: 12px;
     }}
 
     /* ── Form ── */
@@ -1096,11 +1232,11 @@ def make_index_html() -> str:
     .field:nth-child(3) {{ animation-delay: 110ms; }}
 
     label {{
-      font-size: 0.8rem;
-      font-family: var(--mono);
-      color: var(--accent);
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
+      font-size: 0.78rem;
+      font-family: var(--sans);
+      font-weight: 650;
+      color: var(--muted-2);
+      letter-spacing: 0.02em;
     }}
 
     .help {{
@@ -1112,24 +1248,24 @@ def make_index_html() -> str:
     input, select, textarea {{
       width: 100%;
       border: 1px solid var(--border);
-      border-radius: var(--radius);
+      border-radius: 10px;
       font: inherit;
-      background: #fffefa;
+      background: #fffdfa;
       color: var(--fg-bright);
-      padding: 10px 12px;
+      padding: 11px 12px;
       transition: border-color var(--speed), box-shadow var(--speed), background var(--speed);
       outline: none;
     }}
 
     textarea {{
-      min-height: 72px;
+      min-height: 108px;
       resize: vertical;
-      line-height: 1.45;
+      line-height: 1.55;
     }}
 
     input:focus, select:focus, textarea:focus {{
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px #E4ECF5;
+      border-color: rgba(194, 65, 45, 0.55);
+      box-shadow: 0 0 0 3px rgba(194, 65, 45, 0.12);
       background: #ffffff;
     }}
 
@@ -1271,12 +1407,12 @@ def make_index_html() -> str:
 
     .btn {{
       margin-top: 2px;
-      padding: 12px 16px;
-      color: #faf9f5;
+      padding: 13px 16px;
+      color: #fffdf8;
       background: var(--accent);
-      letter-spacing: 0.5px;
-      font-size: 0.84rem;
-      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.9rem;
+      text-transform: none;
     }}
     .btn:hover {{ opacity: 0.9; transform: translateY(-1px); }}
     .btn[disabled] {{ opacity: 0.45; cursor: wait; transform: none; }}
@@ -1409,13 +1545,15 @@ def make_index_html() -> str:
     .result-head {{
       padding: 24px 28px 18px;
       border-bottom: 1px solid var(--border);
-      border-left: 4px solid var(--accent);
-      background: var(--bg-2);
+      background:
+        linear-gradient(180deg, rgba(44, 83, 71, 0.05), transparent 72%),
+        var(--bg-2);
     }}
     .result-head h2 {{
       margin: 0 0 8px;
+      font-family: var(--serif);
       font-size: 1.45rem;
-      font-weight: 500;
+      font-weight: 600;
       letter-spacing: 0;
       color: var(--fg-bright);
     }}
@@ -1857,7 +1995,9 @@ def make_index_html() -> str:
 
     @media (max-width: 720px) {{
       .row {{ grid-template-columns: 1fr; }}
-      .shell {{ margin: 16px auto 24px; }}
+      .app-bar, .shell {{ width: min(720px, 94vw); }}
+      .app-bar {{ margin-top: 14px; align-items: flex-start; }}
+      .shell {{ margin: 14px auto 24px; }}
       .hero, .form-wrap, .result-head, .result-wrap {{ padding-left: 16px; padding-right: 16px; }}
       .result-title-row {{ display: grid; }}
       .result-actions {{ justify-content: flex-start; }}
@@ -1884,35 +2024,32 @@ def make_index_html() -> str:
   </style>
 </head>
 <body>
+  <header class="app-bar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">Æ</span>
+      <div>
+        <strong>Aegis</strong>
+        <small>经济学动画工作台</small>
+      </div>
+    </div>
+    <div class="app-bar-meta">
+      <span id="authChip" class="auth-chip trial">试用</span>
+      <button id="vaultToggle" class="ghost-btn" type="button">打开密钥库</button>
+    </div>
+  </header>
   <main class="shell">
     <section class="panel">
       <header class="hero">
         <h1>Aegis 经济学动画工作台</h1>
         <p>把一道经济学问题、一张图或一段文字，转成可播放的 Manim 教学动画。</p>
+        <div class="mode-switch" role="tablist" aria-label="生成方式">
+          <button id="modeTrialBtn" class="mode-btn active" type="button" data-mode="trial">免费试用</button>
+          <button id="modeByokBtn" class="mode-btn" type="button" data-mode="byok">自带密钥</button>
+        </div>
         <small>API Key 只用于本次生成，不写入仓库。</small>
       </header>
 
       <form id="generate-form" class="form-wrap">
-        <div class="field">
-          <label for="provider">模型服务</label>
-          <select id="provider" name="provider"></select>
-          <div class="provider-meta">
-            <span id="providerRegion" class="provider-pill">-</span>
-            <span id="providerProtocol" class="provider-pill">-</span>
-            <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
-          </div>
-          <div id="providerHelp" class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。</div>
-        </div>
-
-        <div id="apiKeyField" class="field">
-          <label id="apiKeyLabel" for="apiKey">API Key</label>
-          <div class="key-row">
-            <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" />
-            <button id="toggleKey" class="tiny-btn" type="button">显示</button>
-          </div>
-          <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
-        </div>
-
         <div class="field">
           <label for="prompt">你要讲清楚的问题</label>
           <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。" required></textarea>
@@ -1942,33 +2079,69 @@ def make_index_html() -> str:
           </div>
         </div>
 
-        <div class="row">
-          <div class="field">
-            <label for="model">模型</label>
-            <input id="model" name="model" value="{DEFAULT_MODEL}" />
+        <div id="trialHint" class="trial-hint visible">内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。</div>
+
+        <div class="field">
+          <label for="provider">模型服务</label>
+          <select id="provider" name="provider"></select>
+          <div class="provider-meta">
+            <span id="providerRegion" class="provider-pill">-</span>
+            <span id="providerProtocol" class="provider-pill">-</span>
+            <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
           </div>
-          <div class="field">
-            <label for="sceneName">场景类名</label>
-            <input id="sceneName" name="sceneName" value="GeneratedScene" />
+          <div id="providerHelp" class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。</div>
+        </div>
+
+        <div id="byokPanel" class="byok-panel">
+          <div class="vault-head">
+            <div>
+              <h3>密钥库</h3>
+              <p>密钥只存在这台浏览器。生成时才发给你选择的模型服务，不会写入仓库或服务器。</p>
+            </div>
+            <span id="vaultStatus" class="provider-pill">未保存</span>
+          </div>
+          <div id="apiKeyField" class="field">
+            <label id="apiKeyLabel" for="apiKey">API Key</label>
+            <div class="key-row">
+              <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" autocomplete="off" />
+              <button id="toggleKey" class="tiny-btn" type="button">显示</button>
+            </div>
+            <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="model">模型</label>
+              <input id="model" name="model" value="{DEFAULT_MODEL}" />
+            </div>
+            <div id="baseUrlField" class="field">
+              <label for="baseUrl">Base URL</label>
+              <input id="baseUrl" name="baseUrl" value="{DEFAULT_ZHIPU_ENDPOINT}" />
+              <div class="help">填根地址即可；如果粘贴 /chat/completions 或 /messages，后端会自动规范化。</div>
+            </div>
+          </div>
+          <div class="vault-actions">
+            <button id="saveKeyBtn" class="tiny-btn" type="button">保存到本机</button>
+            <button id="forgetKeyBtn" class="ghost-btn" type="button">清除此 Key</button>
           </div>
         </div>
 
-        <div class="row">
-          <div class="field">
-            <label for="temperature">Temperature (0-1)</label>
-            <input id="temperature" name="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
+        <details class="advanced-box">
+          <summary>高级选项</summary>
+          <div class="row">
+            <div class="field">
+              <label for="sceneName">场景类名</label>
+              <input id="sceneName" name="sceneName" value="GeneratedScene" />
+            </div>
+            <div class="field">
+              <label for="temperature">Temperature (0-1)</label>
+              <input id="temperature" name="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
+            </div>
           </div>
-          <div id="baseUrlField" class="field">
-            <label for="baseUrl">Base URL</label>
-            <input id="baseUrl" name="baseUrl" value="{DEFAULT_ZHIPU_ENDPOINT}" />
-            <div class="help">填根地址即可；如果粘贴 /chat/completions 或 /messages，后端会自动规范化。</div>
-          </div>
-        </div>
-
-        <label class="check-row" for="noRender">
-          <input id="noRender" name="noRender" type="checkbox" />
-          只生成代码，不渲染视频（调试模式）
-        </label>
+          <label class="check-row" for="noRender">
+            <input id="noRender" name="noRender" type="checkbox" />
+            只生成代码，不渲染视频（调试模式）
+          </label>
+        </details>
 
         <button id="submitBtn" class="btn" type="submit">生成动画草稿</button>
         <div id="processPanel" class="process-panel">
@@ -2155,6 +2328,18 @@ def make_index_html() -> str:
     const visionAuditText = document.getElementById("visionAuditText");
     const visionUseBtn = document.getElementById("visionUseBtn");
     const visionReuploadBtn = document.getElementById("visionReuploadBtn");
+    const authChip = document.getElementById("authChip");
+    const vaultToggle = document.getElementById("vaultToggle");
+    const modeTrialBtn = document.getElementById("modeTrialBtn");
+    const modeByokBtn = document.getElementById("modeByokBtn");
+    const byokPanel = document.getElementById("byokPanel");
+    const trialHint = document.getElementById("trialHint");
+    const vaultStatus = document.getElementById("vaultStatus");
+    const saveKeyBtn = document.getElementById("saveKeyBtn");
+    const forgetKeyBtn = document.getElementById("forgetKeyBtn");
+    const VAULT_STORAGE_KEY = "aegis.byok.vault.v1";
+    const MODE_STORAGE_KEY = "aegis.mode";
+    let currentMode = "trial";
 
     let currentAlignment = null;
     let latestPrompt = "";
@@ -2193,11 +2378,90 @@ def make_index_html() -> str:
       return groups;
     }}
 
+    function isTrialPreset(preset, id) {{
+      return Boolean(preset && (preset.serverManaged || String(id || "").startsWith("trial-")));
+    }}
+
+    function isByokPreset(preset, id) {{
+      return Boolean(preset) && !isTrialPreset(preset, id);
+    }}
+
+    function hasTrialProviders() {{
+      return Object.entries(PROVIDERS).some(([id, preset]) => isTrialPreset(preset, id));
+    }}
+
+    function hasByokProviders() {{
+      return Object.entries(PROVIDERS).some(([id, preset]) => isByokPreset(preset, id));
+    }}
+
+    function firstProviderId(predicate) {{
+      return Object.keys(PROVIDERS).find((id) => predicate(PROVIDERS[id], id)) || "";
+    }}
+
+    function readVault() {{
+      try {{
+        const parsed = JSON.parse(localStorage.getItem(VAULT_STORAGE_KEY) || "{{}}");
+        return parsed && typeof parsed === "object" ? parsed : {{}};
+      }} catch (err) {{
+        return {{}};
+      }}
+    }}
+
+    function writeVault(vault) {{
+      localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(vault));
+    }}
+
+    function maskKey(key) {{
+      const value = String(key || "");
+      if (!value) return "未保存";
+      if (value.length < 8) return "已保存 · " + value.length + " 位";
+      return value.slice(0, 3) + "···" + value.slice(-4);
+    }}
+
+    function vaultEntry(providerId) {{
+      const entry = readVault()[providerId];
+      return entry && typeof entry === "object" ? entry : null;
+    }}
+
+    function savedVaultKey(providerId) {{
+      const entry = vaultEntry(providerId);
+      return entry && typeof entry.key === "string" ? entry.key : "";
+    }}
+
+    function updateVaultStatus() {{
+      const key = savedVaultKey(providerSelect.value) || apiKeyInput.value.trim();
+      vaultStatus.textContent = key ? maskKey(key) : "未保存";
+      const saved = Boolean(savedVaultKey(providerSelect.value));
+      authChip.textContent = currentMode === "byok"
+        ? (saved ? "自带密钥 · " + maskKey(savedVaultKey(providerSelect.value)) : "自带密钥")
+        : "免费试用";
+      authChip.className = "auth-chip " + (currentMode === "byok" ? "byok" : "trial");
+      vaultToggle.textContent = currentMode === "byok" ? "收起密钥库" : "打开密钥库";
+    }}
+
+    function applyMode(mode, persist = true) {{
+      const next = mode === "byok" && hasByokProviders() ? "byok" : (hasTrialProviders() ? "trial" : "byok");
+      currentMode = next;
+      if (persist) localStorage.setItem(MODE_STORAGE_KEY, next);
+      modeTrialBtn.classList.toggle("active", next === "trial");
+      modeByokBtn.classList.toggle("active", next === "byok");
+      modeTrialBtn.style.display = hasTrialProviders() ? "" : "none";
+      modeByokBtn.style.display = hasByokProviders() ? "" : "none";
+      byokPanel.classList.toggle("visible", next === "byok");
+      trialHint.classList.toggle("visible", next === "trial");
+      renderProviderOptions();
+      updateProviderUI(false);
+      updateVaultStatus();
+    }}
+
     function renderProviderOptions() {{
+      const previous = providerSelect.value;
       providerSelect.replaceChildren();
       const groups = groupProviderIds();
       ["trial", "global", "cn", "coding", "local", "custom"].forEach((region) => {{
-        const ids = groups[region] || [];
+        const ids = (groups[region] || []).filter((id) => (
+          currentMode === "trial" ? isTrialPreset(PROVIDERS[id], id) : isByokPreset(PROVIDERS[id], id)
+        ));
         if (!ids.length) return;
         const optgroup = document.createElement("optgroup");
         optgroup.label = REGION_LABELS[region] || region;
@@ -2210,10 +2474,14 @@ def make_index_html() -> str:
         providerSelect.appendChild(optgroup);
       }});
       const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
-      providerSelect.value = localStorage.getItem(providerStorageKey) || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
-      if (!PROVIDERS[providerSelect.value]) {{
-        providerSelect.value = PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
-      }}
+      const saved = localStorage.getItem(providerStorageKey) || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
+      const fallback = currentMode === "trial"
+        ? firstProviderId(isTrialPreset)
+        : firstProviderId(isByokPreset);
+      const preferred = [previous, saved, fallback, PROVIDER_CONFIG.defaultProvider].find((id) => (
+        id && PROVIDERS[id] && providerSelect.querySelector(`option[value="${{id}}"]`)
+      ));
+      providerSelect.value = preferred || fallback;
     }}
 
     function activePreset() {{
@@ -2243,7 +2511,7 @@ def make_index_html() -> str:
         apiKeyHelp.textContent = "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。";
       }} else {{
         apiKeyHelp.textContent = preset.requiresApiKey
-          ? "Key 仅用于本次请求，不落盘；如果报 401，请确认 Key 未过期且有可用额度。"
+          ? ((preset.keyHint || "API Key") + "。密钥只存在这台浏览器，如果报 401，请确认 Key 未过期且有可用额度。")
           : usesCodexCli
             ? "使用本机 codex login 登录态，不需要在页面粘贴 API Key。"
             : "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。";
@@ -2257,13 +2525,63 @@ def make_index_html() -> str:
       if (!keepModel || !modelInput.value.trim()) {{
         modelInput.value = serverManaged ? preset.defaultModel || "" : savedModel || preset.defaultModel || "";
       }}
+      if (!serverManaged && !usesCodexCli) {{
+        const storedKey = savedVaultKey(providerSelect.value);
+        if (storedKey && apiKeyInput.value.trim() !== storedKey) {{
+          apiKeyInput.value = storedKey;
+          apiKeyInput.type = "password";
+          toggleKey.textContent = "显示";
+        }}
+      }}
+      updateVaultStatus();
     }}
 
     providerSelect.addEventListener("change", () => {{
       const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
       localStorage.setItem(providerStorageKey, providerSelect.value);
+      apiKeyInput.value = savedVaultKey(providerSelect.value);
       updateProviderUI(false);
     }});
+
+    function saveCurrentKey() {{
+      const providerId = providerSelect.value;
+      const key = apiKeyInput.value.trim();
+      const vault = readVault();
+      if (!key) {{
+        delete vault[providerId];
+        writeVault(vault);
+        updateVaultStatus();
+        setStatus("已清除这个 Provider 的本机密钥。", "success");
+        return;
+      }}
+      vault[providerId] = {{ key, updatedAt: Date.now() }};
+      writeVault(vault);
+      updateVaultStatus();
+      setStatus("密钥已保存到这台浏览器，不会写入服务器。", "success");
+    }}
+
+    function forgetCurrentKey() {{
+      const vault = readVault();
+      delete vault[providerSelect.value];
+      writeVault(vault);
+      apiKeyInput.value = "";
+      updateVaultStatus();
+      setStatus("已从本机密钥库清除这个 Key。", "success");
+    }}
+
+    modeTrialBtn.addEventListener("click", () => applyMode("trial"));
+    modeByokBtn.addEventListener("click", () => applyMode("byok"));
+    vaultToggle.addEventListener("click", () => {{
+      if (currentMode !== "byok") {{
+        applyMode("byok");
+        return;
+      }}
+      byokPanel.classList.toggle("visible");
+      vaultToggle.textContent = byokPanel.classList.contains("visible") ? "收起密钥库" : "打开密钥库";
+    }});
+    saveKeyBtn.addEventListener("click", saveCurrentKey);
+    forgetKeyBtn.addEventListener("click", forgetCurrentKey);
+    apiKeyInput.addEventListener("input", updateVaultStatus);
 
     function setStatus(message, type = "") {{
       statusBox.className = "status-box" + (type ? " " + type : "");
@@ -3196,7 +3514,7 @@ def make_index_html() -> str:
 
       const payload = {{
         provider: providerSelect.value,
-        apiKey: preset.serverManaged ? "" : apiKeyInput.value.trim(),
+        apiKey: preset.serverManaged ? "" : (apiKeyInput.value.trim() || savedVaultKey(providerSelect.value)),
         prompt: promptInput.value.trim(),
         model: modelInput.value.trim() || activePreset().defaultModel || "{DEFAULT_MODEL}",
         baseUrl: preset.serverManaged ? "" : baseUrlInput.value.trim(),
@@ -3211,6 +3529,12 @@ def make_index_html() -> str:
       if (!preset.serverManaged) {{
         localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
         localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
+        if (payload.apiKey) {{
+          const vault = readVault();
+          vault[payload.provider] = {{ key: payload.apiKey, updatedAt: Date.now() }};
+          writeVault(vault);
+          updateVaultStatus();
+        }}
       }}
 
       try {{
@@ -3284,8 +3608,9 @@ def make_index_html() -> str:
       }}
     }});
 
-    renderProviderOptions();
-    updateProviderUI(false);
+    const savedMode = localStorage.getItem(MODE_STORAGE_KEY);
+    const initialMode = savedMode || PROVIDER_CONFIG.defaultMode || (hasTrialProviders() ? "trial" : "byok");
+    applyMode(initialMode, false);
     updatePromptPreview();
   </script>
 </body>
@@ -3306,13 +3631,19 @@ def proxy_cloud_generate(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             "ok": False,
             "error": "Cloud generate proxy is not configured.",
         }
+    provider_id = str(payload.get("provider", "trial-minimax-direct"))
     allowed_payload = {
         "prompt": str(payload.get("prompt", "")),
-        "provider": str(payload.get("provider", "trial-minimax-direct")),
+        "provider": provider_id,
         "sceneName": safe_scene_name(str(payload.get("sceneName", "GeneratedScene"))),
         "temperature": payload.get("temperature", 0.2),
         "noRender": bool(payload.get("noRender", False)),
+        "model": str(payload.get("model", "")).strip(),
     }
+    if not provider_id.startswith("trial-"):
+        allowed_payload["apiKey"] = str(payload.get("apiKey", "")).strip()
+        allowed_payload["baseUrl"] = str(payload.get("baseUrl", "")).strip()
+        allowed_payload["endpoint"] = str(payload.get("endpoint") or payload.get("baseUrl") or "").strip()
     body = json.dumps(allowed_payload, ensure_ascii=False).encode("utf-8")
     req = urllib_request.Request(
         AEGIS_CLOUD_GENERATE_URL,

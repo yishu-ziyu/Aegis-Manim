@@ -53,9 +53,9 @@ class TestEvaluateExpectedFailure:
     def test_passes_when_expected_error_present(self) -> None:
         result = {
             "ok": False,
-            "error": "公开内测页只支持内置免费试用模型。",
+            "error": "这个试用模型已下线，请改用当前免费试用或自带密钥。",
         }
-        assert pdv.evaluate_expected_failure(result, "公开内测页只支持内置免费试用模型") is True
+        assert pdv.evaluate_expected_failure(result, "这个试用模型已下线") is True
 
     def test_fails_when_ok_true(self) -> None:
         result = {
@@ -160,7 +160,7 @@ class TestRunChecks:
                         "ok": False,
                         "codeLen": 0,
                         "isFallback": False,
-                        "error": "公开内测页只支持内置免费试用模型。",
+                        "error": "这个试用模型已下线，请改用当前免费试用或自带密钥。",
                         "model": None,
                         "codeFile": None,
                     }

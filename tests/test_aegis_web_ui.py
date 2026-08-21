@@ -23,6 +23,11 @@ class AegisWebUiTest(unittest.TestCase):
         assert "renderRichText(script, segment.script" in html
         assert "script.textContent = segment.script" not in html
         assert "PROVIDER_CONFIG.providerStorageKey" in html
+        assert "aegis.byok.vault.v1" in html
+        assert 'id="byokPanel"' in html
+        assert 'id="modeByokBtn"' in html
+        assert "saveCurrentKey" in html
+        assert "密钥只存在这台浏览器" in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
@@ -130,6 +135,52 @@ class AegisWebUiTest(unittest.TestCase):
         assert "must-not-forward" not in forwarded
         assert "baseUrl" not in forwarded
         assert "apiKey" not in forwarded
+
+    def test_cloud_generate_proxy_forwards_byok_key_for_user_providers(self) -> None:
+        old_url = web_app.AEGIS_CLOUD_GENERATE_URL
+        web_app.AEGIS_CLOUD_GENERATE_URL = "https://cloud.example/api/generate"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"ok":true,"authMode":"byok"}'
+
+        def fake_urlopen(req, timeout=180):
+            captured["body"] = req.data.decode("utf-8")
+            return FakeResponse()
+
+        original_urlopen = web_app.urllib_request.urlopen
+        web_app.urllib_request.urlopen = fake_urlopen
+        try:
+            status, response = web_app.proxy_cloud_generate(
+                {
+                    "prompt": "解释帕累托最优",
+                    "provider": "openai",
+                    "sceneName": "GeneratedScene",
+                    "temperature": 0.2,
+                    "apiKey": "sk-user-owned",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "gpt-4o-mini",
+                }
+            )
+        finally:
+            web_app.urllib_request.urlopen = original_urlopen
+            web_app.AEGIS_CLOUD_GENERATE_URL = old_url
+
+        assert status == 200
+        assert response["ok"] is True
+        forwarded = captured["body"]
+        assert "sk-user-owned" in forwarded
+        assert "https://api.openai.com/v1" in forwarded
+        assert "gpt-4o-mini" in forwarded
 
     def test_local_web_server_exposes_render_proxy_routes(self) -> None:
         assert "if route == \"/api/render\":" in Path(web_app.__file__).read_text(encoding="utf-8")

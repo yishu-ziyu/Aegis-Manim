@@ -226,11 +226,42 @@ REGION_LABELS = {
     "custom": "自定义",
 }
 
+LOCAL_ONLY_PROVIDER_IDS = frozenset({"codex-cli", "codex-local-proxy"})
+
+KEY_HINTS = {
+    "openai": "通常以 sk- 开头",
+    "deepseek": "通常以 sk- 开头",
+    "zhipu": "智谱开放平台 API Key",
+    "kimi-code": "Kimi For Coding Key",
+    "moonshot-kimi": "Moonshot / Kimi 开放平台 Key",
+    "mimo": "通常以 tp- 开头",
+    "minimax-token-global": "MiniMax API Key",
+    "minimax-token-cn": "MiniMax API Key",
+    "minimax-coding-global": "MiniMax Coding Plan Key",
+    "minimax-coding-cn": "MiniMax Coding Plan Key",
+    "minimax-openai-cn": "MiniMax API Key",
+    "custom-openai": "按网关要求填写，可留空",
+    "custom-anthropic": "按网关要求填写，可留空",
+}
+
+
+def is_local_only_provider(provider_id: str) -> bool:
+    return provider_id in LOCAL_ONLY_PROVIDER_IDS
+
+
+def is_byok_provider(provider_id: str, *, requires_api_key: bool) -> bool:
+    return (requires_api_key or provider_id.startswith("custom-")) and not is_local_only_provider(
+        provider_id
+    )
+
 
 def provider_presets_for_ui() -> dict[str, object]:
     return {
         "defaultProvider": DEFAULT_PROVIDER,
+        "defaultMode": "byok",
+        "cloudMode": False,
         "regionLabels": REGION_LABELS,
+        "providerStorageKey": "aegis.provider",
         "providers": {
             provider_id: {
                 **asdict(preset),
@@ -240,6 +271,9 @@ def provider_presets_for_ui() -> dict[str, object]:
                 "apiKeyPlaceholder": preset.api_key_placeholder,
                 "requiresApiKey": preset.requires_api_key,
                 "models": list(preset.models),
+                "byok": is_byok_provider(provider_id, requires_api_key=preset.requires_api_key),
+                "keyHint": KEY_HINTS.get(provider_id, "API Key"),
+                "localOnly": is_local_only_provider(provider_id),
             }
             for provider_id, preset in PROVIDER_PRESETS.items()
         },

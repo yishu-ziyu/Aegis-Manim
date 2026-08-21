@@ -22,6 +22,8 @@ if str(CORE_PATH) not in sys.path:
 from llm_providers import (  # noqa: E402
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
+    PROVIDER_PRESETS,
+    is_local_only_provider,
     provider_presets_for_ui,
     resolve_provider,
 )
@@ -125,6 +127,10 @@ PUBLIC_TRIAL_PLANS = {
 CLOUD_ENDPOINT_ERROR = (
     "Vercel 云端只支持公网 HTTPS 模型端点；本机、内网和 http:// 地址请在本地 Aegis Web 使用。"
 )
+UNKNOWN_TRIAL_ERROR = "这个试用模型已下线，请改用当前免费试用或自带密钥。"
+UNKNOWN_PROVIDER_ERROR = "未知的模型服务。请选择免费试用，或使用自带密钥的公开 Provider。"
+LOCAL_ONLY_PROVIDER_ERROR = "这个 Provider 只能在本机使用，不能在 Vercel 云端运行。"
+BYOK_CUSTOM_URL_REQUIRED_ERROR = "自定义 Provider 需要填写可公网访问的 HTTPS Base URL。"
 
 # Render backend configuration
 RENDER_BACKEND_URL = os.environ.get("RENDER_BACKEND_URL", "").rstrip("/")
@@ -326,8 +332,31 @@ def build_generate_unavailable_payload() -> dict[str, object]:
     }
 
 
+def public_byok_providers() -> dict[str, dict[str, object]]:
+    source = provider_presets_for_ui()
+    providers: dict[str, dict[str, object]] = {}
+    for provider_id, preset in source["providers"].items():
+        if is_local_only_provider(provider_id):
+            continue
+        providers[provider_id] = {
+            **preset,
+            "byok": True,
+            "serverManaged": False,
+            "hideApiKey": False,
+            "hideBaseUrl": False,
+            "lockModel": False,
+            "localOnly": False,
+            "displayProtocol": "自带密钥",
+            "description": (
+                f"{preset['name']} · 使用你自己的 Key，只存在这台浏览器，"
+                "生成时才发给对应模型服务。"
+            ),
+        }
+    return providers
+
+
 def public_provider_config() -> dict[str, object]:
-    providers = {
+    trial_providers = {
         provider_id: {
             "id": provider_id,
             "name": plan["name"],
@@ -340,6 +369,7 @@ def public_provider_config() -> dict[str, object]:
             "hideApiKey": True,
             "hideBaseUrl": True,
             "lockModel": True,
+            "byok": False,
             "displayProtocol": "免费试用",
             "description": plan["description"],
         }
@@ -347,9 +377,18 @@ def public_provider_config() -> dict[str, object]:
     }
     return {
         "defaultProvider": PUBLIC_TRIAL_DEFAULT_PROVIDER,
-        "regionLabels": {"trial": "内测免费试用"},
-        "providerStorageKey": "aegis.provider.public.v4",
-        "providers": providers,
+        "defaultMode": "trial",
+        "cloudMode": True,
+        "directGenerate": True,
+        "regionLabels": {
+            "trial": "内测免费试用",
+            "global": "海外 / 原生厂商",
+            "cn": "国内直连",
+            "coding": "Token Plan / Coding Plan",
+            "custom": "自定义",
+        },
+        "providerStorageKey": "aegis.provider.public.v5",
+        "providers": {**trial_providers, **public_byok_providers()},
     }
 
 
@@ -1140,7 +1179,7 @@ def generate_code_with_trial_plan(
     if not plan:
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
-            "error": "公开内测页只支持内置免费试用模型。",
+            "error": UNKNOWN_TRIAL_ERROR,
             "requestId": request_id,
         }
     generation_prompt = trial_generation_prompt(prompt)
@@ -1331,12 +1370,26 @@ def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, di
             temperature=temperature,
             request_id=request_id,
         )
+    if provider_id.startswith("trial-"):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": UNKNOWN_TRIAL_ERROR,
+            "requestId": request_id,
+        }
+    if is_local_only_provider(provider_id) or provider_id in DISABLED_CLOUD_PROVIDERS:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": LOCAL_ONLY_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
+    if provider_id not in PROVIDER_PRESETS:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": UNKNOWN_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
 
-    return HTTPStatus.BAD_REQUEST, {
-        "ok": False,
-        "error": "公开内测页只支持内置免费试用模型。",
-        "requestId": request_id,
-    }
+    return generate_manim_code_with_client_provider(payload)
 
 
 def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
@@ -1354,11 +1407,25 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
         }
 
     provider = resolve_provider(provider_id)
+    scene_name = local_web_app.safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
     api_key = str(payload.get("apiKey", "")).strip()
     model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
     base_url = str(payload.get("baseUrl", "")).strip()
     endpoint = str(payload.get("endpoint", "")).strip()
     temperature = clamp_temperature(payload.get("temperature", 0.2))
+
+    if provider.requires_api_key and not api_key:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
+            "requestId": request_id,
+        }
+    if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_CUSTOM_URL_REQUIRED_ERROR,
+            "requestId": request_id,
+        }
 
     for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
         endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
@@ -1366,14 +1433,14 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
             return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error, "requestId": request_id}
 
     try:
-        raw_code, used_provider, used_endpoint = generate_code_with_llm(
+        raw_code, _used_provider, used_endpoint = generate_code_with_llm(
             provider_id=provider.id,
             api_key=api_key,
             base_url=base_url,
             endpoint=endpoint,
             model=model,
             system_prompt=SYSTEM_PROMPT,
-            user_prompt=prompt,
+            user_prompt=trial_generation_prompt(prompt),
             temperature=temperature,
             timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
         )
@@ -1386,17 +1453,17 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
             "error": str(exc),
             "requestId": request_id,
         }
-    except Exception as exc:
+    except Exception:
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": "Model request failed.",
+            "error": "模型请求失败。请检查 Key、额度与 Base URL。",
             "requestId": request_id,
         }
 
     return HTTPStatus.OK, {
         "ok": True,
-        "provider": used_provider.id,
-        "providerName": used_provider.name,
+        "provider": provider.id,
+        "providerName": provider.name,
         "model": model,
         "endpoint": used_endpoint,
         "code": patched_code,
@@ -1408,7 +1475,8 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
         "requestId": request_id,
         "rendered": False,
         "renderBackend": "external-required",
-        "message": "Vercel 已生成 Manim 代码；视频渲染需要后端服务承载。",
+        "authMode": "byok",
+        "message": "已使用你的密钥生成 Manim 代码；密钥未写入服务器。",
     }
 
 
@@ -1424,7 +1492,7 @@ def build_index_html() -> str:
             "内测免费试用：Aegis 后端托管模型额度，页面不接收你的模型 Key。"
         ),
         "支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。": (
-            "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型。"
+            "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型，也可切换到自带密钥。"
         ),
         "Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。": (
             "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。"

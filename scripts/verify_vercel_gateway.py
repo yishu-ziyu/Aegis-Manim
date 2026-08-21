@@ -64,10 +64,11 @@ def main() -> int:
     assert "MiniMax M3 与 Mimo 编程" in html
     assert "免费试用 · Kimi 优先" not in html
     assert "免费试用 · MiniMax M3" in html
-    assert "Kimi Code API" not in html
-    assert "Moonshot Kimi API" not in html
+    assert "Kimi Code API" in html
+    assert "自定义 OpenAI-Compatible" in html
     assert "Codex CLI 登录态" not in html
-    assert "自定义 OpenAI-Compatible" not in html
+    assert "aegis.byok.vault.v1" in html
+    assert 'data-mode="byok"' in html
     assert 'fetch("/api/generate"' in html
     assert 'fetch("/api/generate/start"' not in html
     assert "await waitForJob(data.statusUrl, payload);" not in html
@@ -79,14 +80,15 @@ def main() -> int:
     public_config = public_provider_config()
     providers = public_config["providers"]
     assert public_config["defaultProvider"] == "trial-minimax-direct"
-    assert public_config["providerStorageKey"] == "aegis.provider.public.v4"
-    assert "aegis.provider.public.v4" in html
-    assert set(providers) == {"trial-minimax-direct", "trial-mimo-direct"}
+    assert public_config["providerStorageKey"] == "aegis.provider.public.v5"
+    assert "aegis.provider.public.v5" in html
+    assert {"trial-minimax-direct", "trial-mimo-direct", "openai", "custom-openai"} <= set(providers)
     assert providers["trial-minimax-direct"]["serverManaged"] is True
     assert providers["trial-minimax-direct"]["hideApiKey"] is True
     assert providers["trial-minimax-direct"]["defaultModel"] == "MiniMax M3 试用"
     assert "baseURL" not in providers["trial-minimax-direct"]
     assert "apiType" not in providers["trial-minimax-direct"]
+    assert "codex-cli" not in providers
 
     status, missing_prompt = generate_manim_code_for_gateway({"prompt": ""})
     assert status == 400
@@ -97,7 +99,7 @@ def main() -> int:
     )
     assert status == 400
     assert disabled_provider["ok"] is False
-    assert "内置免费试用模型" in disabled_provider["error"]
+    assert "只能在本机使用" in disabled_provider["error"]
 
     status, private_endpoint = generate_manim_code_for_gateway(
         {
@@ -109,7 +111,7 @@ def main() -> int:
     )
     assert status == 400
     assert private_endpoint["ok"] is False
-    assert "内置免费试用模型" in private_endpoint["error"]
+    assert "公网 HTTPS 模型端点" in private_endpoint["error"]
 
     status_code, _headers, body = asyncio.run(call_asgi_app("GET", "/favicon.ico"))
     assert status_code == 204
