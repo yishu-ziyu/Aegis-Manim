@@ -249,6 +249,15 @@ def is_local_only_provider(provider_id: str) -> bool:
     return provider_id in LOCAL_ONLY_PROVIDER_IDS
 
 
+def redact_client_secrets(text: str, *secrets: object) -> str:
+    redacted = str(text or "")
+    for secret in secrets:
+        value = str(secret or "").strip()
+        if len(value) >= 6:
+            redacted = redacted.replace(value, "[redacted]")
+    return redacted
+
+
 def is_byok_provider(provider_id: str, *, requires_api_key: bool) -> bool:
     return (requires_api_key or provider_id.startswith("custom-")) and not is_local_only_provider(
         provider_id

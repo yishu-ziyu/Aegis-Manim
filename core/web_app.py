@@ -23,7 +23,7 @@ from urllib import request as urllib_request
 from uuid import uuid4
 
 from alignment import generate_alignment
-from llm_providers import DEFAULT_PROVIDER, provider_presets_for_ui, resolve_provider
+from llm_providers import DEFAULT_PROVIDER, provider_presets_for_ui, redact_client_secrets, resolve_provider
 from manim_knowledge import (
     build_repair_feedback,
     classify_render_error,
@@ -686,7 +686,7 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={active_model} chars={len(code)}",
             )
         except Exception as exc:
-            detail = str(exc)
+            detail = redact_client_secrets(str(exc), api_key)
             append_runtime_log(
                 "MODEL_REQUEST_FAIL",
                 f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={active_model} endpoint={resolved_endpoint} error={detail}",
@@ -769,6 +769,8 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
         }
         if notes:
             response["warnings"] = notes
+        if not trial_plan:
+            response["authMode"] = "byok"
         if precheck_issues:
             response["precheckIssues"] = [
                 {
@@ -783,7 +785,11 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
             ]
 
         if no_render:
-            response["message"] = "Code generated successfully. Render skipped."
+            response["message"] = (
+                "已使用你的密钥生成 Manim 代码；这次跳过了视频渲染。"
+                if not trial_plan
+                else "Code generated successfully. Render skipped."
+            )
             append_runtime_log("GENERATE_SKIP_RENDER", f"request_id={job_id} file={scene_file.name} scene={detected_scene_name}")
             emit_job_event(
                 job_id,
@@ -4617,7 +4623,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                     ),
                 )
             except Exception as exc:
-                detail = str(exc)
+                detail = redact_client_secrets(str(exc), api_key)
                 append_runtime_log(
                     "MODEL_REQUEST_FAIL",
                     (
@@ -4665,6 +4671,9 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             }
             if notes:
                 response["warnings"] = notes
+            if not str(payload.get("provider", "")).startswith("trial-"):
+                response["authMode"] = "byok"
+                response["message"] = "已使用你的密钥生成 Manim 代码；密钥未写入服务器。"
 
             if no_render:
                 response["message"] = "Code generated successfully. Render skipped."

@@ -26,6 +26,7 @@ from llm_providers import (  # noqa: E402
     generate_code_with_provider,
     is_local_only_provider,
     provider_presets_for_ui,
+    redact_client_secrets,
     resolve_provider,
 )
 from manim_agent import (  # noqa: E402
@@ -1101,15 +1102,6 @@ def is_private_or_local_host(host: str) -> bool:
         or ip.is_reserved
         or ip.is_unspecified
     )
-
-
-def redact_client_secrets(text: str, *secrets: object) -> str:
-    redacted = str(text or "")
-    for secret in secrets:
-        value = str(secret or "").strip()
-        if len(value) >= 6:
-            redacted = redacted.replace(value, "[redacted]")
-    return redacted
 
 
 def resolve_public_byok_provider(provider_id: str) -> tuple[object | None, str | None]:
