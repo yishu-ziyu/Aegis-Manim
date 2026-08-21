@@ -50,6 +50,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert "writeVaultEntry" in html
         assert "verifiedAt" in html
         assert "function customEndpointReady" in html
+        assert "currentMode !== \"byok\"" in html
+        assert "用自带密钥生成" in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
