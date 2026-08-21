@@ -34,6 +34,12 @@ class AegisWebUiTest(unittest.TestCase):
         assert "先在密钥库填写 API Key" in html
         assert "选择或拖入图片" in html
         assert 'id="endpointDetails"' in html
+        assert 'id="vaultList"' in html
+        assert "renderVaultList" in html
+        assert "forgetAllKeys" in html
+        assert "keyLooksUsable" in html
+        assert "清空密钥库" in html
+        assert "这个 Key 看起来不像可用密钥" in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")

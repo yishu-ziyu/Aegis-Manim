@@ -1191,6 +1191,26 @@ def make_index_html() -> str:
       flex-wrap: wrap;
       gap: 8px;
     }}
+    .vault-list {{
+      display: none;
+      flex-wrap: wrap;
+      gap: 6px;
+    }}
+    .vault-list.visible {{ display: flex; }}
+    .vault-chip {{
+      border: 1px solid var(--border);
+      background: #fffdfa;
+      color: var(--muted-2);
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 0.72rem;
+      cursor: pointer;
+    }}
+    .vault-chip.active {{
+      border-color: rgba(194, 65, 45, 0.35);
+      color: var(--accent);
+      background: rgba(194, 65, 45, 0.06);
+    }}
     .trial-hint {{
       display: none;
       padding: 10px 12px;
@@ -1603,7 +1623,8 @@ def make_index_html() -> str:
       gap: 14px;
     }}
 
-    .tag-wrap {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .tag-wrap {{ display: none; flex-wrap: wrap; gap: 8px; }}
+    body.has-result .tag-wrap {{ display: flex; }}
     .tag {{
       display: inline-flex;
       align-items: center;
@@ -2144,6 +2165,7 @@ def make_index_html() -> str:
             </div>
             <span id="vaultStatus" class="provider-pill">未保存</span>
           </div>
+          <div id="vaultList" class="vault-list"></div>
           <div id="apiKeyField" class="field">
             <label id="apiKeyLabel" for="apiKey">API Key</label>
             <div class="key-row">
@@ -2167,6 +2189,7 @@ def make_index_html() -> str:
           <div class="vault-actions">
             <button id="saveKeyBtn" class="tiny-btn" type="button">保存到本机</button>
             <button id="forgetKeyBtn" class="ghost-btn" type="button">清除此 Key</button>
+            <button id="forgetAllBtn" class="ghost-btn" type="button">清空密钥库</button>
           </div>
         </div>
 
@@ -2387,6 +2410,8 @@ def make_index_html() -> str:
     const vaultStatus = document.getElementById("vaultStatus");
     const saveKeyBtn = document.getElementById("saveKeyBtn");
     const forgetKeyBtn = document.getElementById("forgetKeyBtn");
+    const forgetAllBtn = document.getElementById("forgetAllBtn");
+    const vaultList = document.getElementById("vaultList");
     const endpointDetails = document.getElementById("endpointDetails");
     const visionPickBtn = document.getElementById("visionPickBtn");
     const VAULT_STORAGE_KEY = "aegis.byok.vault.v1";
@@ -2480,6 +2505,38 @@ def make_index_html() -> str:
       return entry && typeof entry.key === "string" ? entry.key : "";
     }}
 
+    function keyLooksUsable(key) {{
+      const value = String(key || "").trim();
+      if (value.length < 12) return false;
+      if (/^(your[_-]?api[_-]?key|api key|sk-xxx|placeholder|changeme)/i.test(value)) return false;
+      return true;
+    }}
+
+    function renderVaultList() {{
+      if (!vaultList) return;
+      vaultList.replaceChildren();
+      const vault = readVault();
+      const ids = Object.keys(vault).filter((id) => (
+        vault[id] && typeof vault[id].key === "string" && vault[id].key && PROVIDERS[id]
+      ));
+      vaultList.classList.toggle("visible", ids.length > 0);
+      ids.forEach((id) => {{
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "vault-chip" + (id === providerSelect.value ? " active" : "");
+        button.textContent = (PROVIDERS[id].name || id) + " · " + maskKey(vault[id].key);
+        button.addEventListener("click", () => {{
+          if (currentMode !== "byok") applyMode("byok");
+          providerSelect.value = id;
+          const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
+          localStorage.setItem(providerStorageKey, id);
+          apiKeyInput.value = vault[id].key;
+          updateProviderUI(false);
+        }});
+        vaultList.appendChild(button);
+      }});
+    }}
+
     function updateVaultStatus() {{
       const key = savedVaultKey(providerSelect.value) || apiKeyInput.value.trim();
       vaultStatus.textContent = key ? maskKey(key) : "未保存";
@@ -2489,6 +2546,7 @@ def make_index_html() -> str:
         : "免费试用";
       authChip.className = "auth-chip " + (currentMode === "byok" ? "byok" : "trial");
       vaultToggle.textContent = currentMode === "byok" ? "收起密钥库" : "打开密钥库";
+      renderVaultList();
     }}
 
     function applyMode(mode, persist = true) {{
@@ -2610,6 +2668,10 @@ def make_index_html() -> str:
         setStatus("已清除这个 Provider 的本机密钥。", "success");
         return;
       }}
+      if (!keyLooksUsable(key)) {{
+        setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
+        return;
+      }}
       vault[providerId] = {{ key, updatedAt: Date.now() }};
       writeVault(vault);
       updateVaultStatus();
@@ -2635,8 +2697,16 @@ def make_index_html() -> str:
       byokPanel.classList.toggle("visible");
       vaultToggle.textContent = byokPanel.classList.contains("visible") ? "收起密钥库" : "打开密钥库";
     }});
+    function forgetAllKeys() {{
+      writeVault({{}});
+      apiKeyInput.value = "";
+      updateVaultStatus();
+      setStatus("已清空本机密钥库。", "success");
+    }}
+
     saveKeyBtn.addEventListener("click", saveCurrentKey);
     forgetKeyBtn.addEventListener("click", forgetCurrentKey);
+    forgetAllBtn.addEventListener("click", forgetAllKeys);
     apiKeyInput.addEventListener("input", updateVaultStatus);
 
     function setStatus(message, type = "") {{
@@ -3558,10 +3628,18 @@ def make_index_html() -> str:
         setStatus("这个 Provider 需要下载项目后在本地运行；Vercel 云端无法访问你的本机 Codex 或 127.0.0.1 服务。", "error");
         return;
       }}
-      if (!preset.serverManaged && preset.requiresApiKey && !currentByokKey()) {{
-        applyMode("byok");
-        setStatus("先在密钥库填写 API Key，或改回免费试用。", "error");
-        return;
+      if (!preset.serverManaged && preset.requiresApiKey) {{
+        const key = currentByokKey();
+        if (!key) {{
+          applyMode("byok");
+          setStatus("先在密钥库填写 API Key，或改回免费试用。", "error");
+          return;
+        }}
+        if (!keyLooksUsable(key)) {{
+          applyMode("byok");
+          setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
+          return;
+        }}
       }}
       submitBtn.disabled = true;
       document.body.classList.remove("learning-mode", "show-code", "has-result");
