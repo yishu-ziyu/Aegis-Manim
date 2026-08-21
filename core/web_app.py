@@ -2505,10 +2505,13 @@ def make_index_html() -> str:
       return entry && typeof entry.key === "string" ? entry.key : "";
     }}
 
-    function keyLooksUsable(key) {{
+    function keyLooksUsable(key, preset) {{
       const value = String(key || "").trim();
-      if (value.length < 12) return false;
+      if (value.length < 16) return false;
       if (/^(your[_-]?api[_-]?key|api key|sk-xxx|placeholder|changeme)/i.test(value)) return false;
+      if (/^[A-Z][A-Z0-9_]*API_KEY$/i.test(value)) return false;
+      const placeholder = String((preset && preset.apiKeyPlaceholder) || "").trim();
+      if (placeholder && value === placeholder) return false;
       return true;
     }}
 
@@ -2607,7 +2610,7 @@ def make_index_html() -> str:
       providerHelp.textContent = preset.description || `${{preset.name || providerSelect.value}} · ${{preset.apiType || "compatible"}} · 模型 ID 可手动改写。`;
       apiKeyLabel.textContent = `${{preset.name || "Provider"}} API Key`;
       apiKeyInput.placeholder = preset.apiKeyPlaceholder || "API Key...";
-      apiKeyInput.required = Boolean(preset.requiresApiKey);
+      apiKeyInput.required = false;
       const usesCodexCli = preset.apiType === "codex-cli";
       const serverManaged = Boolean(preset.serverManaged);
       const cloudUnavailable = Boolean(preset.cloudUnavailable);
@@ -2668,7 +2671,7 @@ def make_index_html() -> str:
         setStatus("已清除这个 Provider 的本机密钥。", "success");
         return;
       }}
-      if (!keyLooksUsable(key)) {{
+      if (!keyLooksUsable(key, activePreset())) {{
         setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
         return;
       }}
@@ -3635,7 +3638,7 @@ def make_index_html() -> str:
           setStatus("先在密钥库填写 API Key，或改回免费试用。", "error");
           return;
         }}
-        if (!keyLooksUsable(key)) {{
+        if (!keyLooksUsable(key, preset)) {{
           applyMode("byok");
           setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
           return;
