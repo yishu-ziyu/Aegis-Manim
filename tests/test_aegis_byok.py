@@ -107,6 +107,7 @@ class AegisByokTest(unittest.TestCase):
     def test_page_byok_controls_exist_in_local_and_cloud_html(self) -> None:
         local_html = web_app.make_index_html()
         cloud_html = gateway.build_index_html()
+        assert "MiniMax M3 与 Mimo 编程" in cloud_html
 
         for html in (local_html, cloud_html):
             assert 'id="modeTrialBtn"' in html
