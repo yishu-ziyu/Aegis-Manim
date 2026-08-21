@@ -17,9 +17,10 @@ from llm_providers import redact_client_secrets, resolve_provider  # noqa: E402
 from manim_agent import is_placeholder_api_key  # noqa: E402
 
 LIVE_BYOK_CANDIDATES = (
+    ("MINIMAX_API_KEY", "minimax-token-cn"),
+    ("ANTHROPIC_AUTH_TOKEN", "minimax-token-cn"),
     ("DEEPSEEK_API_KEY", "deepseek"),
     ("OPENAI_API_KEY", "openai"),
-    ("MINIMAX_API_KEY", "minimax-coding-cn"),
     ("BIGMODEL_API_KEY", "zhipu"),
     ("KIMI_CODE_API_KEY", "kimi-code"),
     ("MOONSHOT_API_KEY", "moonshot-kimi"),

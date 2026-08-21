@@ -1469,7 +1469,7 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
             system_prompt=SYSTEM_PROMPT,
             user_prompt=trial_generation_prompt(prompt),
             temperature=temperature,
-            timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
+            timeout=trial_timeout_seconds(provider.id),
         )
         cleaned_code = extract_python_only(raw_code)
         patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
@@ -1717,7 +1717,7 @@ def align_script_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str,
             endpoint=endpoint or None,
             model=model,
             temperature=temperature,
-            timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
+            timeout=trial_timeout_seconds(provider.id),
         )
         auth_mode = "byok"
         used_provider_id = provider.id

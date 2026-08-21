@@ -2733,7 +2733,7 @@ def make_index_html() -> str:
         isByokPreset(PROVIDERS[id], id) && !PROVIDERS[id].hideApiKey
       ));
       const savedIds = byokIds.filter((id) => savedVaultKey(id));
-      const featured = ["zhipu", "openai", "deepseek", "kimi-code", "minimax-coding-cn", "mimo"].filter((id) => (
+      const featured = ["zhipu", "openai", "deepseek", "kimi-code", "minimax-token-cn", "mimo"].filter((id) => (
         byokIds.includes(id)
       ));
       const ids = [];

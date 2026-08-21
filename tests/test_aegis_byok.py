@@ -475,6 +475,12 @@ class AegisByokTest(unittest.TestCase):
             clear=False,
         ):
             assert live_byok_smoke.discover_live_byok_provider() == ("openai", "OPENAI_API_KEY")
+        with patch.dict(
+            os.environ,
+            {**empty, "MINIMAX_API_KEY": "sk-cp-live-minimax-token-plan-key"},
+            clear=False,
+        ):
+            assert live_byok_smoke.discover_live_byok_provider() == ("minimax-token-cn", "MINIMAX_API_KEY")
 
     def test_local_web_exposes_preflight_route(self) -> None:
         source = Path(web_app.__file__).read_text(encoding="utf-8")
