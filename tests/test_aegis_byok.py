@@ -117,3 +117,5 @@ class AegisByokTest(unittest.TestCase):
             assert "function applyMode" in html
             assert "savedVaultKey" in html
             assert "API Key 只用于本次生成，不写入仓库。" in html
+            assert "先在密钥库填写 API Key" in html
+            assert 'id="resultEmpty"' in html

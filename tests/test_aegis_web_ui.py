@@ -28,6 +28,12 @@ class AegisWebUiTest(unittest.TestCase):
         assert 'id="modeByokBtn"' in html
         assert "saveCurrentKey" in html
         assert "密钥只存在这台浏览器" in html
+        assert "[hidden] { display: none !important; }" in html
+        assert 'id="resultEmpty"' in html
+        assert "currentByokKey" in html
+        assert "先在密钥库填写 API Key" in html
+        assert "选择或拖入图片" in html
+        assert 'id="endpointDetails"' in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
