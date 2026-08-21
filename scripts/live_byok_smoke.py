@@ -23,6 +23,7 @@ LIVE_BYOK_CANDIDATES = (
     ("BIGMODEL_API_KEY", "zhipu"),
     ("KIMI_CODE_API_KEY", "kimi-code"),
     ("MOONSHOT_API_KEY", "moonshot-kimi"),
+    ("MIMO_API_KEY", "mimo"),
 )
 
 
