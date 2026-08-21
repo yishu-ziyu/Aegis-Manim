@@ -1274,6 +1274,10 @@ def make_index_html() -> str:
     .vault-chip.verified {{
       border-color: rgba(44, 83, 71, 0.28);
     }}
+    .vault-chip.empty {{
+      border-style: dashed;
+      opacity: 0.78;
+    }}
     .provider-pill.ok {{
       border-color: rgba(44, 83, 71, 0.24);
       color: var(--ok);
@@ -2306,7 +2310,7 @@ def make_index_html() -> str:
           <div class="vault-head">
             <div>
               <h3>密钥库</h3>
-              <p>先保存，再测连通。生成时才发给对应模型服务。</p>
+              <p>点选服务后粘贴 Key。先保存，再测连通；生成时才发给对应模型服务。</p>
             </div>
             <span id="vaultStatus" class="provider-pill">未保存</span>
           </div>
@@ -2709,23 +2713,35 @@ def make_index_html() -> str:
     function renderVaultList() {{
       if (!vaultList) return;
       vaultList.replaceChildren();
-      const vault = readVault();
-      const ids = Object.keys(vault).filter((id) => (
-        vault[id] && typeof vault[id].key === "string" && vault[id].key && PROVIDERS[id]
+      const byokIds = Object.keys(PROVIDERS).filter((id) => (
+        isByokPreset(PROVIDERS[id], id) && !PROVIDERS[id].hideApiKey
       ));
-      vaultList.classList.toggle("visible", ids.length > 0);
+      const savedIds = byokIds.filter((id) => savedVaultKey(id));
+      const featured = ["zhipu", "openai", "deepseek", "kimi-code", "minimax-coding-cn"].filter((id) => (
+        byokIds.includes(id)
+      ));
+      const ids = [];
+      [providerSelect.value, ...savedIds, ...(savedIds.length ? [] : featured)].forEach((id) => {{
+        if (id && byokIds.includes(id) && !ids.includes(id)) ids.push(id);
+      }});
+      vaultList.classList.toggle("visible", currentMode === "byok" && ids.length > 0);
       ids.forEach((id) => {{
+        const key = savedVaultKey(id);
+        const verified = Boolean(vaultEntry(id) && vaultEntry(id).verifiedAt);
         const button = document.createElement("button");
         button.type = "button";
-        const verified = Boolean(vault[id].verifiedAt);
-        button.className = "vault-chip" + (id === providerSelect.value ? " active" : "") + (verified ? " verified" : "");
-        button.textContent = (PROVIDERS[id].name || id) + " · " + maskKey(vault[id].key) + (verified ? " · 已连通" : "");
+        button.className = "vault-chip"
+          + (id === providerSelect.value ? " active" : "")
+          + (verified ? " verified" : "")
+          + (!key ? " empty" : "");
+        const status = !key ? "未保存" : (verified ? maskKey(key) + " · 已连通" : maskKey(key));
+        button.textContent = (PROVIDERS[id].name || id) + " · " + status;
         button.addEventListener("click", () => {{
           if (currentMode !== "byok") applyMode("byok");
           providerSelect.value = id;
           const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
           localStorage.setItem(providerStorageKey, id);
-          apiKeyInput.value = vault[id].key;
+          apiKeyInput.value = key;
           updateProviderUI(false);
         }});
         vaultList.appendChild(button);

@@ -147,6 +147,9 @@ class AegisByokTest(unittest.TestCase):
             assert 'id="authTag"' in html
             assert "boot-byok" in html
             assert 'data-default-mode="' in html
+            assert '" empty"' in html
+            assert "const featured" in html
+            assert "minimax-coding-cn" in html
             assert 'localStorage.getItem("aegis.mode")' in html
             assert "Auth: 自带密钥" in html
             assert "生成接口返回了不该出现的密钥" in html
