@@ -1,0 +1,20 @@
+{
+  "name": "Aegis-Manim",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "render-backend",
+      "command": "cd render_backend && MANIM_API_KEY=dev-key PORT=5000 ../.venv/bin/python app.py",
+      "description": "Flask render backend on http://127.0.0.1:5000 (memory-only mode; POST /render-async renders Manim code to MP4). Health: GET /health."
+    },
+    {
+      "name": "aegis-web",
+      "command": ".venv/bin/python core/web_app.py --host 127.0.0.1 --port 8000",
+      "description": "Aegis web workbench on http://127.0.0.1:8000 (GET / UI, GET /api/health). POST /api/generate needs an LLM API key supplied per request."
+    }
+  ],
+  "ports": [
+    { "name": "aegis-web", "port": 8000 },
+    { "name": "render-backend", "port": 5000 }
+  ]
+}
