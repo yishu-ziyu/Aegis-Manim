@@ -56,6 +56,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert "用自带密钥生成" in html
         assert 'id="generate-form" class="form-wrap" novalidate' in html
         assert "先写下一道要讲清楚的问题" in html
+        assert 'id="keyNotice"' in html
+        assert "keyNotice.hidden" in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
@@ -252,6 +254,61 @@ class AegisWebUiTest(unittest.TestCase):
         assert response["ok"] is True
         assert captured["url"] == "https://cloud.example/api/byok/preflight"
         assert "sk-user-owned" in str(captured["body"])
+
+    def test_cloud_align_proxy_forwards_byok_key_and_builds_url(self) -> None:
+        old_url = web_app.AEGIS_CLOUD_GENERATE_URL
+        web_app.AEGIS_CLOUD_GENERATE_URL = "https://cloud.example/api/generate"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"ok":true,"authMode":"byok","alignment":{"confidence":"low"}}'
+
+        def fake_urlopen(req, timeout=90):
+            captured.setdefault("urls", []).append(req.full_url)
+            captured.setdefault("bodies", []).append(req.data.decode("utf-8"))
+            return FakeResponse()
+
+        original_urlopen = web_app.urllib_request.urlopen
+        web_app.urllib_request.urlopen = fake_urlopen
+        try:
+            assert web_app.cloud_align_url() == "https://cloud.example/api/align"
+            status, response = web_app.proxy_cloud_align(
+                {
+                    "prompt": "解释帕累托最优",
+                    "code": "from manim import *",
+                    "provider": "openai",
+                    "apiKey": "sk-user-owned",
+                    "baseUrl": "https://api.openai.com/v1",
+                }
+            )
+            trial_status, _trial_body = web_app.proxy_cloud_align(
+                {
+                    "prompt": "解释帕累托最优",
+                    "code": "from manim import *",
+                    "provider": "trial-minimax-direct",
+                    "apiKey": "must-not-forward",
+                }
+            )
+        finally:
+            web_app.urllib_request.urlopen = original_urlopen
+            web_app.AEGIS_CLOUD_GENERATE_URL = old_url
+
+        assert status == 200
+        assert response["ok"] is True
+        assert captured["urls"][0] == "https://cloud.example/api/align"
+        assert "sk-user-owned" in captured["bodies"][0]
+        assert trial_status == 200
+        assert "must-not-forward" not in captured["bodies"][1]
+        assert "apiKey" not in captured["bodies"][1]
 
     def test_local_web_server_exposes_render_proxy_routes(self) -> None:
         assert "if route == \"/api/render\":" in Path(web_app.__file__).read_text(encoding="utf-8")

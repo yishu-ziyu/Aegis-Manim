@@ -29,6 +29,7 @@ from llm_providers import (  # noqa: E402
     redact_client_secrets,
     resolve_provider,
 )
+from alignment import generate_alignment  # noqa: E402
 from manim_agent import (  # noqa: E402
     apply_runtime_compatibility_fixes,
     extract_python_only,
@@ -1479,10 +1480,14 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
             "error": redact_client_secrets(str(exc), api_key),
             "requestId": request_id,
         }
-    except Exception:
+    except Exception as exc:
+        category = sanitize_upstream_error(exc)
+        reason = describe_trial_failure(category)
+        if reason == "request":
+            reason = "请检查 Key、额度与 Base URL"
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": "模型请求失败。请检查 Key、额度与 Base URL。",
+            "error": f"模型请求失败：{reason}。",
             "requestId": request_id,
         }
 
@@ -1565,10 +1570,14 @@ def preflight_byok_provider(payload: dict[str, object]) -> tuple[int, dict[str, 
             "error": redact_client_secrets(str(exc), api_key),
             "requestId": request_id,
         }
-    except Exception:
+    except Exception as exc:
+        category = sanitize_upstream_error(exc)
+        reason = describe_trial_failure(category)
+        if reason == "request":
+            reason = "请检查 Key、额度与 Base URL"
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": "连通失败。请检查 Key、额度与 Base URL。",
+            "error": f"连通失败：{reason}。",
             "requestId": request_id,
         }
 
@@ -1583,6 +1592,152 @@ def preflight_byok_provider(payload: dict[str, object]) -> tuple[int, dict[str, 
         "latencyMs": latency_ms,
         "requestId": request_id,
         "message": "密钥可用，已连通模型服务。密钥未写入服务器。",
+    }
+
+
+def _alignment_model_call(
+    *,
+    provider_id: str,
+    api_key: str,
+    base_url: str | None,
+    endpoint: str | None,
+    model: str,
+    temperature: float,
+    timeout: int,
+):
+    def call(system_prompt: str, user_prompt: str) -> str:
+        raw_text, _provider_name, _endpoint = generate_code_with_llm(
+            provider_id=provider_id,
+            api_key=api_key,
+            base_url=base_url,
+            endpoint=endpoint,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=min(0.4, temperature),
+            timeout=timeout,
+        )
+        return raw_text
+
+    return call
+
+
+def align_script_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    request_id = build_request_id()
+    prompt = str(payload.get("prompt", "")).strip()
+    code = str(payload.get("code", "")).strip()
+    scene_name = local_web_app.safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
+    video_duration = local_web_app.optional_positive_float(payload.get("videoDuration"))
+    provider_id = str(payload.get("provider", PUBLIC_TRIAL_DEFAULT_PROVIDER)).strip() or PUBLIC_TRIAL_DEFAULT_PROVIDER
+    temperature = clamp_temperature(payload.get("temperature", 0.2))
+    client_key = str(payload.get("apiKey", "")).strip()
+
+    if len(prompt) < 6 or not code:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": "对齐需要问题和已生成的代码。",
+            "requestId": request_id,
+        }
+
+    secrets: list[str] = [client_key] if client_key else []
+    llm_call = None
+    auth_mode = "trial"
+    used_provider_id = provider_id
+    used_provider_name = provider_id
+
+    if provider_id in PUBLIC_TRIAL_PLANS:
+        plan = PUBLIC_TRIAL_PLANS[provider_id]
+        used_provider_name = str(plan["name"])
+        for attempt in plan["attempts"]:
+            server_key = read_server_key(str(attempt["env"]))
+            if not server_key:
+                continue
+            secrets.append(server_key)
+            provider = resolve_provider(str(attempt["provider_id"]))
+            llm_call = _alignment_model_call(
+                provider_id=provider.id,
+                api_key=server_key,
+                base_url=str(attempt.get("base_url", "")).strip() or None,
+                endpoint=None,
+                model=str(attempt["model"]) or provider.default_model or DEFAULT_MODEL,
+                temperature=temperature,
+                timeout=trial_timeout_seconds(provider.id, repair=True),
+            )
+            break
+    elif provider_id.startswith("trial-"):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": UNKNOWN_TRIAL_ERROR,
+            "requestId": request_id,
+        }
+    elif is_local_only_provider(provider_id) or provider_id in DISABLED_CLOUD_PROVIDERS:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": LOCAL_ONLY_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
+    else:
+        provider, provider_error = resolve_public_byok_provider(provider_id)
+        if provider_error or provider is None:
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": provider_error or UNKNOWN_PROVIDER_ERROR,
+                "requestId": request_id,
+            }
+        api_key = client_key
+        model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
+        base_url = str(payload.get("baseUrl", "")).strip()
+        endpoint = str(payload.get("endpoint", "")).strip()
+        if provider.requires_api_key and not api_key:
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
+                "requestId": request_id,
+            }
+        if api_key and is_placeholder_api_key(api_key):
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": BYOK_PLACEHOLDER_KEY_ERROR,
+                "requestId": request_id,
+            }
+        if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": BYOK_CUSTOM_URL_REQUIRED_ERROR,
+                "requestId": request_id,
+            }
+        for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
+            endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
+            if endpoint_error:
+                return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error, "requestId": request_id}
+        llm_call = _alignment_model_call(
+            provider_id=provider.id,
+            api_key=api_key,
+            base_url=base_url or None,
+            endpoint=endpoint or None,
+            model=model,
+            temperature=temperature,
+            timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
+        )
+        auth_mode = "byok"
+        used_provider_id = provider.id
+        used_provider_name = provider.name
+
+    alignment = generate_alignment(
+        prompt=prompt,
+        code=code,
+        scene_name=scene_name,
+        video_duration=video_duration,
+        llm_call=llm_call,
+    )
+    alignment = local_web_app.redact_json_secrets(alignment, *secrets)
+    return HTTPStatus.OK, {
+        "ok": True,
+        "requestId": request_id,
+        "provider": used_provider_id,
+        "providerName": used_provider_name,
+        "authMode": auth_mode,
+        "alignment": alignment,
     }
 
 
@@ -1788,6 +1943,15 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
             status, response = preflight_byok_provider(payload)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/align":
+            try:
+                payload = self._read_json_body()
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = align_script_for_gateway(payload)
             self._send_json(HTTPStatus(status), response)
             return
         if route == "/api/vision/analyze":
