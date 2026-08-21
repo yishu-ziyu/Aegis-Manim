@@ -1,12 +1,12 @@
 # Aegis-Manim 阿里云轻量服务器部署手册
 
-目标：把 `render_backend` 跑成 Docker 服务，先用 `http://121.89.90.68:5000/health` 验证，稳定后再接域名和 HTTPS。
+目标：把 `render_backend` 跑成 Docker 服务，先用 `http://YOUR_HOST:5000/health` 验证，稳定后再接域名和 HTTPS。
 
 ## 服务器信息
 
 - 实例：Docker-iirl
 - 地域：华北6（乌兰察布）
-- 公网 IP：121.89.90.68
+- 公网 IP：YOUR_HOST
 - 镜像：Docker 26.1.3
 - 规格：2 vCPU / 4 GiB / 50 GiB ESSD
 
@@ -15,7 +15,7 @@
 如果本地执行下面命令返回 `Permission denied (publickey...)`，说明服务器还没有绑定可用 SSH 凭据：
 
 ```bash
-ssh root@121.89.90.68
+ssh root@YOUR_HOST
 ```
 
 处理方式二选一：
@@ -100,7 +100,7 @@ curl http://127.0.0.1:5000/health
 本机验证：
 
 ```bash
-curl http://121.89.90.68:5000/health
+curl http://YOUR_HOST:5000/health
 ```
 
 看到 JSON 健康检查结果以后，才进入域名和 HTTPS。
@@ -167,7 +167,7 @@ scripts/check_aegis_vision_server_update.sh
 ```bash
 cd /Users/mahaoxuan/Desktop/AI产品经理/实验探索/vibe/manim-main
 scripts/package_aegis_vision_server_update.sh
-scp /tmp/aegis-vision-server-update.tgz root@121.89.90.68:/opt/aegis/aegis-vision-server-update.tgz
+scp /tmp/aegis-vision-server-update.tgz root@YOUR_HOST:/opt/aegis/aegis-vision-server-update.tgz
 
 cd /opt/aegis/Aegis-Manim
 tar -xzf /opt/aegis/aegis-vision-server-update.tgz -C /opt/aegis/Aegis-Manim
@@ -198,7 +198,7 @@ doctor 会自动选择服务器上已安装的 `kimi`、`codex` 或 `claude`，�
 如果你要用自己的真实截图覆盖内置测试图，先上传后显式指定 `IMAGE_PATH`：
 
 ```bash
-scp ./你的中文经济学题截图.png root@121.89.90.68:/opt/aegis/vision-test.png
+scp ./你的中文经济学题截图.png root@YOUR_HOST:/opt/aegis/vision-test.png
 IMAGE_PATH=/opt/aegis/vision-test.png scripts/aegis_vision_server_doctor.sh
 ```
 
@@ -240,7 +240,7 @@ curl -sS http://127.0.0.1:5050/health
 
 对外接入有两种方式：
 
-1. 临时公测：阿里云安全组开放 `5050`，Vercel 配置 `VISION_BACKEND_URL=http://121.89.90.68:5050`。
+1. 临时公测：阿里云安全组开放 `5050`，Vercel 配置 `VISION_BACKEND_URL=http://YOUR_HOST:5050`。
 2. 正式发布：用 Caddy 或 Nginx 给 `vision.yishuziyu.cn` 配 HTTPS，再设置 `VISION_BACKEND_URL=https://vision.yishuziyu.cn`。
 
 正式发布的 Caddy 反代可以和渲染后端并列配置：
@@ -263,7 +263,7 @@ vision.yishuziyu.cn {
 
 ```text
 AEGIS_VISION_PUBLIC_ENABLED=1
-VISION_BACKEND_URL=http://121.89.90.68:5050
+VISION_BACKEND_URL=http://YOUR_HOST:5050
 VISION_BACKEND_API_KEY=读取 /opt/aegis/vision.env 里的 AEGIS_VISION_BACKEND_API_KEY
 VISION_BACKEND_TIMEOUT_SECONDS=360
 ```
@@ -272,7 +272,7 @@ VISION_BACKEND_TIMEOUT_SECONDS=360
 
 ## 9. 下一阶段
 
-1. DNS 增加 A 记录：`render.yishuziyu.cn -> 121.89.90.68`
+1. DNS 增加 A 记录：`render.yishuziyu.cn -> YOUR_HOST`
 2. 用 Caddy 或 Nginx 做 HTTPS 反向代理到 `127.0.0.1:5000`
 3. Vercel 设置：
    - `RENDER_BACKEND_URL=https://render.yishuziyu.cn`

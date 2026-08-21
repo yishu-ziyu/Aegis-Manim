@@ -3,7 +3,10 @@ set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUTPUT="${OUTPUT:-/tmp/aegis-vision-server-update.tgz}"
-REMOTE_HOST="${REMOTE_HOST:-root@121.89.90.68}"
+if [[ -z "${REMOTE_HOST:-}" ]]; then
+  echo "REMOTE_HOST is required (example: export REMOTE_HOST=root@YOUR_HOST)" >&2
+  exit 1
+fi
 REMOTE_ARCHIVE="${REMOTE_ARCHIVE:-/opt/aegis/aegis-vision-server-update.tgz}"
 REMOTE_PROJECT_DIR="${REMOTE_PROJECT_DIR:-/opt/aegis/Aegis-Manim}"
 REMOTE_DOCTOR_LOG="${REMOTE_DOCTOR_LOG:-/opt/aegis/vision-doctor.log}"

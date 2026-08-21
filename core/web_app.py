@@ -40,14 +40,18 @@ from manim_agent import (
     extract_python_only,
     generate_code_with_llm,
     is_placeholder_api_key,
+    load_dotenv,
     load_system_prompt,
 )
+
 from vision_analysis import (
     MAX_VISION_REQUEST_BYTES,
     analyze_image_payload,
     disabled_vision_response,
     is_vision_public_enabled,
 )
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 SYSTEM_PROMPT = load_system_prompt()
 GENERATED_DIR = PROJECT_ROOT / "generated"
@@ -83,6 +87,8 @@ LOCAL_TRIAL_PLANS = {
 
 def build_local_trial_config() -> dict[str, object]:
     """Build trial provider entries for local web app when env keys are present."""
+    if os.getenv("AEGIS_ALLOW_TRIAL", "").strip() != "1":
+        return {}
     available: dict[str, object] = {}
     for provider_id, plan in LOCAL_TRIAL_PLANS.items():
         has_any_key = any(
@@ -111,6 +117,10 @@ def build_local_trial_config() -> dict[str, object]:
 
 def ensure_generated_dir() -> None:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def aegis_generate_token() -> str:
+    return os.getenv("AEGIS_GENERATE_TOKEN", "").strip()
 
 
 def ensure_runtime_log_dir() -> None:
@@ -2094,6 +2104,7 @@ def make_index_html() -> str:
   <script>
     const PROVIDER_CONFIG = {provider_config_json};
     const PROVIDERS = PROVIDER_CONFIG.providers || {{}};
+    const AEGIS_GENERATE_TOKEN = {json.dumps(aegis_generate_token())};
     const REGION_LABELS = PROVIDER_CONFIG.regionLabels || {{}};
     const form = document.getElementById("generate-form");
     const submitBtn = document.getElementById("submitBtn");
@@ -3221,7 +3232,7 @@ def make_index_html() -> str:
         }}
         const response = await fetch("/api/generate/start", {{
           method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
+          headers: {{ "Content-Type": "application/json", "X-Aegis-Token": AEGIS_GENERATE_TOKEN }},
           body: JSON.stringify(payload)
         }});
         const data = await response.json();
@@ -3517,6 +3528,26 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             raise ValueError("Body must be valid JSON.") from exc
 
+    def _require_aegis_generate_token(self) -> bool:
+        expected = aegis_generate_token()
+        if not expected:
+            self._send_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "error": "Generate API is disabled. Set AEGIS_GENERATE_TOKEN.",
+                },
+            )
+            return False
+        provided = (self.headers.get("X-Aegis-Token") or "").strip()
+        if provided != expected:
+            self._send_json(
+                HTTPStatus.UNAUTHORIZED,
+                {"ok": False, "error": "Missing or invalid X-Aegis-Token header."},
+            )
+            return False
+        return True
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = parsed.path
@@ -3556,6 +3587,8 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/bugs/recent":
+            if not self._require_aegis_generate_token():
+                return
             query = parse_qs(parsed.query)
             limit_raw = query.get("limit", ["20"])[0]
             request_id = query.get("requestId", [""])[0].strip()
@@ -3608,6 +3641,8 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/generate/start":
+            if not self._require_aegis_generate_token():
+                return
             self._handle_generate_start()
             return
 
@@ -3658,6 +3693,9 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if route != "/api/generate":
             self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+            return
+
+        if not self._require_aegis_generate_token():
             return
 
         if AEGIS_CLOUD_GENERATE_URL:

@@ -65,6 +65,8 @@ def clear_backend_state(monkeypatch):
     backend.app.config["_PERSISTENCE_INITIALIZED"] = False
     backend._orphan_reaper_started = False
     monkeypatch.setattr(backend, "_use_supabase", lambda: False)
+    if not (backend.API_KEY or "").strip():
+        monkeypatch.setattr(backend, "API_KEY", "test-render-key")
     yield
     backend._jobs.clear()
     backend.app.config["_PERSISTENCE_INITIALIZED"] = False
