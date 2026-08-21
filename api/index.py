@@ -33,6 +33,7 @@ from manim_agent import (  # noqa: E402
     apply_runtime_compatibility_fixes,
     extract_python_only,
     generate_code_with_llm,
+    is_placeholder_api_key,
     load_dotenv,
     load_system_prompt,
 )
@@ -133,6 +134,7 @@ UNKNOWN_TRIAL_ERROR = "这个试用模型已下线，请改用当前免费试用
 UNKNOWN_PROVIDER_ERROR = "未知的模型服务。请选择免费试用，或使用自带密钥的公开 Provider。"
 LOCAL_ONLY_PROVIDER_ERROR = "这个 Provider 只能在本机使用，不能在 Vercel 云端运行。"
 BYOK_CUSTOM_URL_REQUIRED_ERROR = "自定义 Provider 需要填写可公网访问的 HTTPS Base URL。"
+BYOK_PLACEHOLDER_KEY_ERROR = "请粘贴真实 API Key，不要填环境变量名或示例占位符。"
 BYOK_TRIAL_PREFLIGHT_ERROR = "免费试用无需测试密钥。请改用自带密钥模式。"
 BYOK_PREFLIGHT_TIMEOUT_SECONDS = 20
 BYOK_PREFLIGHT_MAX_TOKENS = 16
@@ -1438,6 +1440,12 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
             "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
             "requestId": request_id,
         }
+    if api_key and is_placeholder_api_key(api_key):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_PLACEHOLDER_KEY_ERROR,
+            "requestId": request_id,
+        }
     if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
@@ -1517,6 +1525,12 @@ def preflight_byok_provider(payload: dict[str, object]) -> tuple[int, dict[str, 
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
             "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
+            "requestId": request_id,
+        }
+    if api_key and is_placeholder_api_key(api_key):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_PLACEHOLDER_KEY_ERROR,
             "requestId": request_id,
         }
     if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):

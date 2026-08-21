@@ -46,6 +46,8 @@ class AegisWebUiTest(unittest.TestCase):
         assert "作品仓库 · 可选复用已有动画" in html
         assert "测试连通" in html
         assert "粘贴完整 API Key，不要填环境变量名" in html
+        assert 'placeholder="粘贴完整 API Key，不要填环境变量名"' in html
+        assert "输入你自己的 API Key" not in html
         assert "模型与接口" in html
         assert "writeVaultEntry" in html
         assert "verifiedAt" in html
