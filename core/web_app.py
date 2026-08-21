@@ -944,14 +944,26 @@ def make_index_html() -> str:
         if "trial-minimax-direct" in local_trial:
             provider_config["defaultProvider"] = "trial-minimax-direct"
     provider_config_json = json.dumps(provider_config, ensure_ascii=False)
+    default_mode = str(provider_config.get("defaultMode") or "trial")
     vision_enabled = is_vision_public_enabled()
     vision_hidden_attr = "" if vision_enabled else " hidden"
     html = f"""<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-default-mode="{default_mode}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Aegis 经济学动画工作台</title>
+  <script>
+    (function () {{
+      try {{
+        var saved = localStorage.getItem("aegis.mode");
+        var fallback = document.documentElement.getAttribute("data-default-mode") || "trial";
+        if ((saved || fallback) === "byok") {{
+          document.documentElement.classList.add("boot-byok");
+        }}
+      }} catch (err) {{}}
+    }})();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet" />
@@ -1188,6 +1200,20 @@ def make_index_html() -> str:
       gap: 14px;
     }}
     .byok-panel.visible {{ display: grid; }}
+    html.boot-byok .mode-btn[data-mode="trial"] {{
+      background: transparent;
+      color: var(--muted-2);
+      box-shadow: none;
+    }}
+    html.boot-byok .mode-btn[data-mode="byok"] {{
+      background: var(--bg-2);
+      color: var(--accent);
+      box-shadow: 0 4px 12px rgba(26, 22, 18, 0.06);
+    }}
+    html.boot-byok .byok-panel {{ display: grid; }}
+    html.boot-byok .trial-hint {{ display: none !important; }}
+    html.boot-byok #keyNotice[hidden] {{ display: inline-flex !important; }}
+    html.boot-byok #vaultToggle[hidden] {{ display: inline-flex !important; }}
     .vault-head {{
       display: flex;
       justify-content: space-between;
@@ -4068,6 +4094,7 @@ def make_index_html() -> str:
     const savedMode = localStorage.getItem(MODE_STORAGE_KEY);
     const initialMode = savedMode || PROVIDER_CONFIG.defaultMode || (hasTrialProviders() ? "trial" : "byok");
     applyMode(initialMode, false);
+    document.documentElement.classList.remove("boot-byok");
     updatePromptPreview();
   </script>
 </body>

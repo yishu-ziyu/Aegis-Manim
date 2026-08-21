@@ -19,6 +19,11 @@ import llm_providers  # noqa: E402
 from manim_agent import is_placeholder_api_key  # noqa: E402
 import web_app  # noqa: E402
 
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+import live_byok_smoke  # noqa: E402
+
 
 def _scene(text: str = "消费者剩余") -> str:
     return (
@@ -140,6 +145,9 @@ class AegisByokTest(unittest.TestCase):
             assert "function secretInPayload" in html
             assert "function hideSecret" in html
             assert 'id="authTag"' in html
+            assert "boot-byok" in html
+            assert 'data-default-mode="' in html
+            assert 'localStorage.getItem("aegis.mode")' in html
             assert "Auth: 自带密钥" in html
             assert "生成接口返回了不该出现的密钥" in html
             assert "对齐接口返回了不该出现的密钥" in html
@@ -450,6 +458,18 @@ class AegisByokTest(unittest.TestCase):
         assert response["ok"] is True
         assert "sk-live-secret-key" not in dumped
         assert "[redacted]" in dumped
+
+    def test_live_byok_smoke_discovers_env_without_returning_secret(self) -> None:
+        empty = {name: "" for name, _provider_id in live_byok_smoke.LIVE_BYOK_CANDIDATES}
+        with patch.dict(os.environ, empty, clear=False):
+            assert live_byok_smoke.discover_live_byok_provider() is None
+            assert live_byok_smoke.run_live_byok_generate() == 2
+        with patch.dict(
+            os.environ,
+            {**empty, "OPENAI_API_KEY": "sk-live-secret-key-123456"},
+            clear=False,
+        ):
+            assert live_byok_smoke.discover_live_byok_provider() == ("openai", "OPENAI_API_KEY")
 
     def test_local_web_exposes_preflight_route(self) -> None:
         source = Path(web_app.__file__).read_text(encoding="utf-8")
