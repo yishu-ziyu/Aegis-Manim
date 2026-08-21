@@ -81,6 +81,8 @@ def test_vercel_rewrites_include_community_proxy_routes() -> None:
     config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
     rewrites = {rewrite["source"]: rewrite["destination"] for rewrite in config["rewrites"]}
 
+    assert rewrites["/api/generate"] == "/api/index"
+    assert rewrites["/api/byok/preflight"] == "/api/index"
     assert rewrites["/api/vision/analyze"] == "/api/index"
     assert rewrites["/api/community/search"] == "/api/index"
     assert rewrites["/api/community/review/queue"] == "/api/index"

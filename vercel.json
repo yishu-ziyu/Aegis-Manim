@@ -17,6 +17,10 @@
       "destination": "/api/index"
     },
     {
+      "source": "/api/byok/preflight",
+      "destination": "/api/index"
+    },
+    {
       "source": "/api/render",
       "destination": "/api/index"
     },

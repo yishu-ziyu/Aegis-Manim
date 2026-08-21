@@ -71,6 +71,8 @@ def main() -> int:
     assert 'data-mode="byok"' in html
     assert "测试连通" in html
     assert 'fetch("/api/byok/preflight"' in html
+    vercel_config = (PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8")
+    assert '"/api/byok/preflight"' in vercel_config
     assert 'id="communityDrawer"' in html
     assert 'fetch("/api/generate"' in html
     assert 'fetch("/api/generate/start"' not in html
