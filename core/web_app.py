@@ -1105,9 +1105,9 @@ def make_index_html() -> str:
     .hero h1 {{
       margin: 0 0 8px;
       font-family: var(--serif);
-      font-size: 1.85rem;
+      font-size: 1.55rem;
       font-weight: 600;
-      line-height: 1.2;
+      line-height: 1.25;
       letter-spacing: 0;
       color: var(--fg-bright);
     }}
@@ -1222,6 +1222,8 @@ def make_index_html() -> str:
       gap: 14px;
     }}
 
+    [hidden] {{ display: none !important; }}
+
     .field {{
       display: grid;
       gap: 4px;
@@ -1256,6 +1258,14 @@ def make_index_html() -> str:
       transition: border-color var(--speed), box-shadow var(--speed), background var(--speed);
       outline: none;
     }}
+    select {{
+      appearance: none;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 16px) calc(50% - 3px), calc(100% - 11px) calc(50% - 3px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+      padding-right: 28px;
+    }}
 
     textarea {{
       min-height: 108px;
@@ -1273,19 +1283,33 @@ def make_index_html() -> str:
       border: 1px dashed var(--border);
       border-radius: var(--radius);
       background: #fffefa;
-      padding: 14px;
+      padding: 16px;
       display: grid;
       gap: 8px;
+      place-items: center;
+      text-align: center;
       color: var(--muted);
     }}
     .vision-drop-zone.drag-over {{
       border-color: var(--accent);
-      background: #EEF2F7;
+      background: rgba(194, 65, 45, 0.06);
     }}
     .vision-drop-zone input {{
-      padding: 0;
-      border: none;
-      background: transparent;
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }}
+    .vision-pick {{
+      border: 1px solid var(--border);
+      background: var(--bg-2);
+      color: var(--fg);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
     }}
     .vision-confirm-card {{
       display: none;
@@ -1619,10 +1643,29 @@ def make_index_html() -> str:
       letter-spacing: 0.5px;
     }}
 
-    .code-section {{
+    .result-empty {{
       display: grid;
+      gap: 8px;
+      padding: 28px 18px;
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      background: #fffaf1;
+      text-align: center;
+      color: var(--muted);
+    }}
+    .result-empty strong {{
+      color: var(--fg-bright);
+      font-family: var(--serif);
+      font-size: 1.05rem;
+    }}
+    body.has-result .result-empty {{ display: none; }}
+
+    .code-section {{
+      display: none;
       gap: 10px;
     }}
+    body.has-result.show-code .code-section,
+    body:not(.learning-mode).has-result .code-section {{ display: grid; }}
     body.learning-mode .code-section {{ display: none; }}
     body.learning-mode.show-code .code-section {{ display: grid; }}
 
@@ -2063,6 +2106,7 @@ def make_index_html() -> str:
           <label for="visionImageInput">上传图片让 AI 先理解</label>
           <div id="visionDropZone" class="vision-drop-zone">
             <input id="visionImageInput" name="visionImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+            <button id="visionPickBtn" class="vision-pick" type="button">选择或拖入图片</button>
             <div class="help">支持上传、截图粘贴、拖拽；手机浏览器可选择拍照或相册。图片会先转成中文理解卡片，确认后再生成动画。</div>
           </div>
           <div id="visionConfirmCard" class="vision-confirm-card">
@@ -2108,17 +2152,18 @@ def make_index_html() -> str:
             </div>
             <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
           </div>
-          <div class="row">
-            <div class="field">
-              <label for="model">模型</label>
-              <input id="model" name="model" value="{DEFAULT_MODEL}" />
-            </div>
+          <div class="field">
+            <label for="model">模型</label>
+            <input id="model" name="model" value="{DEFAULT_MODEL}" />
+          </div>
+          <details id="endpointDetails" class="advanced-box">
+            <summary>接口地址</summary>
             <div id="baseUrlField" class="field">
               <label for="baseUrl">Base URL</label>
               <input id="baseUrl" name="baseUrl" value="{DEFAULT_ZHIPU_ENDPOINT}" />
               <div class="help">填根地址即可；如果粘贴 /chat/completions 或 /messages，后端会自动规范化。</div>
             </div>
-          </div>
+          </details>
           <div class="vault-actions">
             <button id="saveKeyBtn" class="tiny-btn" type="button">保存到本机</button>
             <button id="forgetKeyBtn" class="ghost-btn" type="button">清除此 Key</button>
@@ -2188,6 +2233,11 @@ def make_index_html() -> str:
         </div>
 
         <div id="warningBox" class="warning-box"></div>
+
+        <div id="resultEmpty" class="result-empty">
+          <strong>左边写下问题，右边出现动画</strong>
+          <div>免费试用可直接生成；自带密钥会只存在这台浏览器，生成时才发给对应模型服务。</div>
+        </div>
 
         <section class="code-section">
           <div class="code-header">
@@ -2337,6 +2387,8 @@ def make_index_html() -> str:
     const vaultStatus = document.getElementById("vaultStatus");
     const saveKeyBtn = document.getElementById("saveKeyBtn");
     const forgetKeyBtn = document.getElementById("forgetKeyBtn");
+    const endpointDetails = document.getElementById("endpointDetails");
+    const visionPickBtn = document.getElementById("visionPickBtn");
     const VAULT_STORAGE_KEY = "aegis.byok.vault.v1";
     const MODE_STORAGE_KEY = "aegis.mode";
     let currentMode = "trial";
@@ -2533,6 +2585,10 @@ def make_index_html() -> str:
           toggleKey.textContent = "显示";
         }}
       }}
+      if (endpointDetails) {{
+        const providerId = providerSelect.value || "";
+        endpointDetails.open = providerId.startsWith("custom-") || !baseUrlInput.value.trim();
+      }}
       updateVaultStatus();
     }}
 
@@ -2586,6 +2642,14 @@ def make_index_html() -> str:
     function setStatus(message, type = "") {{
       statusBox.className = "status-box" + (type ? " " + type : "");
       statusBox.textContent = message;
+    }}
+
+    function markHasResult(hasResult) {{
+      document.body.classList.toggle("has-result", Boolean(hasResult));
+    }}
+
+    function currentByokKey() {{
+      return apiKeyInput.value.trim() || savedVaultKey(providerSelect.value);
     }}
 
     function textHasRichSyntax(text) {{
@@ -2920,6 +2984,7 @@ def make_index_html() -> str:
       latestSceneName = item.sceneName || item.scene_name || payload.sceneName || "GeneratedScene";
       latestVideoUrl = item.videoUrl || item.video_url || "";
       latestRenderJobId = item.renderJobId || item.render_job_id || "";
+      markHasResult(true);
       codeOutput.textContent = latestCode || "# 社区作品没有返回代码";
       sceneTag.textContent = "Scene: " + latestSceneName + " · 社区复用";
       fileTag.textContent = "File: community-work";
@@ -3234,6 +3299,7 @@ def make_index_html() -> str:
     }}
 
     function applyGenerateResult(data, payload, requestId) {{
+      markHasResult(true);
       codeOutput.textContent = data.code || "# 未返回代码";
       latestCode = data.code || "";
       latestSceneName = data.sceneName || payload.sceneName || "GeneratedScene";
@@ -3436,6 +3502,9 @@ def make_index_html() -> str:
       const file = visionImageInput.files && visionImageInput.files[0];
       if (file) analyzeVisionFile(file);
     }});
+    if (visionPickBtn) {{
+      visionPickBtn.addEventListener("click", () => visionImageInput.click());
+    }}
 
     visionUseBtn.addEventListener("click", () => {{
       if (!visionSuggestedPrompt) {{
@@ -3489,8 +3558,13 @@ def make_index_html() -> str:
         setStatus("这个 Provider 需要下载项目后在本地运行；Vercel 云端无法访问你的本机 Codex 或 127.0.0.1 服务。", "error");
         return;
       }}
+      if (!preset.serverManaged && preset.requiresApiKey && !currentByokKey()) {{
+        applyMode("byok");
+        setStatus("先在密钥库填写 API Key，或改回免费试用。", "error");
+        return;
+      }}
       submitBtn.disabled = true;
-      document.body.classList.remove("learning-mode", "show-code");
+      document.body.classList.remove("learning-mode", "show-code", "has-result");
       toggleCodeBtn.textContent = "查看代码";
       setStatus("请求已发送，正在生成代码...", "");
       startProcess();
