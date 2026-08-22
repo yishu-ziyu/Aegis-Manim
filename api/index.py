@@ -22,13 +22,19 @@ if str(CORE_PATH) not in sys.path:
 from llm_providers import (  # noqa: E402
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
+    PROVIDER_PRESETS,
+    generate_code_with_provider,
+    is_local_only_provider,
     provider_presets_for_ui,
+    redact_client_secrets,
     resolve_provider,
 )
+from alignment import generate_alignment  # noqa: E402
 from manim_agent import (  # noqa: E402
     apply_runtime_compatibility_fixes,
     extract_python_only,
     generate_code_with_llm,
+    is_placeholder_api_key,
     load_dotenv,
     load_system_prompt,
 )
@@ -125,6 +131,14 @@ PUBLIC_TRIAL_PLANS = {
 CLOUD_ENDPOINT_ERROR = (
     "Vercel 云端只支持公网 HTTPS 模型端点；本机、内网和 http:// 地址请在本地 Aegis Web 使用。"
 )
+UNKNOWN_TRIAL_ERROR = "这个试用模型已下线，请改用当前免费试用或自带密钥。"
+UNKNOWN_PROVIDER_ERROR = "未知的模型服务。请选择免费试用，或使用自带密钥的公开 Provider。"
+LOCAL_ONLY_PROVIDER_ERROR = "这个 Provider 只能在本机使用，不能在 Vercel 云端运行。"
+BYOK_CUSTOM_URL_REQUIRED_ERROR = "自定义 Provider 需要填写可公网访问的 HTTPS Base URL。"
+BYOK_PLACEHOLDER_KEY_ERROR = "请粘贴真实 API Key，不要填环境变量名或示例占位符。"
+BYOK_TRIAL_PREFLIGHT_ERROR = "免费试用无需测试密钥。请改用自带密钥模式。"
+BYOK_PREFLIGHT_TIMEOUT_SECONDS = 20
+BYOK_PREFLIGHT_MAX_TOKENS = 16
 
 # Render backend configuration
 RENDER_BACKEND_URL = os.environ.get("RENDER_BACKEND_URL", "").rstrip("/")
@@ -326,8 +340,31 @@ def build_generate_unavailable_payload() -> dict[str, object]:
     }
 
 
+def public_byok_providers() -> dict[str, dict[str, object]]:
+    source = provider_presets_for_ui()
+    providers: dict[str, dict[str, object]] = {}
+    for provider_id, preset in source["providers"].items():
+        if is_local_only_provider(provider_id):
+            continue
+        providers[provider_id] = {
+            **preset,
+            "byok": True,
+            "serverManaged": False,
+            "hideApiKey": False,
+            "hideBaseUrl": False,
+            "lockModel": False,
+            "localOnly": False,
+            "displayProtocol": "自带密钥",
+            "description": (
+                f"{preset['name']} · 使用你自己的 Key，只存在这台浏览器，"
+                "生成时才发给对应模型服务。"
+            ),
+        }
+    return providers
+
+
 def public_provider_config() -> dict[str, object]:
-    providers = {
+    trial_providers = {
         provider_id: {
             "id": provider_id,
             "name": plan["name"],
@@ -340,6 +377,7 @@ def public_provider_config() -> dict[str, object]:
             "hideApiKey": True,
             "hideBaseUrl": True,
             "lockModel": True,
+            "byok": False,
             "displayProtocol": "免费试用",
             "description": plan["description"],
         }
@@ -347,9 +385,18 @@ def public_provider_config() -> dict[str, object]:
     }
     return {
         "defaultProvider": PUBLIC_TRIAL_DEFAULT_PROVIDER,
-        "regionLabels": {"trial": "内测免费试用"},
-        "providerStorageKey": "aegis.provider.public.v4",
-        "providers": providers,
+        "defaultMode": "trial",
+        "cloudMode": True,
+        "directGenerate": True,
+        "regionLabels": {
+            "trial": "内测免费试用",
+            "global": "海外 / 原生厂商",
+            "cn": "国内直连",
+            "coding": "Token Plan / Coding Plan",
+            "custom": "自定义",
+        },
+        "providerStorageKey": "aegis.provider.public.v5",
+        "providers": {**trial_providers, **public_byok_providers()},
     }
 
 
@@ -1060,6 +1107,19 @@ def is_private_or_local_host(host: str) -> bool:
     )
 
 
+def resolve_public_byok_provider(provider_id: str) -> tuple[object | None, str | None]:
+    cleaned = (provider_id or "").strip()
+    if not cleaned:
+        return None, "请选择模型服务。"
+    if cleaned in PUBLIC_TRIAL_PLANS or cleaned.startswith("trial-"):
+        return None, BYOK_TRIAL_PREFLIGHT_ERROR
+    if is_local_only_provider(cleaned) or cleaned in DISABLED_CLOUD_PROVIDERS:
+        return None, LOCAL_ONLY_PROVIDER_ERROR
+    if cleaned not in PROVIDER_PRESETS:
+        return None, UNKNOWN_PROVIDER_ERROR
+    return resolve_provider(cleaned), None
+
+
 def validate_cloud_model_endpoint(raw_url: str, *, field_name: str) -> str | None:
     cleaned = raw_url.strip()
     if not cleaned:
@@ -1140,7 +1200,7 @@ def generate_code_with_trial_plan(
     if not plan:
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
-            "error": "公开内测页只支持内置免费试用模型。",
+            "error": UNKNOWN_TRIAL_ERROR,
             "requestId": request_id,
         }
     generation_prompt = trial_generation_prompt(prompt)
@@ -1331,12 +1391,26 @@ def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, di
             temperature=temperature,
             request_id=request_id,
         )
+    if provider_id.startswith("trial-"):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": UNKNOWN_TRIAL_ERROR,
+            "requestId": request_id,
+        }
+    if is_local_only_provider(provider_id) or provider_id in DISABLED_CLOUD_PROVIDERS:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": LOCAL_ONLY_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
+    if provider_id not in PROVIDER_PRESETS:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": UNKNOWN_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
 
-    return HTTPStatus.BAD_REQUEST, {
-        "ok": False,
-        "error": "公开内测页只支持内置免费试用模型。",
-        "requestId": request_id,
-    }
+    return generate_manim_code_with_client_provider(payload)
 
 
 def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
@@ -1354,11 +1428,31 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
         }
 
     provider = resolve_provider(provider_id)
+    scene_name = local_web_app.safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
     api_key = str(payload.get("apiKey", "")).strip()
     model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
     base_url = str(payload.get("baseUrl", "")).strip()
     endpoint = str(payload.get("endpoint", "")).strip()
     temperature = clamp_temperature(payload.get("temperature", 0.2))
+
+    if provider.requires_api_key and not api_key:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
+            "requestId": request_id,
+        }
+    if api_key and is_placeholder_api_key(api_key):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_PLACEHOLDER_KEY_ERROR,
+            "requestId": request_id,
+        }
+    if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_CUSTOM_URL_REQUIRED_ERROR,
+            "requestId": request_id,
+        }
 
     for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
         endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
@@ -1366,16 +1460,16 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
             return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error, "requestId": request_id}
 
     try:
-        raw_code, used_provider, used_endpoint = generate_code_with_llm(
+        raw_code, _used_provider, used_endpoint = generate_code_with_llm(
             provider_id=provider.id,
             api_key=api_key,
             base_url=base_url,
             endpoint=endpoint,
             model=model,
             system_prompt=SYSTEM_PROMPT,
-            user_prompt=prompt,
+            user_prompt=trial_generation_prompt(prompt),
             temperature=temperature,
-            timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
+            timeout=trial_timeout_seconds(provider.id),
         )
         cleaned_code = extract_python_only(raw_code)
         patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
@@ -1383,20 +1477,24 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
     except ValueError as exc:
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
-            "error": str(exc),
+            "error": redact_client_secrets(str(exc), api_key),
             "requestId": request_id,
         }
     except Exception as exc:
+        category = sanitize_upstream_error(exc)
+        reason = describe_trial_failure(category)
+        if reason == "request":
+            reason = "请检查 Key、额度与 Base URL"
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": "Model request failed.",
+            "error": f"模型请求失败：{reason}。",
             "requestId": request_id,
         }
 
     return HTTPStatus.OK, {
         "ok": True,
-        "provider": used_provider.id,
-        "providerName": used_provider.name,
+        "provider": provider.id,
+        "providerName": provider.name,
         "model": model,
         "endpoint": used_endpoint,
         "code": patched_code,
@@ -1408,7 +1506,238 @@ def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tupl
         "requestId": request_id,
         "rendered": False,
         "renderBackend": "external-required",
-        "message": "Vercel 已生成 Manim 代码；视频渲染需要后端服务承载。",
+        "authMode": "byok",
+        "message": "已使用你的密钥生成 Manim 代码；密钥未写入服务器。",
+    }
+
+
+def preflight_byok_provider(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    request_id = build_request_id()
+    provider, provider_error = resolve_public_byok_provider(str(payload.get("provider", "")).strip())
+    if provider_error or provider is None:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": provider_error or UNKNOWN_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
+
+    api_key = str(payload.get("apiKey", "")).strip()
+    model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
+    base_url = str(payload.get("baseUrl", "")).strip()
+    endpoint = str(payload.get("endpoint", "")).strip()
+
+    if provider.requires_api_key and not api_key:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
+            "requestId": request_id,
+        }
+    if api_key and is_placeholder_api_key(api_key):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_PLACEHOLDER_KEY_ERROR,
+            "requestId": request_id,
+        }
+    if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": BYOK_CUSTOM_URL_REQUIRED_ERROR,
+            "requestId": request_id,
+        }
+
+    for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
+        endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
+        if endpoint_error:
+            return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error, "requestId": request_id}
+
+    started = time.monotonic()
+    try:
+        _probe, _used_provider, used_endpoint = generate_code_with_provider(
+            provider_id=provider.id,
+            api_key=api_key,
+            base_url=base_url,
+            endpoint=endpoint,
+            model=model,
+            system_prompt="You are a connectivity probe. Reply with the single word ok.",
+            user_prompt="ok",
+            temperature=0,
+            timeout=BYOK_PREFLIGHT_TIMEOUT_SECONDS,
+            max_tokens=BYOK_PREFLIGHT_MAX_TOKENS,
+        )
+    except ValueError as exc:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": redact_client_secrets(str(exc), api_key),
+            "requestId": request_id,
+        }
+    except Exception as exc:
+        category = sanitize_upstream_error(exc)
+        reason = describe_trial_failure(category)
+        if reason == "request":
+            reason = "请检查 Key、额度与 Base URL"
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": f"连通失败：{reason}。",
+            "requestId": request_id,
+        }
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    return HTTPStatus.OK, {
+        "ok": True,
+        "authMode": "byok",
+        "provider": provider.id,
+        "providerName": provider.name,
+        "model": model,
+        "endpoint": used_endpoint,
+        "latencyMs": latency_ms,
+        "requestId": request_id,
+        "message": "密钥可用，已连通模型服务。密钥未写入服务器。",
+    }
+
+
+def _alignment_model_call(
+    *,
+    provider_id: str,
+    api_key: str,
+    base_url: str | None,
+    endpoint: str | None,
+    model: str,
+    temperature: float,
+    timeout: int,
+):
+    def call(system_prompt: str, user_prompt: str) -> str:
+        raw_text, _provider_name, _endpoint = generate_code_with_llm(
+            provider_id=provider_id,
+            api_key=api_key,
+            base_url=base_url,
+            endpoint=endpoint,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=min(0.4, temperature),
+            timeout=timeout,
+        )
+        return raw_text
+
+    return call
+
+
+def align_script_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    request_id = build_request_id()
+    prompt = str(payload.get("prompt", "")).strip()
+    code = str(payload.get("code", "")).strip()
+    scene_name = local_web_app.safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
+    video_duration = local_web_app.optional_positive_float(payload.get("videoDuration"))
+    provider_id = str(payload.get("provider", PUBLIC_TRIAL_DEFAULT_PROVIDER)).strip() or PUBLIC_TRIAL_DEFAULT_PROVIDER
+    temperature = clamp_temperature(payload.get("temperature", 0.2))
+    client_key = str(payload.get("apiKey", "")).strip()
+
+    if len(prompt) < 6 or not code:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": "对齐需要问题和已生成的代码。",
+            "requestId": request_id,
+        }
+
+    secrets: list[str] = [client_key] if client_key else []
+    llm_call = None
+    auth_mode = "trial"
+    used_provider_id = provider_id
+    used_provider_name = provider_id
+
+    if provider_id in PUBLIC_TRIAL_PLANS:
+        plan = PUBLIC_TRIAL_PLANS[provider_id]
+        used_provider_name = str(plan["name"])
+        for attempt in plan["attempts"]:
+            server_key = read_server_key(str(attempt["env"]))
+            if not server_key:
+                continue
+            secrets.append(server_key)
+            provider = resolve_provider(str(attempt["provider_id"]))
+            llm_call = _alignment_model_call(
+                provider_id=provider.id,
+                api_key=server_key,
+                base_url=str(attempt.get("base_url", "")).strip() or None,
+                endpoint=None,
+                model=str(attempt["model"]) or provider.default_model or DEFAULT_MODEL,
+                temperature=temperature,
+                timeout=trial_timeout_seconds(provider.id, repair=True),
+            )
+            break
+    elif provider_id.startswith("trial-"):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": UNKNOWN_TRIAL_ERROR,
+            "requestId": request_id,
+        }
+    elif is_local_only_provider(provider_id) or provider_id in DISABLED_CLOUD_PROVIDERS:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": LOCAL_ONLY_PROVIDER_ERROR,
+            "requestId": request_id,
+        }
+    else:
+        provider, provider_error = resolve_public_byok_provider(provider_id)
+        if provider_error or provider is None:
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": provider_error or UNKNOWN_PROVIDER_ERROR,
+                "requestId": request_id,
+            }
+        api_key = client_key
+        model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
+        base_url = str(payload.get("baseUrl", "")).strip()
+        endpoint = str(payload.get("endpoint", "")).strip()
+        if provider.requires_api_key and not api_key:
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": f"请填写你的 {provider.name} API Key。密钥只用于本次请求，不会写入服务器。",
+                "requestId": request_id,
+            }
+        if api_key and is_placeholder_api_key(api_key):
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": BYOK_PLACEHOLDER_KEY_ERROR,
+                "requestId": request_id,
+            }
+        if provider.id in {"custom-openai", "custom-anthropic"} and not (base_url or endpoint):
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "error": BYOK_CUSTOM_URL_REQUIRED_ERROR,
+                "requestId": request_id,
+            }
+        for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
+            endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
+            if endpoint_error:
+                return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error, "requestId": request_id}
+        llm_call = _alignment_model_call(
+            provider_id=provider.id,
+            api_key=api_key,
+            base_url=base_url or None,
+            endpoint=endpoint or None,
+            model=model,
+            temperature=temperature,
+            timeout=trial_timeout_seconds(provider.id),
+        )
+        auth_mode = "byok"
+        used_provider_id = provider.id
+        used_provider_name = provider.name
+
+    alignment = generate_alignment(
+        prompt=prompt,
+        code=code,
+        scene_name=scene_name,
+        video_duration=video_duration,
+        llm_call=llm_call,
+    )
+    alignment = local_web_app.redact_json_secrets(alignment, *secrets)
+    return HTTPStatus.OK, {
+        "ok": True,
+        "requestId": request_id,
+        "provider": used_provider_id,
+        "providerName": used_provider_name,
+        "authMode": auth_mode,
+        "alignment": alignment,
     }
 
 
@@ -1424,7 +1753,10 @@ def build_index_html() -> str:
             "内测免费试用：Aegis 后端托管模型额度，页面不接收你的模型 Key。"
         ),
         "支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。": (
-            "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型。"
+            "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型，也可切换到自带密钥。"
+        ),
+        "免费试用走内置额度；自带密钥可接入智谱、OpenAI、DeepSeek、Kimi、MiniMax。": (
+            "当前提供 MiniMax M3 与 Mimo 编程两种内测试用模型，也可切换到自带密钥。"
         ),
         "Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。": (
             "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。"
@@ -1599,6 +1931,24 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
             status, response = generate_manim_code_for_gateway(payload)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/byok/preflight":
+            try:
+                payload = self._read_json_body()
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = preflight_byok_provider(payload)
+            self._send_json(HTTPStatus(status), response)
+            return
+        if route == "/api/align":
+            try:
+                payload = self._read_json_body()
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            status, response = align_script_for_gateway(payload)
             self._send_json(HTTPStatus(status), response)
             return
         if route == "/api/vision/analyze":

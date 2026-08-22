@@ -23,6 +23,43 @@ class AegisWebUiTest(unittest.TestCase):
         assert "renderRichText(script, segment.script" in html
         assert "script.textContent = segment.script" not in html
         assert "PROVIDER_CONFIG.providerStorageKey" in html
+        assert "aegis.byok.vault.v1" in html
+        assert 'id="byokPanel"' in html
+        assert 'id="modeByokBtn"' in html
+        assert "saveCurrentKey" in html
+        assert "密钥只存在这台浏览器" in html
+        assert "[hidden] { display: none !important; }" in html
+        assert 'id="resultEmpty"' in html
+        assert "currentByokKey" in html
+        assert "先在密钥库填写 API Key" in html
+        assert "选择或拖入图片" in html
+        assert 'id="endpointDetails"' in html
+        assert 'id="vaultList"' in html
+        assert "renderVaultList" in html
+        assert "forgetAllKeys" in html
+        assert "keyLooksUsable" in html
+        assert "清空密钥库" in html
+        assert "这个 Key 看起来不像可用密钥" in html
+        assert 'id="preflightBtn"' in html
+        assert "function preflightCurrentKey" in html
+        assert 'id="communityDrawer"' in html
+        assert "作品仓库 · 可选复用已有动画" in html
+        assert "测试连通" in html
+        assert "粘贴完整 API Key，不要填环境变量名" in html
+        assert 'placeholder="粘贴完整 API Key，不要填环境变量名"' in html
+        assert "输入你自己的 API Key" not in html
+        assert "模型与接口" in html
+        assert "writeVaultEntry" in html
+        assert "verifiedAt" in html
+        assert "function customEndpointReady" in html
+        assert "currentMode !== \"byok\"" in html
+        assert "用自带密钥生成" in html
+        assert 'id="generate-form" class="form-wrap" novalidate' in html
+        assert "先写下一道要讲清楚的问题" in html
+        assert 'id="keyNotice"' in html
+        assert "keyNotice.hidden" in html
+        assert "function secretInPayload" in html
+        assert 'id="authTag"' in html
 
     def test_page_contains_image_understanding_confirmation_flow(self) -> None:
         old_enabled = os.environ.get("AEGIS_VISION_PUBLIC_ENABLED")
@@ -136,6 +173,150 @@ class AegisWebUiTest(unittest.TestCase):
         assert "must-not-forward" not in forwarded
         assert "baseUrl" not in forwarded
         assert "apiKey" not in forwarded
+
+    def test_cloud_generate_proxy_forwards_byok_key_for_user_providers(self) -> None:
+        old_url = web_app.AEGIS_CLOUD_GENERATE_URL
+        web_app.AEGIS_CLOUD_GENERATE_URL = "https://cloud.example/api/generate"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"ok":true,"authMode":"byok"}'
+
+        def fake_urlopen(req, timeout=180):
+            captured["body"] = req.data.decode("utf-8")
+            return FakeResponse()
+
+        original_urlopen = web_app.urllib_request.urlopen
+        web_app.urllib_request.urlopen = fake_urlopen
+        try:
+            status, response = web_app.proxy_cloud_generate(
+                {
+                    "prompt": "解释帕累托最优",
+                    "provider": "openai",
+                    "sceneName": "GeneratedScene",
+                    "temperature": 0.2,
+                    "apiKey": "sk-user-owned",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "gpt-4o-mini",
+                }
+            )
+        finally:
+            web_app.urllib_request.urlopen = original_urlopen
+            web_app.AEGIS_CLOUD_GENERATE_URL = old_url
+
+        assert status == 200
+        assert response["ok"] is True
+        forwarded = captured["body"]
+        assert "sk-user-owned" in forwarded
+        assert "https://api.openai.com/v1" in forwarded
+        assert "gpt-4o-mini" in forwarded
+
+    def test_cloud_preflight_proxy_forwards_byok_key_and_builds_url(self) -> None:
+        old_url = web_app.AEGIS_CLOUD_GENERATE_URL
+        web_app.AEGIS_CLOUD_GENERATE_URL = "https://cloud.example/api/generate"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"ok":true,"authMode":"byok","message":"ok"}'
+
+        def fake_urlopen(req, timeout=45):
+            captured["url"] = req.full_url
+            captured["body"] = req.data.decode("utf-8")
+            return FakeResponse()
+
+        original_urlopen = web_app.urllib_request.urlopen
+        web_app.urllib_request.urlopen = fake_urlopen
+        try:
+            assert web_app.cloud_preflight_url() == "https://cloud.example/api/byok/preflight"
+            status, response = web_app.proxy_cloud_preflight(
+                {
+                    "provider": "openai",
+                    "apiKey": "sk-user-owned",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "gpt-4o-mini",
+                }
+            )
+        finally:
+            web_app.urllib_request.urlopen = original_urlopen
+            web_app.AEGIS_CLOUD_GENERATE_URL = old_url
+
+        assert status == 200
+        assert response["ok"] is True
+        assert captured["url"] == "https://cloud.example/api/byok/preflight"
+        assert "sk-user-owned" in str(captured["body"])
+
+    def test_cloud_align_proxy_forwards_byok_key_and_builds_url(self) -> None:
+        old_url = web_app.AEGIS_CLOUD_GENERATE_URL
+        web_app.AEGIS_CLOUD_GENERATE_URL = "https://cloud.example/api/generate"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"ok":true,"authMode":"byok","alignment":{"confidence":"low"}}'
+
+        def fake_urlopen(req, timeout=90):
+            captured.setdefault("urls", []).append(req.full_url)
+            captured.setdefault("bodies", []).append(req.data.decode("utf-8"))
+            return FakeResponse()
+
+        original_urlopen = web_app.urllib_request.urlopen
+        web_app.urllib_request.urlopen = fake_urlopen
+        try:
+            assert web_app.cloud_align_url() == "https://cloud.example/api/align"
+            status, response = web_app.proxy_cloud_align(
+                {
+                    "prompt": "解释帕累托最优",
+                    "code": "from manim import *",
+                    "provider": "openai",
+                    "apiKey": "sk-user-owned",
+                    "baseUrl": "https://api.openai.com/v1",
+                }
+            )
+            trial_status, _trial_body = web_app.proxy_cloud_align(
+                {
+                    "prompt": "解释帕累托最优",
+                    "code": "from manim import *",
+                    "provider": "trial-minimax-direct",
+                    "apiKey": "must-not-forward",
+                }
+            )
+        finally:
+            web_app.urllib_request.urlopen = original_urlopen
+            web_app.AEGIS_CLOUD_GENERATE_URL = old_url
+
+        assert status == 200
+        assert response["ok"] is True
+        assert captured["urls"][0] == "https://cloud.example/api/align"
+        assert "sk-user-owned" in captured["bodies"][0]
+        assert trial_status == 200
+        assert "must-not-forward" not in captured["bodies"][1]
+        assert "apiKey" not in captured["bodies"][1]
 
     def test_local_web_server_exposes_render_proxy_routes(self) -> None:
         assert "if route == \"/api/render\":" in Path(web_app.__file__).read_text(encoding="utf-8")

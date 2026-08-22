@@ -23,7 +23,7 @@ from urllib import request as urllib_request
 from uuid import uuid4
 
 from alignment import generate_alignment
-from llm_providers import DEFAULT_PROVIDER, provider_presets_for_ui, resolve_provider
+from llm_providers import DEFAULT_PROVIDER, provider_presets_for_ui, redact_client_secrets, resolve_provider
 from manim_knowledge import (
     build_repair_feedback,
     classify_render_error,
@@ -460,6 +460,10 @@ def probe_video_duration(path: Path) -> float | None:
     return optional_positive_float((result.stdout or "").strip())
 
 
+def redact_json_secrets(value: object, *secrets: object) -> object:
+    return json.loads(redact_client_secrets(json.dumps(value, ensure_ascii=False), *secrets))
+
+
 def json_error(
     message: str,
     status: int = 400,
@@ -696,7 +700,7 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={active_model} chars={len(code)}",
             )
         except Exception as exc:
-            detail = str(exc)
+            detail = redact_client_secrets(str(exc), api_key)
             append_runtime_log(
                 "MODEL_REQUEST_FAIL",
                 f"request_id={job_id} attempt={attempt}/{max_attempts} provider={provider.id} model={active_model} endpoint={resolved_endpoint} error={detail}",
@@ -779,6 +783,8 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
         }
         if notes:
             response["warnings"] = notes
+        if not trial_plan:
+            response["authMode"] = "byok"
         if precheck_issues:
             response["precheckIssues"] = [
                 {
@@ -793,7 +799,11 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
             ]
 
         if no_render:
-            response["message"] = "Code generated successfully. Render skipped."
+            response["message"] = (
+                "已使用你的密钥生成 Manim 代码；这次跳过了视频渲染。"
+                if not trial_plan
+                else "Code generated successfully. Render skipped."
+            )
             append_runtime_log("GENERATE_SKIP_RENDER", f"request_id={job_id} file={scene_file.name} scene={detected_scene_name}")
             emit_job_event(
                 job_id,
@@ -944,17 +954,29 @@ def make_index_html() -> str:
         if "trial-minimax-direct" in local_trial:
             provider_config["defaultProvider"] = "trial-minimax-direct"
     provider_config_json = json.dumps(provider_config, ensure_ascii=False)
+    default_mode = str(provider_config.get("defaultMode") or "trial")
     vision_enabled = is_vision_public_enabled()
     vision_hidden_attr = "" if vision_enabled else " hidden"
     html = f"""<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-default-mode="{default_mode}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Aegis 可视化工作台</title>
+  <title>Aegis 经济学动画工作台</title>
+  <script>
+    (function () {{
+      try {{
+        var saved = localStorage.getItem("aegis.mode");
+        var fallback = document.documentElement.getAttribute("data-default-mode") || "trial";
+        if ((saved || fallback) === "byok") {{
+          document.documentElement.classList.add("boot-byok");
+        }}
+      }} catch (err) {{}}
+    }})();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet" />
   <script>
     window.MathJax = {{
       startup: {{ typeset: false }},
@@ -965,64 +987,123 @@ def make_index_html() -> str:
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <style>
     :root {{
-      --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", Georgia, serif;
-      --sans: var(--serif);
-      --mono: "JetBrains Mono", "SF Mono", Consolas, "Noto Serif SC", monospace;
-      --bg: #f5f4ed;
-      --bg-2: #faf9f5;
-      --bg-3: #e8e6dc;
-      --fg: #141413;
-      --fg-bright: #141413;
-      --muted: #6b6a64;
-      --muted-2: #504e49;
-      --accent: #1B365D;
-      --accent-2: #2D5A8A;
-      --accent-3: #3d3d3a;
-      --danger: #8a4f3d;
-      --ok: #3f6b50;
-      --code-bg: #141413;
-      --border: #e8e6dc;
-      --border-light: #d6d2c4;
-      --pixel: #1B365D;
-      --radius: 8px;
-      --speed: 200ms;
+      --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+      --sans: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", sans-serif;
+      --mono: "IBM Plex Mono", "JetBrains Mono", "SF Mono", Consolas, monospace;
+      --bg: #f3eee4;
+      --bg-2: #fffdf8;
+      --bg-3: #ebe3d4;
+      --fg: #1a1612;
+      --fg-bright: #14110e;
+      --muted: #6e675c;
+      --muted-2: #534d44;
+      --accent: #c2412d;
+      --accent-2: #9a3222;
+      --accent-3: #2c5347;
+      --danger: #a33b2c;
+      --ok: #2c5347;
+      --gold: #c4a46a;
+      --code-bg: #161310;
+      --border: #e3d8c4;
+      --border-light: #d7ccb6;
+      --pixel: #c2412d;
+      --radius: 14px;
+      --speed: 180ms;
     }}
 
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
     body {{
-      background: var(--bg);
+      background:
+        radial-gradient(1200px 520px at 8% -10%, rgba(194, 65, 45, 0.08), transparent 55%),
+        radial-gradient(900px 420px at 100% 0%, rgba(44, 83, 71, 0.07), transparent 46%),
+        var(--bg);
       color: var(--fg);
-      font-family: var(--serif);
+      font-family: var(--sans);
       font-size: 14px;
-      line-height: 1.55;
-      letter-spacing: 0.1pt;
+      line-height: 1.6;
+      letter-spacing: 0.01em;
       min-height: 100vh;
       overflow-x: hidden;
     }}
 
-    /* subtle paper grain */
-    body::before {{
-      content: '';
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.5;
-      background-image:
-        linear-gradient(#f9f8f2 1px, transparent 1px),
-        linear-gradient(90deg, #eeece2 1px, transparent 1px);
-      background-size: 32px 32px;
-      z-index: 0;
+    /* ── Shell ── */
+    .app-bar {{
+      position: relative;
+      z-index: 2;
+      width: min(1180px, 94vw);
+      margin: 22px auto 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }}
+    .brand {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }}
+    .brand-mark {{
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: #fffdf8;
+      font-family: var(--serif);
+      font-weight: 600;
+      font-size: 1.2rem;
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(194, 65, 45, 0.22);
+    }}
+    .brand strong {{
+      display: block;
+      font-family: var(--serif);
+      font-size: 1.02rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }}
+    .brand small {{
+      display: block;
+      margin-top: 1px;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }}
+    .app-bar-meta {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }}
+    .auth-chip {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-2);
+      color: var(--muted-2);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }}
+    .auth-chip.byok {{
+      border-color: rgba(194, 65, 45, 0.28);
+      color: var(--accent);
+      background: rgba(194, 65, 45, 0.06);
+    }}
+    .auth-chip.trial {{
+      border-color: rgba(44, 83, 71, 0.24);
+      color: var(--ok);
+      background: rgba(44, 83, 71, 0.06);
     }}
 
-    /* ── Shell ── */
     .shell {{
       position: relative;
       z-index: 1;
       width: min(1180px, 94vw);
-      margin: 34px auto 44px;
+      margin: 18px auto 44px;
       display: grid;
-      gap: 24px;
+      gap: 22px;
       grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
       animation: shell-in 420ms ease-out both;
     }}
@@ -1040,31 +1121,34 @@ def make_index_html() -> str:
       border-radius: var(--radius);
       overflow: hidden;
       position: relative;
-      box-shadow: 0 12px 36px rgba(20, 20, 19, 0.06);
-    }}
-
-    .panel::after {{
-      content: '';
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      box-shadow: inset 0 0 0 1px rgba(27,54,93,0.025);
+      box-shadow: 0 16px 40px rgba(26, 22, 18, 0.06);
     }}
 
     /* ── Hero ── */
     .hero {{
-      padding: 24px 28px 18px;
+      padding: 26px 28px 20px;
       border-bottom: 1px solid var(--border);
-      border-left: 4px solid var(--accent);
-      background: var(--bg-2);
+      background:
+        linear-gradient(180deg, rgba(194, 65, 45, 0.045), transparent 72%),
+        var(--bg-2);
       position: relative;
+    }}
+
+    .hero .eyebrow {{
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }}
 
     .hero h1 {{
       margin: 0 0 8px;
-      font-size: 1.9rem;
-      font-weight: 500;
-      line-height: 1.18;
+      font-family: var(--serif);
+      font-size: 1.55rem;
+      font-weight: 600;
+      line-height: 1.25;
       letter-spacing: 0;
       color: var(--fg-bright);
     }}
@@ -1072,9 +1156,9 @@ def make_index_html() -> str:
     .hero p {{
       margin: 0;
       color: var(--muted);
-      font-size: 0.95rem;
-      max-width: 38ch;
-      line-height: 1.55;
+      font-size: 0.94rem;
+      max-width: 42ch;
+      line-height: 1.6;
     }}
 
     .hero small {{
@@ -1083,11 +1167,195 @@ def make_index_html() -> str:
       font-family: var(--mono);
       font-size: 0.72rem;
       padding: 4px 8px;
-      color: var(--accent);
-      background: #EEF2F7;
-      border: 1px solid #E4ECF5;
-      border-radius: 4px;
+      color: var(--accent-2);
+      background: rgba(194, 65, 45, 0.06);
+      border: 1px solid rgba(194, 65, 45, 0.14);
+      border-radius: 999px;
     }}
+
+    .mode-switch {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 16px;
+      padding: 4px;
+      border-radius: 12px;
+      background: var(--bg-3);
+    }}
+    .mode-btn {{
+      border: 0;
+      border-radius: 9px;
+      padding: 9px 10px;
+      background: transparent;
+      color: var(--muted-2);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .mode-btn.active {{
+      background: var(--bg-2);
+      color: var(--fg-bright);
+      box-shadow: 0 4px 12px rgba(26, 22, 18, 0.06);
+    }}
+    .mode-btn[data-mode="byok"].active {{
+      color: var(--accent);
+    }}
+
+    .byok-panel {{
+      display: none;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fffaf1;
+      padding: 16px;
+      gap: 14px;
+    }}
+    .byok-panel.visible {{ display: grid; }}
+    html.boot-byok .mode-btn[data-mode="trial"] {{
+      background: transparent;
+      color: var(--muted-2);
+      box-shadow: none;
+    }}
+    html.boot-byok .mode-btn[data-mode="byok"] {{
+      background: var(--bg-2);
+      color: var(--accent);
+      box-shadow: 0 4px 12px rgba(26, 22, 18, 0.06);
+    }}
+    html.boot-byok .byok-panel {{ display: grid; }}
+    html.boot-byok .trial-hint {{ display: none !important; }}
+    html.boot-byok #keyNotice[hidden] {{ display: inline-flex !important; }}
+    html.boot-byok #vaultToggle[hidden] {{ display: inline-flex !important; }}
+    .vault-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }}
+    .vault-head h3 {{
+      margin: 0 0 4px;
+      font-size: 0.92rem;
+      font-weight: 650;
+    }}
+    .vault-head p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }}
+    .vault-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }}
+    .vault-actions-danger {{
+      margin-left: auto;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .tiny-btn.secondary {{
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid rgba(194, 65, 45, 0.28);
+    }}
+    .ghost-btn.danger {{
+      color: var(--danger);
+    }}
+    .vault-list {{
+      display: none;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 2px 0 4px;
+    }}
+    .vault-list.visible {{ display: flex; }}
+    .vault-chip {{
+      border: 1px solid var(--border);
+      background: #fffdfa;
+      color: var(--muted-2);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      transition: border-color var(--speed), color var(--speed), background var(--speed);
+    }}
+    .vault-chip:hover {{
+      border-color: rgba(194, 65, 45, 0.28);
+      color: var(--accent);
+    }}
+    .vault-chip:focus-visible {{
+      outline: 2px solid rgba(194, 65, 45, 0.4);
+      outline-offset: 2px;
+    }}
+    .vault-chip.active {{
+      border-color: rgba(194, 65, 45, 0.35);
+      color: var(--accent);
+      background: rgba(194, 65, 45, 0.06);
+    }}
+    .vault-chip.verified {{
+      border-color: rgba(44, 83, 71, 0.28);
+      color: var(--ok);
+    }}
+    .vault-chip.verified.active {{
+      background: rgba(44, 83, 71, 0.08);
+    }}
+    .vault-chip.empty {{
+      border-style: dashed;
+    }}
+    .provider-pill.ok {{
+      border-color: rgba(44, 83, 71, 0.24);
+      color: var(--ok);
+      background: rgba(44, 83, 71, 0.06);
+    }}
+    .trial-hint {{
+      display: none;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(44, 83, 71, 0.06);
+      color: var(--ok);
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }}
+    .trial-hint.visible {{ display: block; }}
+    .advanced-box {{
+      border-top: 1px dashed var(--border);
+      padding-top: 10px;
+    }}
+    .advanced-box summary {{
+      cursor: pointer;
+      color: var(--muted-2);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }}
+    .advanced-box .row {{
+      margin-top: 12px;
+    }}
+    .quiet-box {{
+      border: 0;
+      border-top: 1px dashed var(--border);
+      border-radius: 0;
+      padding: 8px 0 2px;
+      background: transparent;
+    }}
+    .quiet-box > summary {{
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+    }}
+    .quiet-box[open] {{
+      background: transparent;
+    }}
+    .result-wrap > .quiet-box + .quiet-box {{
+      margin-top: 0;
+    }}
+    .preflight-status {{
+      min-height: 1.2em;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }}
+    .preflight-status.ok {{ color: var(--ok); }}
+    .preflight-status.err {{ color: var(--danger); }}
 
     /* ── Form ── */
     .form-wrap {{
@@ -1095,6 +1363,8 @@ def make_index_html() -> str:
       display: grid;
       gap: 14px;
     }}
+
+    [hidden] {{ display: none !important; }}
 
     .field {{
       display: grid;
@@ -1106,11 +1376,11 @@ def make_index_html() -> str:
     .field:nth-child(3) {{ animation-delay: 110ms; }}
 
     label {{
-      font-size: 0.8rem;
-      font-family: var(--mono);
-      color: var(--accent);
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
+      font-size: 0.78rem;
+      font-family: var(--sans);
+      font-weight: 650;
+      color: var(--muted-2);
+      letter-spacing: 0.02em;
     }}
 
     .help {{
@@ -1122,24 +1392,32 @@ def make_index_html() -> str:
     input, select, textarea {{
       width: 100%;
       border: 1px solid var(--border);
-      border-radius: var(--radius);
+      border-radius: 10px;
       font: inherit;
-      background: #fffefa;
+      background: #fffdfa;
       color: var(--fg-bright);
-      padding: 10px 12px;
+      padding: 11px 12px;
       transition: border-color var(--speed), box-shadow var(--speed), background var(--speed);
       outline: none;
     }}
+    select {{
+      appearance: none;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 16px) calc(50% - 3px), calc(100% - 11px) calc(50% - 3px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+      padding-right: 28px;
+    }}
 
     textarea {{
-      min-height: 72px;
+      min-height: 108px;
       resize: vertical;
-      line-height: 1.45;
+      line-height: 1.55;
     }}
 
     input:focus, select:focus, textarea:focus {{
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px #E4ECF5;
+      border-color: rgba(194, 65, 45, 0.55);
+      box-shadow: 0 0 0 3px rgba(194, 65, 45, 0.12);
       background: #ffffff;
     }}
 
@@ -1147,19 +1425,33 @@ def make_index_html() -> str:
       border: 1px dashed var(--border);
       border-radius: var(--radius);
       background: #fffefa;
-      padding: 14px;
+      padding: 16px;
       display: grid;
       gap: 8px;
+      place-items: center;
+      text-align: center;
       color: var(--muted);
     }}
     .vision-drop-zone.drag-over {{
       border-color: var(--accent);
-      background: #EEF2F7;
+      background: rgba(194, 65, 45, 0.06);
     }}
     .vision-drop-zone input {{
-      padding: 0;
-      border: none;
-      background: transparent;
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }}
+    .vision-pick {{
+      border: 1px solid var(--border);
+      background: var(--bg-2);
+      color: var(--fg);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
     }}
     .vision-confirm-card {{
       display: none;
@@ -1211,9 +1503,9 @@ def make_index_html() -> str:
     .rich-text strong {{ font-weight: 500; color: var(--fg-bright); }}
     .rich-text code {{
       font-family: var(--mono);
-      color: var(--accent-3);
-      background: #EEF2F7;
-      border: 1px solid #E4ECF5;
+      color: var(--accent-2);
+      background: rgba(194, 65, 45, 0.06);
+      border: 1px solid rgba(194, 65, 45, 0.12);
       border-radius: 3px;
       padding: 1px 4px;
       font-size: 0.88em;
@@ -1255,7 +1547,7 @@ def make_index_html() -> str:
     .provider-doc {{
       color: var(--accent);
       text-decoration: none;
-      border-bottom: 1px solid #D0DCE9;
+      border-bottom: 1px solid rgba(194, 65, 45, 0.28);
     }}
     .provider-doc.hidden {{ display: none; }}
 
@@ -1271,22 +1563,25 @@ def make_index_html() -> str:
 
     .tiny-btn {{
       padding: 0 12px;
-      color: #faf9f5;
+      color: #fffdf8;
       background: var(--accent);
       min-width: 56px;
       font-size: 0.78rem;
-      height: 36px;
+      height: 42px;
+    }}
+    .key-row .tiny-btn {{
+      min-width: 72px;
     }}
     .tiny-btn:hover {{ opacity: 0.85; }}
 
     .btn {{
       margin-top: 2px;
-      padding: 12px 16px;
-      color: #faf9f5;
+      padding: 13px 16px;
+      color: #fffdf8;
       background: var(--accent);
-      letter-spacing: 0.5px;
-      font-size: 0.84rem;
-      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.9rem;
+      text-transform: none;
     }}
     .btn:hover {{ opacity: 0.9; transform: translateY(-1px); }}
     .btn[disabled] {{ opacity: 0.45; cursor: wait; transform: none; }}
@@ -1419,13 +1714,15 @@ def make_index_html() -> str:
     .result-head {{
       padding: 24px 28px 18px;
       border-bottom: 1px solid var(--border);
-      border-left: 4px solid var(--accent);
-      background: var(--bg-2);
+      background:
+        linear-gradient(180deg, rgba(44, 83, 71, 0.05), transparent 72%),
+        var(--bg-2);
     }}
     .result-head h2 {{
       margin: 0 0 8px;
+      font-family: var(--serif);
       font-size: 1.45rem;
-      font-weight: 500;
+      font-weight: 600;
       letter-spacing: 0;
       color: var(--fg-bright);
     }}
@@ -1451,7 +1748,8 @@ def make_index_html() -> str:
       gap: 14px;
     }}
 
-    .tag-wrap {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .tag-wrap {{ display: none; flex-wrap: wrap; gap: 8px; }}
+    body.has-result .tag-wrap {{ display: flex; }}
     .tag {{
       display: inline-flex;
       align-items: center;
@@ -1462,7 +1760,7 @@ def make_index_html() -> str:
       font-family: var(--mono);
       font-size: 0.72rem;
       color: var(--accent);
-      background: #EEF2F7;
+      background: rgba(194, 65, 45, 0.06);
     }}
 
     .warning-box {{
@@ -1491,10 +1789,73 @@ def make_index_html() -> str:
       letter-spacing: 0.5px;
     }}
 
-    .code-section {{
+    .result-empty {{
       display: grid;
+      gap: 8px;
+      padding: 36px 22px;
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      background:
+        radial-gradient(280px 120px at 50% 0%, rgba(194, 65, 45, 0.06), transparent 70%),
+        #fffaf1;
+      text-align: center;
+      color: var(--muted);
+    }}
+    .result-empty .empty-mark {{
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 6px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: #fffdf8;
+      font-family: var(--serif);
+      font-size: 1.2rem;
+      border-radius: 12px;
+    }}
+    .empty-steps {{
+      margin: 8px auto 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 6px;
+      max-width: 28ch;
+      text-align: left;
+      font-size: 0.8rem;
+    }}
+    .empty-steps li {{
+      display: flex;
+      gap: 8px;
+    }}
+    .empty-steps li::before {{
+      content: counter(step);
+      counter-increment: step;
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: rgba(194, 65, 45, 0.1);
+      color: var(--accent);
+      font-size: 0.7rem;
+      font-weight: 700;
+      display: grid;
+      place-items: center;
+      flex: 0 0 18px;
+      margin-top: 1px;
+    }}
+    .empty-steps {{ counter-reset: step; }}
+    .result-empty strong {{
+      color: var(--fg-bright);
+      font-family: var(--serif);
+      font-size: 1.05rem;
+    }}
+    body.has-result .result-empty {{ display: none; }}
+
+    .code-section {{
+      display: none;
       gap: 10px;
     }}
+    body.has-result.show-code .code-section,
+    body:not(.learning-mode).has-result .code-section {{ display: grid; }}
     body.learning-mode .code-section {{ display: none; }}
     body.learning-mode.show-code .code-section {{ display: grid; }}
 
@@ -1545,6 +1906,12 @@ def make_index_html() -> str:
     }}
     body.learning-mode video {{ max-height: 640px; }}
 
+    .quiet-box .community-hub {{
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      padding: 12px 0 0;
+    }}
     .community-hub {{
       border: 1px solid var(--border);
       border-radius: var(--radius);
@@ -1867,7 +2234,9 @@ def make_index_html() -> str:
 
     @media (max-width: 720px) {{
       .row {{ grid-template-columns: 1fr; }}
-      .shell {{ margin: 16px auto 24px; }}
+      .app-bar, .shell {{ width: min(720px, 94vw); }}
+      .app-bar {{ margin-top: 14px; align-items: flex-start; }}
+      .shell {{ margin: 14px auto 24px; }}
       .hero, .form-wrap, .result-head, .result-wrap {{ padding-left: 16px; padding-right: 16px; }}
       .result-title-row {{ display: grid; }}
       .result-actions {{ justify-content: flex-start; }}
@@ -1894,38 +2263,35 @@ def make_index_html() -> str:
   </style>
 </head>
 <body>
+  <header class="app-bar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">Æ</span>
+      <div>
+        <strong>Aegis 经济学动画工作台</strong>
+        <small>把问题变成可播放的教学动画</small>
+      </div>
+    </div>
+    <div class="app-bar-meta">
+      <span id="authChip" class="auth-chip trial">试用</span>
+      <button id="vaultToggle" class="ghost-btn" type="button" hidden>打开密钥库</button>
+    </div>
+  </header>
   <main class="shell">
     <section class="panel">
       <header class="hero">
-        <h1>Aegis 经济学动画工作台</h1>
-        <p>把一道经济学问题、一张图或一段文字，转成可播放的 Manim 教学动画。</p>
-        <small>API Key 只用于本次生成，不写入仓库。</small>
+        <h1>写下一道经济学问题</h1>
+        <p>免费试用可直接生成。自带密钥只存在这台浏览器，生成时才发给对应模型服务。</p>
+        <div class="mode-switch" role="tablist" aria-label="生成方式">
+          <button id="modeTrialBtn" class="mode-btn active" type="button" data-mode="trial">免费试用</button>
+          <button id="modeByokBtn" class="mode-btn" type="button" data-mode="byok">自带密钥</button>
+        </div>
+        <small id="keyNotice" hidden>API Key 只用于本次生成，不写入仓库。</small>
       </header>
 
-      <form id="generate-form" class="form-wrap">
-        <div class="field">
-          <label for="provider">模型服务</label>
-          <select id="provider" name="provider"></select>
-          <div class="provider-meta">
-            <span id="providerRegion" class="provider-pill">-</span>
-            <span id="providerProtocol" class="provider-pill">-</span>
-            <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
-          </div>
-          <div id="providerHelp" class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。</div>
-        </div>
-
-        <div id="apiKeyField" class="field">
-          <label id="apiKeyLabel" for="apiKey">API Key</label>
-          <div class="key-row">
-            <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" />
-            <button id="toggleKey" class="tiny-btn" type="button">显示</button>
-          </div>
-          <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
-        </div>
-
+      <form id="generate-form" class="form-wrap" novalidate>
         <div class="field">
           <label for="prompt">你要讲清楚的问题</label>
-          <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。" required></textarea>
+          <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。"></textarea>
           <div id="promptPreview" class="prompt-preview">
             <span class="prompt-preview-label">公式预览</span>
             <div id="promptPreviewContent" class="rich-text"></div>
@@ -1936,6 +2302,7 @@ def make_index_html() -> str:
           <label for="visionImageInput">上传图片让 AI 先理解</label>
           <div id="visionDropZone" class="vision-drop-zone">
             <input id="visionImageInput" name="visionImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+            <button id="visionPickBtn" class="vision-pick" type="button">选择或拖入图片</button>
             <div class="help">支持上传、截图粘贴、拖拽；手机浏览器可选择拍照或相册。图片会先转成中文理解卡片，确认后再生成动画。</div>
           </div>
           <div id="visionConfirmCard" class="vision-confirm-card">
@@ -1952,33 +2319,76 @@ def make_index_html() -> str:
           </div>
         </div>
 
-        <div class="row">
-          <div class="field">
-            <label for="model">模型</label>
-            <input id="model" name="model" value="{DEFAULT_MODEL}" />
+        <div id="trialHint" class="trial-hint visible">内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。</div>
+
+        <div class="field">
+          <label for="provider">模型服务</label>
+          <select id="provider" name="provider"></select>
+          <div class="provider-meta">
+            <span id="providerRegion" class="provider-pill">-</span>
+            <span id="providerProtocol" class="provider-pill">-</span>
+            <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
           </div>
-          <div class="field">
-            <label for="sceneName">场景类名</label>
-            <input id="sceneName" name="sceneName" value="GeneratedScene" />
-          </div>
+          <div id="providerHelp" class="help">免费试用走内置额度；自带密钥可接入智谱、OpenAI、DeepSeek、Kimi、MiniMax。</div>
         </div>
 
-        <div class="row">
-          <div class="field">
-            <label for="temperature">Temperature (0-1)</label>
-            <input id="temperature" name="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
+        <div id="byokPanel" class="byok-panel">
+          <div class="vault-head">
+            <div>
+              <h3>密钥库</h3>
+              <p>点选下方服务商，粘贴 Key。先保存到本机，再测连通；生成时才发给对应模型服务。</p>
+            </div>
+            <span id="vaultStatus" class="provider-pill">未保存</span>
           </div>
-          <div id="baseUrlField" class="field">
-            <label for="baseUrl">Base URL</label>
-            <input id="baseUrl" name="baseUrl" value="{DEFAULT_ZHIPU_ENDPOINT}" />
-            <div class="help">填根地址即可；如果粘贴 /chat/completions 或 /messages，后端会自动规范化。</div>
+          <div id="vaultList" class="vault-list"></div>
+          <div id="apiKeyField" class="field">
+            <label id="apiKeyLabel" for="apiKey">API Key</label>
+            <div class="key-row">
+              <input id="apiKey" name="apiKey" type="password" placeholder="粘贴完整 API Key，不要填环境变量名" autocomplete="off" />
+              <button id="toggleKey" class="tiny-btn secondary" type="button">显示</button>
+            </div>
+            <div id="apiKeyHelp" class="help">密钥只存在这台浏览器。请粘贴完整 Key，不要填环境变量名。</div>
           </div>
+          <details id="endpointDetails" class="advanced-box">
+            <summary>模型与接口</summary>
+            <div class="field">
+              <label for="model">模型</label>
+              <input id="model" name="model" value="{DEFAULT_MODEL}" />
+            </div>
+            <div id="baseUrlField" class="field">
+              <label for="baseUrl">Base URL</label>
+              <input id="baseUrl" name="baseUrl" value="{DEFAULT_ZHIPU_ENDPOINT}" />
+              <div class="help">填根地址即可；如果粘贴 /chat/completions 或 /messages，后端会自动规范化。</div>
+            </div>
+          </details>
+          <div class="vault-actions">
+            <button id="saveKeyBtn" class="tiny-btn secondary" type="button">保存到本机</button>
+            <button id="preflightBtn" class="tiny-btn" type="button">测试连通</button>
+            <div class="vault-actions-danger">
+              <button id="forgetKeyBtn" class="ghost-btn" type="button">清除此 Key</button>
+              <button id="forgetAllBtn" class="ghost-btn danger" type="button">清空密钥库</button>
+            </div>
+          </div>
+          <div id="preflightStatus" class="preflight-status"></div>
         </div>
 
-        <label class="check-row" for="noRender">
-          <input id="noRender" name="noRender" type="checkbox" />
-          只生成代码，不渲染视频（调试模式）
-        </label>
+        <details class="advanced-box">
+          <summary>高级选项</summary>
+          <div class="row">
+            <div class="field">
+              <label for="sceneName">场景类名</label>
+              <input id="sceneName" name="sceneName" value="GeneratedScene" />
+            </div>
+            <div class="field">
+              <label for="temperature">Temperature (0-1)</label>
+              <input id="temperature" name="temperature" type="number" min="0" max="1" step="0.1" value="0.2" />
+            </div>
+          </div>
+          <label class="check-row" for="noRender">
+            <input id="noRender" name="noRender" type="checkbox" />
+            只生成代码，不渲染视频（调试模式）
+          </label>
+        </details>
 
         <button id="submitBtn" class="btn" type="submit">生成动画草稿</button>
         <div id="processPanel" class="process-panel">
@@ -2021,10 +2431,22 @@ def make_index_html() -> str:
           <span id="sceneTag" class="tag">Scene: -</span>
           <span id="fileTag" class="tag">File: -</span>
           <span id="requestTag" class="tag">Req: -</span>
+          <span id="authTag" class="tag">Auth: -</span>
           <span class="tag">Version: {APP_VERSION}</span>
         </div>
 
         <div id="warningBox" class="warning-box"></div>
+
+        <div id="resultEmpty" class="result-empty">
+          <span class="empty-mark" aria-hidden="true">Æ</span>
+          <strong>动画会显示在这里</strong>
+          <div>左边写下问题后点生成。试用走内置额度；自带密钥先保存，再测连通。</div>
+          <ol class="empty-steps">
+            <li>写下要讲清楚的问题</li>
+            <li>选择免费试用或自带密钥</li>
+            <li>生成草稿，再看动画与讲稿</li>
+          </ol>
+        </div>
 
         <section class="code-section">
           <div class="code-header">
@@ -2040,21 +2462,24 @@ def make_index_html() -> str:
             <video id="videoPlayer" controls preload="metadata"></video>
           </div>
 
-          <section id="communityHub" class="community-hub">
-            <div class="community-hub-head">
-              <div>
-                <h3>作品仓库</h3>
-                <div class="community-hub-copy">先查已有高分或精选作品；生成完成后可以提交候选，公开作品可复用、评分和再审阅。</div>
+          <details class="quiet-box" id="communityDrawer">
+            <summary>作品仓库 · 可选复用已有动画</summary>
+            <section id="communityHub" class="community-hub">
+              <div class="community-hub-head">
+                <div>
+                  <h3>作品仓库</h3>
+                  <div class="community-hub-copy">先查已有高分或精选作品；生成完成后可以提交候选，公开作品可复用、评分和再审阅。</div>
+                </div>
+                <span class="tag">公开作品优先复用</span>
               </div>
-              <span class="tag">公开作品优先复用</span>
-            </div>
-            <div class="community-search-row">
-              <input id="communitySearchInput" type="search" placeholder="搜索仓库：如 Slutsky 补偿、税收归宿、Edgeworth 盒" autocomplete="off" />
-              <button id="communitySearchBtn" class="ghost-btn" type="button">搜索仓库</button>
-            </div>
-            <div id="communitySearchStatus" class="community-search-status">输入题目后可以先查找已有作品；生成完成后可提交入库审阅。</div>
-            <div id="communitySearchList" class="community-search-list"></div>
-          </section>
+              <div class="community-search-row">
+                <input id="communitySearchInput" type="search" placeholder="搜索仓库：如 Slutsky 补偿、税收归宿、Edgeworth 盒" autocomplete="off" />
+                <button id="communitySearchBtn" class="ghost-btn" type="button">搜索仓库</button>
+              </div>
+              <div id="communitySearchStatus" class="community-search-status">输入题目后可以先查找已有作品；生成完成后可提交入库审阅。</div>
+              <div id="communitySearchList" class="community-search-list"></div>
+            </section>
+          </details>
 
           <div id="communityActions" class="community-actions">
             <span id="communitySource">社区作品状态</span>
@@ -2080,7 +2505,7 @@ def make_index_html() -> str:
             <div id="alignmentList" class="alignment-list"></div>
           </section>
 
-          <details id="reviewPanel" class="review-panel">
+          <details id="reviewPanel" class="review-panel quiet-box">
             <summary>管理员审阅队列 · 候选仓库审阅</summary>
             <div class="review-controls">
               <input id="reviewTokenInput" type="password" placeholder="审阅 Token" autocomplete="off" />
@@ -2096,7 +2521,10 @@ def make_index_html() -> str:
           </details>
         </div>
 
-        <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
+        <details class="quiet-box">
+          <summary>诊断入口</summary>
+          <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
+        </details>
       </div>
     </section>
   </main>
@@ -2113,6 +2541,7 @@ def make_index_html() -> str:
     const sceneTag = document.getElementById("sceneTag");
     const fileTag = document.getElementById("fileTag");
     const requestTag = document.getElementById("requestTag");
+    const authTag = document.getElementById("authTag");
     const videoCard = document.getElementById("videoCard");
     const videoPlayer = document.getElementById("videoPlayer");
     const toggleKey = document.getElementById("toggleKey");
@@ -2166,6 +2595,25 @@ def make_index_html() -> str:
     const visionAuditText = document.getElementById("visionAuditText");
     const visionUseBtn = document.getElementById("visionUseBtn");
     const visionReuploadBtn = document.getElementById("visionReuploadBtn");
+    const authChip = document.getElementById("authChip");
+    const preflightBtn = document.getElementById("preflightBtn");
+    const preflightStatus = document.getElementById("preflightStatus");
+    const vaultToggle = document.getElementById("vaultToggle");
+    const modeTrialBtn = document.getElementById("modeTrialBtn");
+    const modeByokBtn = document.getElementById("modeByokBtn");
+    const keyNotice = document.getElementById("keyNotice");
+    const byokPanel = document.getElementById("byokPanel");
+    const trialHint = document.getElementById("trialHint");
+    const vaultStatus = document.getElementById("vaultStatus");
+    const saveKeyBtn = document.getElementById("saveKeyBtn");
+    const forgetKeyBtn = document.getElementById("forgetKeyBtn");
+    const forgetAllBtn = document.getElementById("forgetAllBtn");
+    const vaultList = document.getElementById("vaultList");
+    const endpointDetails = document.getElementById("endpointDetails");
+    const visionPickBtn = document.getElementById("visionPickBtn");
+    const VAULT_STORAGE_KEY = "aegis.byok.vault.v1";
+    const MODE_STORAGE_KEY = "aegis.mode";
+    let currentMode = "trial";
 
     let currentAlignment = null;
     let latestPrompt = "";
@@ -2204,11 +2652,179 @@ def make_index_html() -> str:
       return groups;
     }}
 
+    function isTrialPreset(preset, id) {{
+      return Boolean(preset && (preset.serverManaged || String(id || "").startsWith("trial-")));
+    }}
+
+    function isByokPreset(preset, id) {{
+      return Boolean(preset) && !isTrialPreset(preset, id);
+    }}
+
+    function hasTrialProviders() {{
+      return Object.entries(PROVIDERS).some(([id, preset]) => isTrialPreset(preset, id));
+    }}
+
+    function hasByokProviders() {{
+      return Object.entries(PROVIDERS).some(([id, preset]) => isByokPreset(preset, id));
+    }}
+
+    function firstProviderId(predicate) {{
+      return Object.keys(PROVIDERS).find((id) => predicate(PROVIDERS[id], id)) || "";
+    }}
+
+    function readVault() {{
+      try {{
+        const parsed = JSON.parse(localStorage.getItem(VAULT_STORAGE_KEY) || "{{}}");
+        return parsed && typeof parsed === "object" ? parsed : {{}};
+      }} catch (err) {{
+        return {{}};
+      }}
+    }}
+
+    function writeVault(vault) {{
+      localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(vault));
+    }}
+
+    function writeVaultEntry(providerId, key, extra) {{
+      const vault = readVault();
+      const previous = vault[providerId] && typeof vault[providerId] === "object" ? vault[providerId] : {{}};
+      vault[providerId] = Object.assign({{}}, previous, extra || {{}}, {{ key: key, updatedAt: Date.now() }});
+      writeVault(vault);
+      return vault[providerId];
+    }}
+
+    function maskKey(key) {{
+      const value = String(key || "");
+      if (!value) return "未保存";
+      if (value.length < 8) return "已保存 · " + value.length + " 位";
+      return value.slice(0, 3) + "···" + value.slice(-4);
+    }}
+
+    function vaultEntry(providerId) {{
+      const entry = readVault()[providerId];
+      return entry && typeof entry === "object" ? entry : null;
+    }}
+
+    function savedVaultKey(providerId) {{
+      const entry = vaultEntry(providerId);
+      return entry && typeof entry.key === "string" ? entry.key : "";
+    }}
+
+    function secretInPayload(payload, key) {{
+      const secret = String(key || "");
+      if (secret.length < 6) return false;
+      try {{
+        return JSON.stringify(payload).includes(secret);
+      }} catch (err) {{
+        return false;
+      }}
+    }}
+
+    function hideSecret(text, key) {{
+      const value = String(text || "");
+      const secret = String(key || "");
+      if (secret.length < 6) return value;
+      return value.split(secret).join("[redacted]");
+    }}
+
+    function keyLooksUsable(key, preset) {{
+      const value = String(key || "").trim();
+      if (value.length < 16) return false;
+      if (/^(your[_-]?api[_-]?key|api key|sk-xxx|placeholder|changeme)/i.test(value)) return false;
+      if (/^[A-Z][A-Z0-9_]*API_KEY$/i.test(value)) return false;
+      const placeholder = String((preset && preset.apiKeyPlaceholder) || "").trim();
+      if (placeholder && value === placeholder) return false;
+      return true;
+    }}
+
+    function renderVaultList() {{
+      if (!vaultList) return;
+      vaultList.replaceChildren();
+      const byokIds = Object.keys(PROVIDERS).filter((id) => (
+        isByokPreset(PROVIDERS[id], id) && !PROVIDERS[id].hideApiKey
+      ));
+      const savedIds = byokIds.filter((id) => savedVaultKey(id));
+      const featured = ["zhipu", "openai", "deepseek", "kimi-code", "minimax-token-cn", "mimo"].filter((id) => (
+        byokIds.includes(id)
+      ));
+      const ids = [];
+      [providerSelect.value, ...savedIds, ...featured].forEach((id) => {{
+        if (id && byokIds.includes(id) && !ids.includes(id)) ids.push(id);
+      }});
+      vaultList.classList.toggle("visible", currentMode === "byok" && ids.length > 0);
+      ids.forEach((id) => {{
+        const key = savedVaultKey(id);
+        const verified = Boolean(vaultEntry(id) && vaultEntry(id).verifiedAt);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "vault-chip"
+          + (id === providerSelect.value ? " active" : "")
+          + (verified ? " verified" : "")
+          + (!key ? " empty" : "");
+        const name = PROVIDERS[id].name || id;
+        button.textContent = verified ? name + " · 已连通" : name;
+        button.title = !key ? "填写 " + name + " 的密钥" : (verified ? name + " 已连通" : name + " 已保存");
+        button.setAttribute("aria-pressed", id === providerSelect.value ? "true" : "false");
+        button.addEventListener("click", () => {{
+          if (currentMode !== "byok") applyMode("byok");
+          byokPanel.classList.add("visible");
+          providerSelect.value = id;
+          const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
+          localStorage.setItem(providerStorageKey, id);
+          apiKeyInput.value = key;
+          updateProviderUI(false);
+          apiKeyInput.focus();
+        }});
+        vaultList.appendChild(button);
+      }});
+    }}
+
+    function updateVaultStatus() {{
+      const key = savedVaultKey(providerSelect.value) || apiKeyInput.value.trim();
+      const verified = Boolean(vaultEntry(providerSelect.value) && vaultEntry(providerSelect.value).verifiedAt);
+      vaultStatus.textContent = !key ? "未保存" : (verified ? "已连通 · " + maskKey(key) : maskKey(key));
+      vaultStatus.classList.toggle("ok", verified);
+      const saved = Boolean(savedVaultKey(providerSelect.value));
+      authChip.textContent = currentMode === "byok"
+        ? (saved ? "自带密钥 · " + maskKey(savedVaultKey(providerSelect.value)) : "自带密钥")
+        : "免费试用";
+      authChip.className = "auth-chip " + (currentMode === "byok" ? "byok" : "trial");
+      if (vaultToggle) {{
+        vaultToggle.hidden = currentMode !== "byok";
+        vaultToggle.textContent = byokPanel.classList.contains("visible") ? "收起密钥库" : "打开密钥库";
+      }}
+      if (submitBtn) {{
+        submitBtn.textContent = currentMode === "byok"
+          ? (verified ? "用已连通的密钥生成" : "用自带密钥生成")
+          : "生成动画草稿";
+      }}
+      renderVaultList();
+    }}
+
+    function applyMode(mode, persist = true) {{
+      const next = mode === "byok" && hasByokProviders() ? "byok" : (hasTrialProviders() ? "trial" : "byok");
+      currentMode = next;
+      if (persist) localStorage.setItem(MODE_STORAGE_KEY, next);
+      modeTrialBtn.classList.toggle("active", next === "trial");
+      modeByokBtn.classList.toggle("active", next === "byok");
+      modeTrialBtn.style.display = hasTrialProviders() ? "" : "none";
+      modeByokBtn.style.display = hasByokProviders() ? "" : "none";
+      byokPanel.classList.toggle("visible", next === "byok");
+      trialHint.classList.toggle("visible", next === "trial");
+      if (keyNotice) keyNotice.hidden = next !== "byok";
+      renderProviderOptions();
+      updateProviderUI(false);
+      updateVaultStatus();
+    }}
+
     function renderProviderOptions() {{
+      const previous = providerSelect.value;
       providerSelect.replaceChildren();
       const groups = groupProviderIds();
       ["trial", "global", "cn", "coding", "local", "custom"].forEach((region) => {{
-        const ids = groups[region] || [];
+        const ids = (groups[region] || []).filter((id) => (
+          currentMode === "trial" ? isTrialPreset(PROVIDERS[id], id) : isByokPreset(PROVIDERS[id], id)
+        ));
         if (!ids.length) return;
         const optgroup = document.createElement("optgroup");
         optgroup.label = REGION_LABELS[region] || region;
@@ -2221,10 +2837,14 @@ def make_index_html() -> str:
         providerSelect.appendChild(optgroup);
       }});
       const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
-      providerSelect.value = localStorage.getItem(providerStorageKey) || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
-      if (!PROVIDERS[providerSelect.value]) {{
-        providerSelect.value = PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
-      }}
+      const saved = localStorage.getItem(providerStorageKey) || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
+      const fallback = currentMode === "trial"
+        ? firstProviderId(isTrialPreset)
+        : firstProviderId(isByokPreset);
+      const preferred = [previous, saved, fallback, PROVIDER_CONFIG.defaultProvider].find((id) => (
+        id && PROVIDERS[id] && providerSelect.querySelector(`option[value="${{id}}"]`)
+      ));
+      providerSelect.value = preferred || fallback;
     }}
 
     function activePreset() {{
@@ -2239,8 +2859,8 @@ def make_index_html() -> str:
       providerDoc.classList.toggle("hidden", !preset.doc);
       providerHelp.textContent = preset.description || `${{preset.name || providerSelect.value}} · ${{preset.apiType || "compatible"}} · 模型 ID 可手动改写。`;
       apiKeyLabel.textContent = `${{preset.name || "Provider"}} API Key`;
-      apiKeyInput.placeholder = preset.apiKeyPlaceholder || "API Key...";
-      apiKeyInput.required = Boolean(preset.requiresApiKey);
+      apiKeyInput.placeholder = "粘贴完整 API Key，不要填环境变量名";
+      apiKeyInput.required = false;
       const usesCodexCli = preset.apiType === "codex-cli";
       const serverManaged = Boolean(preset.serverManaged);
       const cloudUnavailable = Boolean(preset.cloudUnavailable);
@@ -2254,7 +2874,7 @@ def make_index_html() -> str:
         apiKeyHelp.textContent = "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。";
       }} else {{
         apiKeyHelp.textContent = preset.requiresApiKey
-          ? "Key 仅用于本次请求，不落盘；如果报 401，请确认 Key 未过期且有可用额度。"
+          ? ((preset.keyHint || "API Key") + "。密钥只存在这台浏览器，如果报 401，请确认 Key 未过期且有可用额度。")
           : usesCodexCli
             ? "使用本机 codex login 登录态，不需要在页面粘贴 API Key。"
             : "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。";
@@ -2268,17 +2888,184 @@ def make_index_html() -> str:
       if (!keepModel || !modelInput.value.trim()) {{
         modelInput.value = serverManaged ? preset.defaultModel || "" : savedModel || preset.defaultModel || "";
       }}
+      if (!serverManaged && !usesCodexCli) {{
+        const storedKey = savedVaultKey(providerSelect.value);
+        if (storedKey && apiKeyInput.value.trim() !== storedKey) {{
+          apiKeyInput.value = storedKey;
+          apiKeyInput.type = "password";
+          toggleKey.textContent = "显示";
+        }}
+      }}
+      if (endpointDetails) {{
+        const providerId = providerSelect.value || "";
+        endpointDetails.open = providerId.startsWith("custom-") || !baseUrlInput.value.trim();
+      }}
+      updateVaultStatus();
     }}
 
     providerSelect.addEventListener("change", () => {{
       const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
       localStorage.setItem(providerStorageKey, providerSelect.value);
+      apiKeyInput.value = savedVaultKey(providerSelect.value);
       updateProviderUI(false);
+    }});
+
+    function saveCurrentKey() {{
+      const providerId = providerSelect.value;
+      const key = apiKeyInput.value.trim();
+      const vault = readVault();
+      if (!key) {{
+        delete vault[providerId];
+        writeVault(vault);
+        updateVaultStatus();
+        setStatus("已清除这个 Provider 的本机密钥。", "success");
+        return;
+      }}
+      if (!keyLooksUsable(key, activePreset())) {{
+        setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
+        return;
+      }}
+      writeVaultEntry(providerId, key);
+      updateVaultStatus();
+      setStatus("密钥已保存到这台浏览器，不会写入服务器。", "success");
+    }}
+
+    function forgetCurrentKey() {{
+      const vault = readVault();
+      delete vault[providerSelect.value];
+      writeVault(vault);
+      apiKeyInput.value = "";
+      updateVaultStatus();
+      setStatus("已从本机密钥库清除这个 Key。", "success");
+    }}
+
+    modeTrialBtn.addEventListener("click", () => applyMode("trial"));
+    modeByokBtn.addEventListener("click", () => applyMode("byok"));
+    vaultToggle.addEventListener("click", () => {{
+      if (currentMode !== "byok") {{
+        applyMode("byok");
+        return;
+      }}
+      byokPanel.classList.toggle("visible");
+      vaultToggle.textContent = byokPanel.classList.contains("visible") ? "收起密钥库" : "打开密钥库";
+    }});
+    function forgetAllKeys() {{
+      writeVault({{}});
+      apiKeyInput.value = "";
+      updateVaultStatus();
+      setStatus("已清空本机密钥库。", "success");
+    }}
+
+    function setPreflightStatus(message, type = "") {{
+      if (!preflightStatus) return;
+      preflightStatus.className = "preflight-status" + (type ? " " + type : "");
+      preflightStatus.textContent = message;
+    }}
+
+    async function preflightCurrentKey() {{
+      const preset = activePreset();
+      if (preset.serverManaged || currentMode !== "byok") {{
+        applyMode("byok");
+        setPreflightStatus("请先切换到自带密钥。", "err");
+        setStatus("请先切换到自带密钥，再测试连通。", "error");
+        return;
+      }}
+      if (preset.cloudUnavailable) {{
+        setPreflightStatus("这个 Provider 只能在本机使用。", "err");
+        setStatus("这个 Provider 需要下载项目后在本地运行。", "error");
+        return;
+      }}
+      const key = currentByokKey();
+      if (preset.requiresApiKey && !key) {{
+        setPreflightStatus("先填写 API Key。", "err");
+        setStatus("先在密钥库填写 API Key，或改回免费试用。", "error");
+        return;
+      }}
+      if (preset.requiresApiKey && !keyLooksUsable(key, preset)) {{
+        setPreflightStatus("这个 Key 看起来不像可用密钥。", "err");
+        setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
+        return;
+      }}
+      if (!customEndpointReady()) {{
+        if (endpointDetails) endpointDetails.open = true;
+        setPreflightStatus("自定义 Provider 需要填写 HTTPS Base URL。", "err");
+        setStatus("自定义 Provider 需要填写可公网访问的 HTTPS Base URL。", "error");
+        return;
+      }}
+      if (preflightBtn) preflightBtn.disabled = true;
+      setPreflightStatus("正在测试连通...");
+      setStatus("正在用你的密钥测试模型服务连通...", "");
+      try {{
+        const response = await fetch("/api/byok/preflight", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            provider: providerSelect.value,
+            apiKey: key,
+            model: modelInput.value.trim() || preset.defaultModel || "{DEFAULT_MODEL}",
+            baseUrl: baseUrlInput.value.trim(),
+            endpoint: baseUrlInput.value.trim()
+          }})
+        }});
+        const data = await response.json();
+        if (secretInPayload(data, key)) {{
+          throw new Error("连通检测返回了不该出现的密钥，已中止。");
+        }}
+        if (!response.ok || !data.ok) {{
+          throw new Error(hideSecret(data.error || "连通失败", key));
+        }}
+        if (key && keyLooksUsable(key, preset)) {{
+          writeVaultEntry(providerSelect.value, key, {{
+            verifiedAt: Date.now(),
+            lastEndpoint: data.endpoint || ""
+          }});
+          updateVaultStatus();
+        }}
+        const latency = Number.isFinite(data.latencyMs) ? " · " + data.latencyMs + "ms" : "";
+        setPreflightStatus((data.message || "密钥可用。") + latency, "ok");
+        setStatus((data.message || "密钥可用，已连通模型服务。") + latency, "success");
+      }} catch (err) {{
+        const message = err && err.message ? err.message : "连通失败";
+        setPreflightStatus(message, "err");
+        setStatus(message, "error");
+      }} finally {{
+        if (preflightBtn) preflightBtn.disabled = false;
+      }}
+    }}
+
+    saveKeyBtn.addEventListener("click", saveCurrentKey);
+    forgetKeyBtn.addEventListener("click", forgetCurrentKey);
+    forgetAllBtn.addEventListener("click", forgetAllKeys);
+    if (preflightBtn) preflightBtn.addEventListener("click", preflightCurrentKey);
+    apiKeyInput.addEventListener("input", () => {{
+      const entry = vaultEntry(providerSelect.value);
+      if (entry && entry.verifiedAt && apiKeyInput.value.trim() !== entry.key) {{
+        const vault = readVault();
+        if (vault[providerSelect.value]) {{
+          delete vault[providerSelect.value].verifiedAt;
+          writeVault(vault);
+        }}
+      }}
+      updateVaultStatus();
     }});
 
     function setStatus(message, type = "") {{
       statusBox.className = "status-box" + (type ? " " + type : "");
       statusBox.textContent = message;
+    }}
+
+    function markHasResult(hasResult) {{
+      document.body.classList.toggle("has-result", Boolean(hasResult));
+    }}
+
+    function currentByokKey() {{
+      return apiKeyInput.value.trim() || savedVaultKey(providerSelect.value);
+    }}
+
+    function customEndpointReady() {{
+      const providerId = providerSelect.value || "";
+      if (!providerId.startsWith("custom-")) return true;
+      return Boolean(baseUrlInput.value.trim());
     }}
 
     function textHasRichSyntax(text) {{
@@ -2613,6 +3400,7 @@ def make_index_html() -> str:
       latestSceneName = item.sceneName || item.scene_name || payload.sceneName || "GeneratedScene";
       latestVideoUrl = item.videoUrl || item.video_url || "";
       latestRenderJobId = item.renderJobId || item.render_job_id || "";
+      markHasResult(true);
       codeOutput.textContent = latestCode || "# 社区作品没有返回代码";
       sceneTag.textContent = "Scene: " + latestSceneName + " · 社区复用";
       fileTag.textContent = "File: community-work";
@@ -2927,6 +3715,7 @@ def make_index_html() -> str:
     }}
 
     function applyGenerateResult(data, payload, requestId) {{
+      markHasResult(true);
       codeOutput.textContent = data.code || "# 未返回代码";
       latestCode = data.code || "";
       latestSceneName = data.sceneName || payload.sceneName || "GeneratedScene";
@@ -2954,7 +3743,15 @@ def make_index_html() -> str:
         ? " | 已自动做兼容修复"
         : "";
       const reqText = requestId && requestId !== "-" ? " | 诊断ID: " + requestId : "";
-      setStatus((data.message || "处理完成") + warningText + reqText, "success");
+      const authText = data.authMode === "byok" ? "已使用你的密钥，未写入服务器。" : "";
+      if (authTag) {{
+        authTag.textContent = data.authMode === "byok" ? "Auth: 自带密钥" : "Auth: 免费试用";
+      }}
+      if (data.authMode === "byok" && payload && payload.apiKey) {{
+        writeVaultEntry(payload.provider, payload.apiKey, {{ verifiedAt: Date.now() }});
+        updateVaultStatus();
+      }}
+      setStatus((data.message || authText || "处理完成") + warningText + reqText, "success");
 
       // Auto-trigger render if code was generated and noRender is not checked
       if (latestCode && !payload.noRender && !data.videoId) {{
@@ -3129,6 +3926,9 @@ def make_index_html() -> str:
       const file = visionImageInput.files && visionImageInput.files[0];
       if (file) analyzeVisionFile(file);
     }});
+    if (visionPickBtn) {{
+      visionPickBtn.addEventListener("click", () => visionImageInput.click());
+    }}
 
     visionUseBtn.addEventListener("click", () => {{
       if (!visionSuggestedPrompt) {{
@@ -3177,13 +3977,38 @@ def make_index_html() -> str:
 
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
+      const promptValue = promptInput.value.trim();
+      if (promptValue.length < 6) {{
+        setStatus("先写下一道要讲清楚的问题，至少把概念或例子说清楚。", "error");
+        promptInput.focus();
+        return;
+      }}
       const preset = activePreset();
       if (preset.cloudUnavailable) {{
         setStatus("这个 Provider 需要下载项目后在本地运行；Vercel 云端无法访问你的本机 Codex 或 127.0.0.1 服务。", "error");
         return;
       }}
+      if (!preset.serverManaged && preset.requiresApiKey) {{
+        const key = currentByokKey();
+        if (!key) {{
+          applyMode("byok");
+          setStatus("先在密钥库填写 API Key，或改回免费试用。", "error");
+          return;
+        }}
+        if (!keyLooksUsable(key, preset)) {{
+          applyMode("byok");
+          setStatus("这个 Key 看起来不像可用密钥。请粘贴完整 Key，不要填占位符。", "error");
+          return;
+        }}
+        if (!customEndpointReady()) {{
+          applyMode("byok");
+          if (endpointDetails) endpointDetails.open = true;
+          setStatus("自定义 Provider 需要填写可公网访问的 HTTPS Base URL。", "error");
+          return;
+        }}
+      }}
       submitBtn.disabled = true;
-      document.body.classList.remove("learning-mode", "show-code");
+      document.body.classList.remove("learning-mode", "show-code", "has-result");
       toggleCodeBtn.textContent = "查看代码";
       setStatus("请求已发送，正在生成代码...", "");
       startProcess();
@@ -3203,11 +4028,13 @@ def make_index_html() -> str:
       clearAlignment();
       setCommunityActions();
       communitySearchList.replaceChildren();
-      setCommunitySearchStatus("正在准备仓库检索...");
+      setCommunitySearchStatus(currentMode === "byok"
+        ? "自带密钥模式会直接用你的模型生成；需要复用时再打开作品仓库。"
+        : "正在准备仓库检索...");
 
       const payload = {{
         provider: providerSelect.value,
-        apiKey: preset.serverManaged ? "" : apiKeyInput.value.trim(),
+        apiKey: preset.serverManaged ? "" : (apiKeyInput.value.trim() || savedVaultKey(providerSelect.value)),
         prompt: promptInput.value.trim(),
         model: modelInput.value.trim() || activePreset().defaultModel || "{DEFAULT_MODEL}",
         baseUrl: preset.serverManaged ? "" : baseUrlInput.value.trim(),
@@ -3222,13 +4049,19 @@ def make_index_html() -> str:
       if (!preset.serverManaged) {{
         localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
         localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
+        if (payload.apiKey) {{
+          writeVaultEntry(payload.provider, payload.apiKey);
+          updateVaultStatus();
+        }}
       }}
 
       try {{
-        const communityWork = await searchCommunityWork(payload);
-        if (communityWork) {{
-          await applyCommunityWork(communityWork, payload);
-          return;
+        if (currentMode !== "byok") {{
+          const communityWork = await searchCommunityWork(payload);
+          if (communityWork) {{
+            await applyCommunityWork(communityWork, payload);
+            return;
+          }}
         }}
         const response = await fetch("/api/generate/start", {{
           method: "POST",
@@ -3236,10 +4069,13 @@ def make_index_html() -> str:
           body: JSON.stringify(payload)
         }});
         const data = await response.json();
+        if (secretInPayload(data, payload.apiKey)) {{
+          throw new Error("生成接口返回了不该出现的密钥，已中止。");
+        }}
         if (!response.ok || !data.ok) {{
           const detail = data.detail ? " | " + data.detail : "";
           const reqText = data.requestId ? " | 诊断ID: " + data.requestId : "";
-          throw new Error((data.error || "请求失败") + detail + reqText);
+          throw new Error(hideSecret((data.error || "请求失败") + detail + reqText, payload.apiKey));
         }}
         requestTag.textContent = "Req: " + (data.requestId || data.jobId || "-");
         await waitForJob(data.statusUrl, payload);
@@ -3282,21 +4118,30 @@ def make_index_html() -> str:
           body: JSON.stringify(payload)
         }});
         const data = await response.json();
+        const alignKey = latestProviderPayload.apiKey || "";
+        if (secretInPayload(data, alignKey)) {{
+          throw new Error("对齐接口返回了不该出现的密钥，已中止。");
+        }}
+        if (secretInPayload(data.alignment, alignKey)) {{
+          throw new Error("对齐结果含有不该出现的密钥，已中止。");
+        }}
         if (!response.ok || !data.ok) {{
-          throw new Error(data.error || "重新对齐失败");
+          throw new Error(hideSecret(data.error || "重新对齐失败", alignKey));
         }}
         setAlignment(data.alignment);
         setStatus("讲稿已重新对齐。", "success");
       }} catch (err) {{
-        setStatus(err && err.message ? err.message : "重新对齐失败", "error");
+        setStatus(hideSecret(err && err.message ? err.message : "重新对齐失败", latestProviderPayload && latestProviderPayload.apiKey), "error");
       }} finally {{
         realignBtn.textContent = previousText;
         realignBtn.disabled = !latestCode;
       }}
     }});
 
-    renderProviderOptions();
-    updateProviderUI(false);
+    const savedMode = localStorage.getItem(MODE_STORAGE_KEY);
+    const initialMode = savedMode || PROVIDER_CONFIG.defaultMode || (hasTrialProviders() ? "trial" : "byok");
+    applyMode(initialMode, false);
+    document.documentElement.classList.remove("boot-byok");
     updatePromptPreview();
   </script>
 </body>
@@ -3311,19 +4156,120 @@ def make_index_html() -> str:
     return html
 
 
+def cloud_preflight_url() -> str:
+    generate_url = (AEGIS_CLOUD_GENERATE_URL or "").rstrip("/")
+    if generate_url.endswith("/api/generate"):
+        return generate_url[: -len("generate")] + "byok/preflight"
+    return ""
+
+
+def cloud_align_url() -> str:
+    generate_url = (AEGIS_CLOUD_GENERATE_URL or "").rstrip("/")
+    if generate_url.endswith("/api/generate"):
+        return generate_url[: -len("generate")] + "align"
+    return ""
+
+
+def proxy_cloud_preflight(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    preflight_url = cloud_preflight_url()
+    if not preflight_url:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "Cloud preflight proxy is not configured.",
+        }
+    provider_id = str(payload.get("provider", "")).strip()
+    if not provider_id or provider_id.startswith("trial-"):
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": "免费试用无需测试密钥。请改用自带密钥模式。",
+        }
+    allowed_payload = {
+        "provider": provider_id,
+        "apiKey": str(payload.get("apiKey", "")).strip(),
+        "model": str(payload.get("model", "")).strip(),
+        "baseUrl": str(payload.get("baseUrl", "")).strip(),
+        "endpoint": str(payload.get("endpoint") or payload.get("baseUrl") or "").strip(),
+    }
+    body = json.dumps(allowed_payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(
+        preflight_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=45) as resp:
+            raw = resp.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else {}
+            return resp.status, parsed if isinstance(parsed, dict) else {"ok": False, "error": "Invalid cloud response."}
+    except Exception as exc:
+        append_runtime_log("CLOUD_PREFLIGHT_FAIL", f"error={type(exc).__name__}")
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": "云端连通检测暂不可用，请稍后重试。",
+        }
+
+
+def proxy_cloud_align(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    align_url = cloud_align_url()
+    if not align_url:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "Cloud align proxy is not configured.",
+        }
+    provider_id = str(payload.get("provider", "")).strip()
+    allowed_payload = {
+        "prompt": str(payload.get("prompt", "")),
+        "code": str(payload.get("code", "")),
+        "sceneName": safe_scene_name(str(payload.get("sceneName", "GeneratedScene"))),
+        "videoDuration": payload.get("videoDuration"),
+        "provider": provider_id,
+        "model": str(payload.get("model", "")).strip(),
+        "temperature": payload.get("temperature", 0.2),
+    }
+    if provider_id and not provider_id.startswith("trial-"):
+        allowed_payload["apiKey"] = str(payload.get("apiKey", "")).strip()
+        allowed_payload["baseUrl"] = str(payload.get("baseUrl", "")).strip()
+        allowed_payload["endpoint"] = str(payload.get("endpoint") or payload.get("baseUrl") or "").strip()
+    body = json.dumps(allowed_payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(
+        align_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=90) as resp:
+            raw = resp.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else {}
+            return resp.status, parsed if isinstance(parsed, dict) else {"ok": False, "error": "Invalid cloud response."}
+    except Exception as exc:
+        append_runtime_log("CLOUD_ALIGN_FAIL", f"error={type(exc).__name__}")
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": "云端讲稿对齐暂不可用，请稍后重试。",
+        }
+
+
 def proxy_cloud_generate(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     if not AEGIS_CLOUD_GENERATE_URL:
         return HTTPStatus.SERVICE_UNAVAILABLE, {
             "ok": False,
             "error": "Cloud generate proxy is not configured.",
         }
+    provider_id = str(payload.get("provider", "trial-minimax-direct"))
     allowed_payload = {
         "prompt": str(payload.get("prompt", "")),
-        "provider": str(payload.get("provider", "trial-minimax-direct")),
+        "provider": provider_id,
         "sceneName": safe_scene_name(str(payload.get("sceneName", "GeneratedScene"))),
         "temperature": payload.get("temperature", 0.2),
         "noRender": bool(payload.get("noRender", False)),
+        "model": str(payload.get("model", "")).strip(),
     }
+    if not provider_id.startswith("trial-"):
+        allowed_payload["apiKey"] = str(payload.get("apiKey", "")).strip()
+        allowed_payload["baseUrl"] = str(payload.get("baseUrl", "")).strip()
+        allowed_payload["endpoint"] = str(payload.get("endpoint") or payload.get("baseUrl") or "").strip()
     body = json.dumps(allowed_payload, ensure_ascii=False).encode("utf-8")
     req = urllib_request.Request(
         AEGIS_CLOUD_GENERATE_URL,
@@ -3637,7 +4583,32 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         route = parsed.path
 
         if route == "/api/align":
+            if AEGIS_CLOUD_GENERATE_URL:
+                try:
+                    payload = self._read_json_body()
+                except ValueError as exc:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                    return
+                status, response = proxy_cloud_align(payload)
+                self._send_json(status, response)
+                return
             self._handle_align()
+            return
+
+        if route == "/api/byok/preflight":
+            try:
+                payload = self._read_json_body()
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            if AEGIS_CLOUD_GENERATE_URL:
+                status, response = proxy_cloud_preflight(payload)
+                self._send_json(status, response)
+                return
+            from api.index import preflight_byok_provider
+
+            status, response = preflight_byok_provider(payload)
+            self._send_json(status, response)
             return
 
         if route == "/api/generate/start":
@@ -3870,7 +4841,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                     ),
                 )
             except Exception as exc:
-                detail = str(exc)
+                detail = redact_client_secrets(str(exc), api_key)
                 append_runtime_log(
                     "MODEL_REQUEST_FAIL",
                     (
@@ -3918,6 +4889,9 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             }
             if notes:
                 response["warnings"] = notes
+            if not str(payload.get("provider", "")).startswith("trial-"):
+                response["authMode"] = "byok"
+                response["message"] = "已使用你的密钥生成 Manim 代码；密钥未写入服务器。"
 
             if no_render:
                 response["message"] = "Code generated successfully. Render skipped."
@@ -4089,6 +5063,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             video_duration=video_duration,
             llm_call=call_alignment_model,
         )
+        alignment = redact_json_secrets(alignment, api_key)
         event_name = "ALIGNMENT_FALLBACK" if alignment.get("confidence") == "low" else "ALIGNMENT_OK"
         append_runtime_log(
             event_name,
@@ -4148,19 +5123,39 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             self._send_json(status, err)
             return
 
-        alignment = self._build_alignment_response(
-            request_id=request_id,
-            prompt=prompt,
-            code=code,
-            scene_name=scene_name,
-            video_duration=video_duration,
-            provider_id=provider.id,
-            api_key=api_key,
-            base_url=base_url or None,
-            endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
-            model=model,
-            temperature=temperature,
-        )
+        if api_key and is_placeholder_api_key(api_key):
+            status, err = json_error(
+                "请粘贴真实 API Key，不要填环境变量名或示例占位符。",
+                status=HTTPStatus.BAD_REQUEST,
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
+        try:
+            alignment = self._build_alignment_response(
+                request_id=request_id,
+                prompt=prompt,
+                code=code,
+                scene_name=scene_name,
+                video_duration=video_duration,
+                provider_id=provider.id,
+                api_key=api_key,
+                base_url=base_url or None,
+                endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
+                model=model,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            status, err = json_error(
+                "讲稿对齐失败。请检查 Key、额度与 Base URL。",
+                status=HTTPStatus.BAD_GATEWAY,
+                detail=redact_client_secrets(str(exc), api_key),
+                request_id=request_id,
+            )
+            self._send_json(status, err)
+            return
+
         self._send_json(
             HTTPStatus.OK,
             {

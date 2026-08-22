@@ -24,9 +24,20 @@ MANIM_KNOWLEDGE_PATH = PROJECT_ROOT / "prompts" / "manim_knowledge_pack.md"
 PLACEHOLDER_KEYS = {
     "your_api_key_here",
     "your-api-key-here",
+    "your_api_key",
+    "your-api-key",
     "<your_api_key>",
     "changeme",
+    "placeholder",
+    "api key",
+    "api_key",
+    "sk-xxx",
 }
+_ENV_NAME_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*API_KEY$", re.IGNORECASE)
+_PLACEHOLDER_KEY_RE = re.compile(
+    r"^(your[_-]?api[_-]?key(?:[_-]?here)?|api[_ -]?key|<your_api_key>|changeme|placeholder|sk-xxx)$",
+    re.IGNORECASE,
+)
 TEXT_DEFAULT_FONT_PATCH_MARKER = "AEGIS_CJK_FONT"
 
 
@@ -126,7 +137,16 @@ def normalize_zhipu_endpoint(endpoint: str | None) -> str:
 
 
 def is_placeholder_api_key(value: str) -> bool:
-    return value.strip().lower() in PLACEHOLDER_KEYS
+    text = (value or "").strip()
+    if not text:
+        return False
+    if text.lower() in PLACEHOLDER_KEYS:
+        return True
+    if _ENV_NAME_KEY_RE.fullmatch(text):
+        return True
+    if _PLACEHOLDER_KEY_RE.fullmatch(text):
+        return True
+    return False
 
 
 def strip_code_fences(code: str) -> str:
