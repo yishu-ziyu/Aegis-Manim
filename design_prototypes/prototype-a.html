@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 A · 晴空 · Aegis 温润手帐风</title>
+<style>
+@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.1.0/style.css');
+
+:root {
+  --font-ui: "LXGW WenKai Screen", "LXGW WenKai", "PingFang SC", "Songti SC", serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+  --bg: #f2f2f7;
+  --bg-card: #fffdf8;
+  --bg-fill: #e9e9ee;
+  --ink: #1c1c1e;
+  --text-2: rgba(60, 60, 67, 0.62);
+  --text-3: rgba(60, 60, 67, 0.42);
+  --accent: #2f6cb3;
+  --accent-soft: #78b4f0;
+  --accent-tint: rgba(120, 180, 240, 0.16);
+  --brand: #1b365d;
+  --danger: #b3563e;
+  --ok: #3f7a5a;
+  --code-bg: #2a2a33;
+  --border: rgba(60, 60, 60, 0.12);
+  --border-strong: rgba(60, 60, 60, 0.22);
+
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(37, 55, 84, 0.05), 0 4px 16px rgba(37, 55, 84, 0.06);
+  --shadow-md: 0 16px 42px rgba(37, 55, 84, 0.10);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 150ms;
+  --dur-ui: 220ms;
+  --dur-enter: 560ms;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.6;
+  min-height: 100vh;
+  transition: background 250ms ease, color 250ms ease;
+}
+
+/* ── 吸顶工具条：半透明材质，内容从下面滚过 ── */
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 22px;
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-size: 1.02rem; }
+.brand-mark {
+  display: grid; place-items: center;
+  width: 30px; height: 30px; border-radius: 9px;
+  background: var(--brand); color: #fffdf8;
+  font-size: 1.05rem; line-height: 1;
+  box-shadow: var(--shadow-sm);
+}
+.topbar nav { display: flex; gap: 8px; }
+
+/* ── 按钮 ── */
+button {
+  font: inherit; cursor: pointer; border: none; color: inherit;
+  border-radius: var(--radius-sm);
+  transition: transform var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) ease, border-color var(--dur-fast) ease,
+              box-shadow var(--dur-fast) ease, opacity var(--dur-fast) ease;
+}
+button:active { transform: scale(0.97); }
+:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-tint), 0 0 0 1.5px var(--accent-soft); }
+
+.ghost-btn {
+  padding: 6px 14px; font-size: 0.85rem;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-2);
+}
+.ghost-btn:hover { border-color: var(--border-strong); color: var(--ink); }
+
+/* ── 主布局 ── */
+.shell {
+  width: min(1180px, 94vw);
+  margin: 26px auto 20px;
+  display: grid; gap: 22px;
+  grid-template-columns: minmax(360px, 0.92fr) minmax(420px, 1.08fr);
+  align-items: start;
+}
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: background 250ms ease, border-color 250ms ease;
+}
+.form-panel { animation: enter var(--dur-enter) var(--ease-soft) both; }
+.result-panel { animation: enter var(--dur-enter) var(--ease-soft) 90ms both; }
+@keyframes enter {
+  from { opacity: 0; transform: translateY(12px) scale(0.992); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Hero ── */
+.hero { padding: 28px 28px 20px; border-bottom: 1px solid var(--border); }
+.hero h1 {
+  font-size: clamp(1.55rem, 2.6vw, 2rem);
+  font-weight: 600; line-height: 1.2; letter-spacing: -0.01em;
+}
+.hero p { margin-top: 8px; color: var(--text-2); max-width: 40ch; }
+.examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.chip {
+  padding: 5px 13px; font-size: 0.82rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-tint); color: var(--accent);
+  white-space: nowrap;
+}
+.chip:hover { background: color-mix(in srgb, var(--accent-soft) 26%, transparent); }
+
+/* ── 表单 ── */
+.form-wrap { padding: 20px 28px 26px; display: grid; gap: 16px; }
+.field { display: grid; gap: 6px; }
+.field label { font-size: 0.87rem; color: var(--text-2); }
+.help { font-size: 0.78rem; color: var(--text-3); line-height: 1.5; }
+
+input, select, textarea {
+  width: 100%; font: inherit; color: var(--ink);
+  border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-card) 55%, var(--bg));
+  padding: 10px 13px;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease,
+              background var(--dur-fast) ease;
+}
+textarea { min-height: 112px; resize: vertical; line-height: 1.55; }
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.btn {
+  padding: 13px 16px; font-size: 0.98rem; letter-spacing: 0.04em;
+  color: #fffdf8; background: var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+}
+.btn:hover { background: color-mix(in srgb, var(--accent) 92%, black); }
+.btn[disabled] { opacity: 0.55; cursor: wait; }
+.spinner {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid rgba(255, 253, 248, 0.35); border-top-color: #fffdf8;
+  animation: spin 0.8s linear infinite; display: none;
+}
+.btn.loading .spinner { display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 高级设置折叠 ── */
+.advanced {
+  border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 40%, var(--bg-card));
+  overflow: hidden;
+}
+.advanced summary {
+  list-style: none; cursor: pointer; user-select: none;
+  padding: 11px 15px; font-size: 0.87rem; color: var(--text-2);
+  display: flex; align-items: center; gap: 8px;
+  transition: color var(--dur-fast) ease;
+}
+.advanced summary::-webkit-details-marker { display: none; }
+.advanced summary:hover { color: var(--ink); }
+.chevron { transition: transform var(--dur-ui) var(--ease-drawer); font-size: 0.7rem; }
+.advanced[open] .chevron { transform: rotate(90deg); }
+.advanced-body { padding: 4px 15px 16px; display: grid; gap: 14px; }
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+input[type="range"] { padding: 0; height: 26px; accent-color: var(--accent); }
+
+/* ── 右栏 Tabs ── */
+.tabs {
+  display: flex; gap: 4px; padding: 12px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  padding: 8px 16px 10px; font-size: 0.9rem; color: var(--text-2);
+  border-radius: 10px 10px 0 0; background: transparent;
+  position: relative;
+}
+.tab::after {
+  content: ''; position: absolute; left: 14px; right: 14px; bottom: 0;
+  height: 2px; border-radius: 2px; background: transparent;
+  transition: background var(--dur-ui) var(--ease-out);
+}
+.tab[aria-selected="true"] { color: var(--ink); }
+.tab[aria-selected="true"]::after { background: var(--accent-soft); }
+.tab:hover { color: var(--ink); }
+
+.tabpane { display: none; padding: 22px; }
+.tabpane.active { display: block; animation: pane-in var(--dur-ui) var(--ease-out) both; }
+@keyframes pane-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 视频空态 / 占位 */
+.video-empty {
+  border-radius: 14px; padding: 44px 24px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--accent-tint), transparent 60%),
+    color-mix(in srgb, var(--bg) 55%, var(--bg-card));
+  border: 1px dashed var(--border-strong);
+  display: grid; place-items: center; gap: 12px; text-align: center;
+}
+.play-dot {
+  width: 54px; height: 54px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--bg-card); color: var(--accent);
+  box-shadow: var(--shadow-md); font-size: 1.15rem; padding-left: 4px;
+}
+.video-empty b { font-weight: 600; }
+.video-empty small { color: var(--text-3); max-width: 34ch; }
+
+/* 进度步骤 */
+.steps { display: none; margin-top: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; gap: 10px; }
+.steps.show { display: grid; }
+.step { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 0.88rem;
+        transition: color var(--dur-ui) ease; }
+.step .dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--bg-fill);
+  transition: background var(--dur-ui) ease, box-shadow var(--dur-ui) ease;
+}
+.step.on { color: var(--ink); }
+.step.on .dot { background: var(--accent-soft); box-shadow: 0 0 0 4px var(--accent-tint); }
+.step.done { color: var(--text-2); }
+.step.done .dot { background: var(--ok); }
+
+/* 作品仓库卡片 */
+.work-list { display: grid; gap: 12px; }
+.work {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px;
+  transition: box-shadow var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.work:hover { box-shadow: var(--shadow-sm); border-color: var(--border-strong); }
+.work b { font-weight: 600; font-size: 0.94rem; display: block; }
+.work small { color: var(--text-3); }
+.work .tag { font-size: 0.72rem; color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent);
+             padding: 2px 9px; border-radius: var(--radius-pill); margin-left: 8px; }
+
+/* 讲稿 */
+.script p { color: var(--text-2); margin-bottom: 12px; font-size: 0.93rem; }
+.script p b { color: var(--ink); font-weight: 600; background: var(--accent-tint); border-radius: 4px; padding: 0 3px; }
+
+/* ── 代码块 ── */
+.codecard { margin-top: 18px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
+.codecard header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 14px; font-size: 0.78rem; color: var(--text-3);
+  background: color-mix(in srgb, var(--bg) 50%, var(--bg-card));
+  border-bottom: 1px solid var(--border);
+}
+.codecard pre {
+  font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7;
+  padding: 14px 16px; color: #e8e6df; background: var(--code-bg);
+  overflow: auto; max-height: 180px;
+}
+
+/* ── 页脚 & 版本切换 ── */
+.foot { text-align: center; color: var(--text-3); font-size: 0.75rem; padding: 8px 0 26px; }
+.version-switch {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 2px; padding: 4px;
+  background: color-mix(in srgb, var(--bg-card) 80%, transparent);
+  backdrop-filter: blur(16px); border: 1px solid var(--border);
+  border-radius: var(--radius-pill); box-shadow: var(--shadow-md); z-index: 30;
+}
+.version-switch a {
+  font: inherit; font-size: 0.8rem; text-decoration: none; color: var(--text-2);
+  padding: 5px 13px; border-radius: var(--radius-pill); white-space: nowrap;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.version-switch a:hover { color: var(--ink); }
+.version-switch a.cur { background: var(--accent); color: #fffdf8; }
+
+@media (max-width: 960px) {
+  .shell { grid-template-columns: 1fr; width: min(640px, 94vw); }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.2s !important; transition-duration: 0.2s !important; }
+  .form-panel, .result-panel { transform: none !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">A</span>Aegis 经济学动画工作台</div>
+  <nav>
+    <button class="ghost-btn" type="button">Instant SVG</button>
+    <button class="ghost-btn" type="button">场景库</button>
+  </nav>
+</header>
+
+<main class="shell">
+  <section class="panel form-panel">
+    <div class="hero">
+      <h1>把一道题，变成一堂课</h1>
+      <p>输入一个经济学问题，Aegis 用 Manim 生成可播放的教学动画，并附同步讲稿。</p>
+      <div class="examples">
+        <button class="chip" type="button">税收楔子与无谓损失</button>
+        <button class="chip" type="button">拉弗曲线</button>
+        <button class="chip" type="button">比较优势</button>
+      </div>
+    </div>
+    <form class="form-wrap" onsubmit="return fakeGenerate(event)">
+      <div class="field">
+        <label for="prompt">你想讲清楚什么问题？</label>
+        <textarea id="prompt">我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。</textarea>
+      </div>
+      <button class="btn" id="go" type="submit"><span class="spinner"></span><span id="goText">生成动画</span></button>
+
+      <details class="advanced">
+        <summary><span class="chevron">▶</span>高级设置<span class="help" style="margin-left:4px">模型、Key、渲染参数</span></summary>
+        <div class="advanced-body">
+          <div class="field">
+            <label>模型服务</label>
+            <select><option>智谱 GLM（内置试用）</option><option>MiniMax M3</option><option>OpenAI</option><option>Codex CLI（本机）</option></select>
+          </div>
+          <div class="field">
+            <label>API Key</label>
+            <input type="password" placeholder="仅用于本次请求，不写入仓库">
+            <div class="help">留空则使用内置试用额度。</div>
+          </div>
+          <div class="row">
+            <div class="field"><label>模型</label><input value="glm-5"></div>
+            <div class="field"><label>场景类名</label><input value="GeneratedScene"></div>
+          </div>
+          <div class="field">
+            <label>温度 · <span id="tv">0.2</span></label>
+            <input type="range" min="0" max="1" step="0.1" value="0.2" oninput="document.getElementById('tv').textContent=this.value">
+          </div>
+        </div>
+      </details>
+    </form>
+  </section>
+
+  <section class="panel result-panel">
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-pane="p-video">视频</button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p-works">作品仓库</button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p-script">同步讲稿</button>
+    </nav>
+
+    <div class="tabpane active" id="p-video">
+      <div class="video-empty" id="vempty">
+        <div class="play-dot">▶</div>
+        <b>生成后，视频会出现在这里</b>
+        <small>通常需要 45–120 秒。左侧点「生成动画」可以预览整个过程。</small>
+      </div>
+      <div class="steps" id="steps">
+        <div class="step" data-s="1"><span class="dot"></span>生成 Manim 代码</div>
+        <div class="step" data-s="2"><span class="dot"></span>静态检查与修复</div>
+        <div class="step" data-s="3"><span class="dot"></span>渲染视频</div>
+        <div class="step" data-s="4"><span class="dot"></span>同步讲稿</div>
+      </div>
+    </div>
+
+    <div class="tabpane" id="p-works">
+      <div class="work-list">
+        <div class="work"><div><b>税收楔子如何挤出消费者剩余<small> 03:12 · 2 天前</small></b><small>需求供给 · 无谓损失</small></div><span class="tag">精选 4.9</span></div>
+        <div class="work"><div><b>拉弗曲线的形状为什么是倒 U<small> 02:40 · 5 天前</small></b><small>税收 · 函数极值</small></div><span class="tag">4.7</span></div>
+        <div class="work"><div><b>埃奇沃斯盒：交换的效率<small> 04:05 · 1 周前</small></b><small>一般均衡 · 契约曲线</small></div><span class="tag">4.6</span></div>
+      </div>
+      <div class="codecard">
+        <header><span>生成的 MANIM 代码</span><button class="ghost-btn" type="button" style="padding:3px 10px;font-size:0.72rem">复制</button></header>
+        <pre>scene = Scene()
+axes = Axes(x_range=[0, 10, 1], y_range=[0, 8, 2])
+supply = axes.plot(lambda x: 0.5 * x + 1, color=BLUE)
+demand = axes.plot(lambda x: 7 - 0.6 * x, color=ORANGE)
+self.play(Create(axes), run_time=1.2)
+self.play(Create(supply), Create(demand))</pre>
+      </div>
+    </div>
+
+    <div class="tabpane script" id="p-script">
+      <p><b>开场。</b>工资是你付出的劳动的价格，但雇主实际掏的钱，比这条工资更多——中间差的那一块，就是"税收楔子"。</p>
+      <p><b>图形演示。</b>我们在供求图上同时画出两条曲线：工人关心的"税后工资"和雇主关心的"税前成本"。两条线之间的楔形空隙，会同时抬高买方成本、压低卖方所得。</p>
+      <p><b>结论。</b>楔子越厚，成交量和双方福利同时收缩；三角形阴影就是无谓损失——它不流向任何人。</p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">诊断 /api/health · web_app_v20260429 · 仅用于本次请求的 Key 不入库</footer>
+
+<nav class="version-switch">
+  <a class="cur" href="prototype-a.html">A · 晴空</a>
+  <a href="prototype-b.html">B · 奶油</a>
+  <a href="prototype-c.html">C · 夜航</a>
+</nav>
+
+<script>
+// 示例 chips 填充
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const el = document.getElementById('prompt');
+    el.value = '请用动态演示解释：' + chip.textContent + '。';
+    el.focus();
+  });
+});
+
+// Tabs
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', 'false'));
+    document.querySelectorAll('.tabpane').forEach(p => p.classList.remove('active'));
+    tab.setAttribute('aria-selected', 'true');
+    document.getElementById(tab.dataset.pane).classList.add('active');
+  });
+});
+
+// 假生成流程：演示状态迁移动效
+function fakeGenerate(e) {
+  e.preventDefault();
+  const btn = document.getElementById('go'), txt = document.getElementById('goText');
+  const steps = [...document.querySelectorAll('.step')];
+  if (btn.classList.contains('loading')) return false;
+  btn.classList.add('loading'); btn.disabled = true; txt.textContent = '生成中…';
+  steps.forEach(s => s.classList.remove('on', 'done'));
+  document.getElementById('steps').classList.add('show');
+  steps.forEach((s, i) => setTimeout(() => s.classList.add('on'), 500 + i * 900));
+  steps.forEach((s, i) => setTimeout(() => { s.classList.remove('on'); s.classList.add('done'); }, 1400 + i * 900));
+  setTimeout(() => {
+    btn.classList.remove('loading'); btn.disabled = false; txt.textContent = '生成动画';
+    const v = document.getElementById('vempty');
+    v.innerHTML = '<div class="play-dot">▶</div><b>原型演示 · 此处播放生成的视频</b><small>真实产品中这是 Manim 渲染出的 MP4。</small>';
+  }, 500 + steps.length * 900 + 400);
+  return false;
+}
+</script>
+</body>
+</html>

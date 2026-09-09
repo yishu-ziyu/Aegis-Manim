@@ -10,10 +10,10 @@ from pathlib import Path
 from urllib import error, request
 from urllib.parse import urlparse
 
-DEFAULT_PROVIDER = "codex-cli"
+DEFAULT_PROVIDER = "minimax-token-cn"
 DEFAULT_ZHIPU_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 DEFAULT_ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-DEFAULT_MODEL = "glm-5"
+DEFAULT_MODEL = "MiniMax-M3"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -529,7 +529,8 @@ def max_tokens_for_provider(provider_id: str, model: str) -> int | None:
     if provider_id == "deepseek":
         return int(os.getenv("DEEPSEEK_MAX_TOKENS", "8192"))
     if provider_id.startswith("minimax"):
-        return int(os.getenv("MINIMAX_MAX_TOKENS", "8192"))
+        # M3 是推理模型：思考 + 长知识包场景下 8192 会把代码拦腰截断（F-043）
+        return int(os.getenv("MINIMAX_MAX_TOKENS", "16384"))
     raw = os.getenv("LLM_MAX_TOKENS", "").strip()
     return int(raw) if raw else None
 

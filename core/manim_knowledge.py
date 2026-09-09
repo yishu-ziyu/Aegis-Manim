@@ -169,6 +169,53 @@ def precheck_manim_code(code: str, expected_scene_name: str) -> list[PrecheckIss
                 )
             )
 
+    # 截断检测：LLM 输出被 max_tokens 截断时，代码可能恰好语法合法但剧情只写了一半
+    # （真实案例：恩格尔系数场景停在 `second_batch = VGroup(...)` 赋值行，散点/结论全部缺失却渲染成功）
+    for class_node in [node for node in tree.body if isinstance(node, ast.ClassDef)]:
+        if not _scene_class_name(class_node):
+            continue
+        construct = next(
+            (item for item in class_node.body if isinstance(item, ast.FunctionDef) and item.name == "construct"),
+            None,
+        )
+        if construct is None:
+            continue
+        stmts = [item for item in construct.body if not isinstance(item, ast.Pass)]
+        if not stmts:
+            continue
+        last_stmt = stmts[-1]
+        ends_on_assignment = isinstance(last_stmt, (ast.Assign, ast.AnnAssign))
+        play_count = 0
+        has_wait = False
+        for node in ast.walk(construct):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                func = node.func
+                if isinstance(func.value, ast.Name) and func.value.id == "self":
+                    if func.attr == "play":
+                        play_count += 1
+                    elif func.attr == "wait":
+                        has_wait = True
+        if ends_on_assignment or (play_count >= 3 and not has_wait):
+            issues.append(
+                PrecheckIssue(
+                    category="truncated-output",
+                    severity="error",
+                    student_message="生成的脚本在写完前被截断了，正在重新生成完整动画。",
+                    technical_message=(
+                        f"construct ends with {type(last_stmt).__name__} (play_count={play_count}, "
+                        f"has_wait={has_wait}) — likely LLM output truncated by max_tokens"
+                    ),
+                    repair_hint=(
+                        "Your previous script was cut off before finishing. Re-output the COMPLETE scene "
+                        "from `from manim import *` to the final `self.wait(...)`, keeping the same teaching "
+                        "content but writing more compact code (fewer helper variables, no comments beyond "
+                        "section markers) so it fits in one response."
+                    ),
+                    source_ids=("manim-scenes",),
+                )
+            )
+            break
+
     if re.search(r"\b(MathTex|Tex)\s*\(", code):
         issues.append(
             PrecheckIssue(

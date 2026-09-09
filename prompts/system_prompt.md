@@ -145,6 +145,16 @@ Assign consistent colors to conceptual roles:
    - Avoid expensive `LaggedStart` over large groups, dense curves, many `Sector` objects, long `run_time` chains, and complex updaters unless the user explicitly asks for a longer production animation.
    - Keep the final video around 45-120 seconds. Use `run_time=0.5-2` and `self.wait(0.3-1.5)` unless a key insight genuinely needs more time.
    - If a concept is complex, use several simple visual steps rather than one dense overloaded scene.
+9. **Numeric Correctness (CRITICAL)**: Every marked point (intersection, equilibrium, optimum) MUST be computed in code from the curve parameters — never hand-typed literals.
+   - BAD: `Qm, Pm = 8.0, 5.0`  (Pm is often an arithmetic slip, and the dot visibly floats off the crossing)
+   - GOOD:
+     ```python
+     # D: P = 9 - 0.6q, S: P = 1 + 0.4q  =>  9 - 0.6q = 1 + 0.4q
+     Qm = (9 - 1) / (0.6 + 0.4)
+     Pm = 9 - 0.6 * Qm
+     dot = Dot(axes.c2p(Qm, Pm), ...)
+     ```
+   - When a policy claims to move the market to a target point, derive the policy magnitude from the curves so the new equilibrium IS that point.
 
 # Golden Samples (Few-Shot)
 

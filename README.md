@@ -145,6 +145,8 @@ MINIMAX_API_KEY=... ./.venv/bin/python core/manim_agent.py \
 ./scripts/web_server.sh start
 ```
 
+生成的视频默认 720p，可在「高级设置 → 视频清晰度」切换 480p/720p/1080p。历史产物可用 `./scripts/cleanup_media.sh [天数] [-y]` 清理（默认 14 天，默认 dry-run）。
+
 检查状态：
 
 ```bash

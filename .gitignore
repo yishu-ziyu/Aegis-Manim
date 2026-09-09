@@ -147,3 +147,7 @@ logs/bug_trace.jsonl
 # Render backend runtime dirs
 render_backend/outputs/
 render_backend/temp/
+
+# QA 飞轮工具产物
+.video_agent/
+out/

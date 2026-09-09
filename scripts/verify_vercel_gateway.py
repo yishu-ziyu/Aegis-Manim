@@ -56,12 +56,10 @@ def main() -> int:
     assert health["version"] == APP_VERSION
 
     html = build_index_html()
-    assert "Aegis 经济学动画工作台" in html
+    assert "把讲不透的概念" in html
     assert "/api/health" in html
-    assert "生成动画草稿" in html
-    assert "Vercel 云端只展示能力入口" in html
-    assert "API Key 只用于本次生成，不写入仓库。" in html
-    assert "MiniMax M3 与 Mimo 编程" in html
+    assert "生成动画" in html
+    assert "高级设置" in html
     assert "免费试用 · Kimi 优先" not in html
     assert "免费试用 · MiniMax M3" in html
     assert "Kimi Code API" not in html

@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 D · 夜航 2.0 · Aegis 温润手帐风</title>
+<style>
+@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.1.0/style.css');
+
+:root {
+  --font-ui: "LXGW WenKai Screen", "LXGW WenKai", "PingFang SC", "Songti SC", serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+  --bg: #17171b;
+  --bg-card: #1f1f26;
+  --bg-fill: #2a2a33;
+  --ink: #f0f0f3;
+  --text-2: rgba(235, 235, 245, 0.65);
+  --text-3: rgba(235, 235, 245, 0.40);
+  --accent: #4a8ed6;
+  --accent-soft: #78b4f0;
+  --accent-tint: rgba(120, 180, 240, 0.16);
+  --brand: #3a5a8c;
+  --danger: #cf7a5f;
+  --ok: #6fae8a;
+  --code-bg: #121216;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.22);
+
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 16px 42px rgba(0, 0, 0, 0.45);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 150ms;
+  --dur-ui: 220ms;
+  --dur-enter: 560ms;
+}
+[data-theme="light"] {
+  --bg: #f2f2f7;
+  --bg-card: #fffdf8;
+  --bg-fill: #e9e9ee;
+  --ink: #1c1c1e;
+  --text-2: rgba(60, 60, 67, 0.62);
+  --text-3: rgba(60, 60, 67, 0.42);
+  --accent: #2f6cb3;
+  --accent-soft: #78b4f0;
+  --accent-tint: rgba(120, 180, 240, 0.16);
+  --brand: #1b365d;
+  --danger: #b3563e;
+  --ok: #3f7a5a;
+  --code-bg: #2a2a33;
+  --border: rgba(60, 60, 60, 0.12);
+  --border-strong: rgba(60, 60, 60, 0.22);
+  --shadow-sm: 0 1px 2px rgba(37, 55, 84, 0.05), 0 4px 16px rgba(37, 55, 84, 0.06);
+  --shadow-md: 0 16px 42px rgba(37, 55, 84, 0.10);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-ui); font-size: 15px; line-height: 1.6;
+  min-height: 100vh;
+  transition: background 250ms ease, color 250ms ease;
+}
+
+/* ── 顶栏 ── */
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 22px;
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-size: 1.02rem; }
+.brand-mark {
+  display: grid; place-items: center; width: 30px; height: 30px;
+  border-radius: 9px; background: var(--brand); color: #fffdf8;
+  font-size: 1.05rem; line-height: 1; box-shadow: var(--shadow-sm);
+}
+.topbar nav { display: flex; gap: 8px; }
+
+button {
+  font: inherit; cursor: pointer; border: none; color: inherit;
+  border-radius: var(--radius-sm);
+  transition: transform var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) ease, border-color var(--dur-fast) ease,
+              box-shadow var(--dur-fast) ease, opacity var(--dur-fast) ease;
+}
+button:active { transform: scale(0.97); }
+:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-tint), 0 0 0 1.5px var(--accent-soft); }
+.ghost-btn {
+  padding: 6px 14px; font-size: 0.85rem; background: transparent;
+  border: 1px solid var(--border); color: var(--text-2); white-space: nowrap;
+}
+.ghost-btn:hover { border-color: var(--border-strong); color: var(--ink); }
+
+/* ════════ 状态一：落地舞台 ════════ */
+.stage {
+  max-width: 780px; margin: 0 auto; padding: 9vh 24px 60px;
+  text-align: center;
+}
+.stage.hidden { display: none; }
+.kicker {
+  font-size: 0.82rem; letter-spacing: 0.2em; color: var(--accent-soft);
+  animation: rise var(--dur-enter) var(--ease-soft) both;
+}
+.stage h1 {
+  margin-top: 14px;
+  font-size: clamp(1.9rem, 4.6vw, 2.9rem);
+  font-weight: 600; line-height: 1.22; letter-spacing: -0.015em;
+  animation: rise var(--dur-enter) var(--ease-soft) 80ms both;
+}
+.stage .sub {
+  margin: 14px auto 0; max-width: 34em; color: var(--text-2);
+  animation: rise var(--dur-enter) var(--ease-soft) 160ms both;
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 大输入框：主角 */
+.ask {
+  margin: 34px auto 0; max-width: 680px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 20px; box-shadow: var(--shadow-md);
+  padding: 16px 16px 12px; text-align: left;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+  animation: rise var(--dur-enter) var(--ease-soft) 240ms both;
+}
+.ask:focus-within { border-color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-tint), var(--shadow-md); }
+.ask textarea {
+  width: 100%; border: none; background: transparent; color: var(--ink);
+  font: inherit; line-height: 1.6; min-height: 84px; resize: none; outline: none;
+}
+.ask textarea::placeholder { color: var(--text-3); }
+.ask-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+.ask-hint { font-size: 0.76rem; color: var(--text-3); padding-left: 4px; }
+.go {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 22px; font-size: 0.95rem; letter-spacing: 0.04em;
+  color: #fffdf8; background: var(--accent); border-radius: 12px;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.go:hover { background: color-mix(in srgb, var(--accent) 92%, black); }
+.spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid rgba(255,253,248,0.35); border-top-color: #fffdf8;
+  animation: spin 0.8s linear infinite; display: none;
+}
+.go.loading .spinner { display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 示例卡：完整可用的 prompt */
+.ex-head {
+  margin: 40px 0 14px; font-size: 0.84rem; color: var(--text-3);
+  animation: rise var(--dur-enter) var(--ease-soft) 320ms both;
+}
+.examples { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.ex {
+  text-align: left; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 14px; padding: 14px 16px; color: var(--text-2);
+  font: inherit; line-height: 1.55;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease,
+              transform var(--dur-fast) var(--ease-out);
+  animation: rise var(--dur-enter) var(--ease-soft) both;
+}
+.ex:nth-child(1) { animation-delay: 380ms; }
+.ex:nth-child(2) { animation-delay: 440ms; }
+.ex:nth-child(3) { animation-delay: 500ms; }
+.ex:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); transform: translateY(-2px); }
+.ex .kind { display: block; font-size: 0.76rem; color: var(--accent-soft); margin-bottom: 6px; }
+.ex .txt { font-size: 0.86rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* 作品条 */
+.works-head {
+  margin: 46px 0 14px; font-size: 0.84rem; color: var(--text-3);
+  animation: rise var(--dur-enter) var(--ease-soft) 560ms both;
+}
+.works { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.thumb {
+  position: relative; aspect-ratio: 16/10; border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--border); text-align: left; padding: 0;
+  animation: rise var(--dur-enter) var(--ease-soft) 620ms both;
+}
+.thumb .art {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 1.6rem; color: rgba(255,255,255,0.9);
+}
+.thumb .dur {
+  position: absolute; right: 6px; bottom: 6px;
+  font-size: 0.68rem; color: #fff; background: rgba(0,0,0,0.55);
+  padding: 1px 7px; border-radius: var(--radius-pill);
+}
+.thumb .cap {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 20px 10px 7px; font-size: 0.76rem; color: #fff; text-align: left;
+  background: linear-gradient(transparent, rgba(0,0,0,0.65));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.thumb:hover .art { transform: scale(1.06); }
+.thumb .art { transition: transform 250ms var(--ease-out); }
+
+/* ════════ 状态二：工作台 ════════ */
+.bench { display: none; }
+.bench.show { display: block; animation: rise 420ms var(--ease-soft) both; }
+.docked {
+  position: sticky; top: 0; z-index: 15;
+  display: flex; gap: 10px; align-items: center;
+  padding: 12px 22px;
+  background: color-mix(in srgb, var(--bg-card) 80%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--border);
+}
+.docked textarea {
+  flex: 1; border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 50%, var(--bg-card));
+  color: var(--ink); font: inherit; font-size: 0.92rem;
+  padding: 9px 13px; min-height: 42px; resize: none; line-height: 1.5;
+}
+.docked textarea:focus { outline: none; border-color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-tint); }
+
+.bench-grid {
+  width: min(1180px, 94vw); margin: 24px auto 20px;
+  display: grid; gap: 22px; grid-template-columns: minmax(330px, 0.9fr) minmax(420px, 1.1fr);
+  align-items: start;
+}
+.panel {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden;
+  transition: background 250ms ease, border-color 250ms ease;
+}
+.field { display: grid; gap: 6px; }
+.field label { font-size: 0.87rem; color: var(--text-2); }
+.help { font-size: 0.78rem; color: var(--text-3); line-height: 1.5; }
+input, select, textarea {
+  width: 100%; font: inherit; color: var(--ink);
+  border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-card) 55%, var(--bg));
+  padding: 10px 13px;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-tint);
+}
+.btn {
+  padding: 12px 16px; font-size: 0.95rem; letter-spacing: 0.04em;
+  color: #fffdf8; background: var(--accent); border-radius: 12px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px; width: 100%;
+}
+.btn:hover { background: color-mix(in srgb, var(--accent) 92%, black); }
+.btn.loading .spinner { display: inline-block; }
+
+.advanced {
+  border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 40%, var(--bg-card)); overflow: hidden;
+}
+.advanced summary {
+  list-style: none; cursor: pointer; user-select: none;
+  padding: 11px 15px; font-size: 0.87rem; color: var(--text-2);
+  display: flex; align-items: center; gap: 8px;
+}
+.advanced summary::-webkit-details-marker { display: none; }
+.chevron { transition: transform var(--dur-ui) var(--ease-drawer); font-size: 0.7rem; }
+.advanced[open] .chevron { transform: rotate(90deg); }
+.advanced-body { padding: 4px 15px 16px; display: grid; gap: 14px; }
+
+.tabs { display: flex; gap: 4px; padding: 12px 16px 0; border-bottom: 1px solid var(--border); }
+.tab {
+  padding: 8px 16px 10px; font-size: 0.9rem; color: var(--text-2);
+  border-radius: 10px 10px 0 0; background: transparent; position: relative;
+}
+.tab::after {
+  content: ''; position: absolute; left: 14px; right: 14px; bottom: 0;
+  height: 2px; border-radius: 2px; background: transparent;
+  transition: background var(--dur-ui) var(--ease-out);
+}
+.tab[aria-selected="true"] { color: var(--ink); }
+.tab[aria-selected="true"]::after { background: var(--accent-soft); }
+.tabpane { display: none; padding: 22px; }
+.tabpane.active { display: block; animation: rise var(--dur-ui) var(--ease-out) both; }
+
+.video-empty {
+  border-radius: 14px; padding: 44px 24px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--accent-tint), transparent 60%),
+    color-mix(in srgb, var(--bg) 55%, var(--bg-card));
+  border: 1px dashed var(--border-strong);
+  display: grid; place-items: center; gap: 12px; text-align: center;
+}
+.play-dot {
+  width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--bg-card); color: var(--accent); box-shadow: var(--shadow-md);
+  font-size: 1.15rem; padding-left: 4px;
+}
+.video-empty b { font-weight: 600; }
+.video-empty small { color: var(--text-3); max-width: 34ch; }
+
+.steps { display: none; margin-top: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; gap: 10px; }
+.steps.show { display: grid; }
+.step { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 0.88rem; transition: color var(--dur-ui) ease; }
+.step .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bg-fill); transition: background var(--dur-ui) ease, box-shadow var(--dur-ui) ease; }
+.step.on { color: var(--ink); }
+.step.on .dot { background: var(--accent-soft); box-shadow: 0 0 0 4px var(--accent-tint); }
+.step.done { color: var(--text-2); }
+.step.done .dot { background: var(--ok); }
+
+.foot { text-align: center; color: var(--text-3); font-size: 0.75rem; padding: 8px 0 26px; }
+.version-switch {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 2px; padding: 4px;
+  background: color-mix(in srgb, var(--bg-card) 80%, transparent);
+  backdrop-filter: blur(16px); border: 1px solid var(--border);
+  border-radius: var(--radius-pill); box-shadow: var(--shadow-md); z-index: 30;
+}
+.version-switch a {
+  font: inherit; font-size: 0.8rem; text-decoration: none; color: var(--text-2);
+  padding: 5px 13px; border-radius: var(--radius-pill); white-space: nowrap;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.version-switch a:hover { color: var(--ink); }
+.version-switch a.cur { background: var(--accent); color: #fffdf8; }
+
+@media (max-width: 960px) {
+  .bench-grid { grid-template-columns: 1fr; }
+  .examples { grid-template-columns: 1fr; }
+  .works { grid-template-columns: repeat(2, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.2s !important; transition-duration: 0.2s !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">A</span>Aegis</div>
+  <nav>
+    <button class="ghost-btn" type="button" id="themeBtn">☀︎ 亮色模式</button>
+    <button class="ghost-btn" type="button">Instant SVG</button>
+    <button class="ghost-btn" type="button">场景库</button>
+  </nav>
+</header>
+
+<!-- ═══ 状态一：落地舞台 ═══ -->
+<section class="stage" id="stage">
+  <div class="kicker">AI 经济学教学动画</div>
+  <h1>把讲不透的概念，<br>变成看得见的动画。</h1>
+  <p class="sub">输入一个经济学问题，Aegis 为你生成一段讲解动画和逐段同步的讲稿。打开就能用，不需要配置任何环境。</p>
+
+  <div class="ask">
+    <textarea id="askBox" rows="3" placeholder="描述你想讲清楚的概念，例如：为什么对奢侈品征税，负担反而可能落在工人身上？用供求图演示税收归宿。"></textarea>
+    <div class="ask-foot">
+      <span class="ask-hint">⏎ 直接生成 · Shift+⏎ 换行</span>
+      <button class="go" id="goBtn" type="button"><span class="spinner"></span><span id="goText">生成动画</span></button>
+    </div>
+  </div>
+
+  <div class="ex-head">试试这些 —— 点一下直接开始</div>
+  <div class="examples">
+    <button class="ex" type="button" data-p="用供求图动态演示：为什么对奢侈品征税，税负最终落在谁头上？给出关键结论。">
+      <span class="kind">◈ 动态演示</span>
+      <span class="txt">用供求图动态演示：为什么对奢侈品征税，税负最终落在谁头上？给出关键结论。</span>
+    </button>
+    <button class="ex" type="button" data-p="逐步推导拉弗曲线为什么是倒 U 形，每推一步画出对应的图形变化。">
+      <span class="kind">◈ 步骤拆解</span>
+      <span class="txt">逐步推导拉弗曲线为什么是倒 U 形，每推一步画出对应的图形变化。</span>
+    </button>
+    <button class="ex" type="button" data-p="对比完全竞争和垄断下的消费者剩余，用并排的面积图展示两者的差异。">
+      <span class="kind">◈ 对比</span>
+      <span class="txt">对比完全竞争和垄断下的消费者剩余，用并排的面积图展示两者的差异。</span>
+    </button>
+  </div>
+
+  <div class="works-head">最近生成的作品</div>
+  <div class="works">
+    <button class="thumb" type="button">
+      <span class="art" style="background:linear-gradient(135deg,#2b4a6f,#4a8ed6)">📊</span>
+      <span class="dur">03:12</span><span class="cap">税收楔子如何挤出消费者剩余</span>
+    </button>
+    <button class="thumb" type="button">
+      <span class="art" style="background:linear-gradient(135deg,#5a3a6f,#a86fd6)">📈</span>
+      <span class="dur">02:40</span><span class="cap">拉弗曲线为什么是倒 U 形</span>
+    </button>
+    <button class="thumb" type="button">
+      <span class="art" style="background:linear-gradient(135deg,#2f5a4a,#5aba8a)">⚖️</span>
+      <span class="dur">04:05</span><span class="cap">埃奇沃斯盒：交换的效率</span>
+    </button>
+    <button class="thumb" type="button">
+      <span class="art" style="background:linear-gradient(135deg,#6f4a2b,#d69a5a)">🏦</span>
+      <span class="dur">02:58</span><span class="cap">货币政策如何传导到物价</span>
+    </button>
+  </div>
+</section>
+
+<!-- ═══ 状态二：工作台 ═══ -->
+<section class="bench" id="bench">
+  <div class="docked">
+    <textarea id="dockBox" rows="1"></textarea>
+    <button class="go" id="goBtn2" type="button" style="padding:9px 18px"><span class="spinner"></span><span id="goText2">重新生成</span></button>
+  </div>
+
+  <div class="bench-grid">
+    <div class="panel">
+      <div style="padding: 20px 24px; display: grid; gap: 16px;">
+        <details class="advanced">
+          <summary><span class="chevron">▶</span>高级设置<span class="help" style="margin-left:4px">模型、Key、渲染参数</span></summary>
+          <div class="advanced-body">
+            <div class="field">
+              <label>模型服务</label>
+              <select><option>智谱 GLM（内置试用）</option><option>MiniMax M3</option><option>OpenAI</option><option>Codex CLI（本机）</option></select>
+            </div>
+            <div class="field">
+              <label>API Key</label>
+              <input type="password" placeholder="仅用于本次请求，不写入仓库">
+              <div class="help">留空则使用内置试用额度。</div>
+            </div>
+            <div class="field">
+              <label>温度</label>
+              <input type="range" min="0" max="1" step="0.1" value="0.2">
+            </div>
+          </div>
+        </details>
+        <button class="btn" id="regen" type="button"><span class="spinner"></span><span>用这个描述重新生成</span></button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" data-pane="b-video">视频</button>
+        <button class="tab" role="tab" aria-selected="false" data-pane="b-works">作品仓库</button>
+        <button class="tab" role="tab" aria-selected="false" data-pane="b-script">同步讲稿</button>
+      </nav>
+      <div class="tabpane active" id="b-video">
+        <div class="video-empty" id="vempty">
+          <div class="play-dot">▶</div>
+          <b>正在为你的问题生成动画</b>
+          <small>通常需要 45–120 秒，可以先看看旁边的讲稿大纲。</small>
+        </div>
+        <div class="steps" id="steps">
+          <div class="step" data-s="1"><span class="dot"></span>生成 Manim 代码</div>
+          <div class="step" data-s="2"><span class="dot"></span>静态检查与修复</div>
+          <div class="step" data-s="3"><span class="dot"></span>渲染视频</div>
+          <div class="step" data-s="4"><span class="dot"></span>同步讲稿</div>
+        </div>
+      </div>
+      <div class="tabpane" id="b-works">
+        <div class="video-empty" style="padding:30px 20px">
+          <b>作品仓库</b>
+          <small>生成完成后可提交入库，公开作品可复用、评分。</small>
+        </div>
+      </div>
+      <div class="tabpane" id="b-script" style="font-size:0.92rem">
+        <p style="color:var(--text-2);margin-bottom:12px"><b style="color:var(--ink);background:var(--accent-tint);border-radius:4px;padding:0 3px">开场。</b>工资是你付出的劳动的价格，但雇主实际掏的钱更多——中间的差就是"税收楔子"。</p>
+        <p style="color:var(--text-2);margin-bottom:12px"><b style="color:var(--ink);background:var(--accent-tint);border-radius:4px;padding:0 3px">图形演示。</b>税后工资线与税前成本线之间的楔形空隙，同时抬高买方成本、压低卖方所得。</p>
+        <p style="color:var(--text-2)"><b style="color:var(--ink);background:var(--accent-tint);border-radius:4px;padding:0 3px">结论。</b>楔子越厚，成交量和双方福利同时收缩；三角形阴影就是无谓损失。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">诊断 /api/health · web_app_v20260429 · 仅用于本次请求的 Key 不入库</footer>
+
+<nav class="version-switch">
+  <a href="prototype-a.html">A · 晴空</a>
+  <a href="prototype-b.html">B · 奶油</a>
+  <a href="prototype-c.html">C · 夜航</a>
+  <a class="cur" href="prototype-d.html">D · 夜航 2.0</a>
+</nav>
+
+<script>
+// 主题切换
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const html = document.documentElement;
+  const toLight = html.getAttribute('data-theme') !== 'light';
+  html.setAttribute('data-theme', toLight ? 'light' : 'dark');
+  document.getElementById('themeBtn').textContent = toLight ? '☾ 暗色模式' : '☀︎ 亮色模式';
+});
+
+// 示例卡 / 作品缩略图 → 填入并发起生成
+function startFrom(text) {
+  document.getElementById('askBox').value = text;
+  generate();
+}
+document.querySelectorAll('.ex, .thumb').forEach(el => {
+  el.addEventListener('click', () => startFrom(el.dataset.p || '（示例作品：点击查看完整动画——原型演示）'));
+});
+
+// 生成：从舞台切到工作台，跑进度
+function generate() {
+  const text = document.getElementById('askBox').value.trim() || '（空）';
+  const stage = document.getElementById('stage');
+  const bench = document.getElementById('bench');
+  stage.classList.add('hidden');
+  bench.classList.add('show');
+  document.getElementById('dockBox').value = text;
+  window.scrollTo({ top: 0 });
+  runSteps();
+}
+
+function runSteps() {
+  const btn = document.getElementById('goBtn2');
+  const steps = [...document.querySelectorAll('.step')];
+  btn.classList.add('loading');
+  steps.forEach(s => s.classList.remove('on', 'done'));
+  document.getElementById('steps').classList.add('show');
+  const v = document.getElementById('vempty');
+  v.innerHTML = '<div class="play-dot">▶</div><b>正在为你的问题生成动画</b><small>通常需要 45–120 秒。</small>';
+  steps.forEach((s, i) => setTimeout(() => s.classList.add('on'), 500 + i * 900));
+  steps.forEach((s, i) => setTimeout(() => { s.classList.remove('on'); s.classList.add('done'); }, 1400 + i * 900));
+  setTimeout(() => {
+    btn.classList.remove('loading');
+    v.innerHTML = '<div class="play-dot">▶</div><b>原型演示 · 此处播放生成的视频</b><small>真实产品中这是 Manim 渲染出的 MP4。</small>';
+  }, 500 + steps.length * 900 + 400);
+}
+
+document.getElementById('goBtn').addEventListener('click', generate);
+document.getElementById('goBtn2').addEventListener('click', runSteps);
+
+// 输入框 Enter 直接生成，Shift+Enter 换行
+document.getElementById('askBox').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); generate(); }
+});
+
+// tabs
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', 'false'));
+    document.querySelectorAll('.tabpane').forEach(p => p.classList.remove('active'));
+    tab.setAttribute('aria-selected', 'true');
+    document.getElementById(tab.dataset.pane).classList.add('active');
+  });
+});
+</script>
+</body>
+</html>

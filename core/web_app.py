@@ -53,7 +53,7 @@ from vision_analysis import (
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-SYSTEM_PROMPT = load_system_prompt()
+SYSTEM_PROMPT = load_system_prompt()  # legacy snapshot; request paths must call load_system_prompt() so prompt edits hot-reload
 GENERATED_DIR = PROJECT_ROOT / "generated"
 RUNTIME_LOG_DIR = PROJECT_ROOT / "logs"
 RUNTIME_LOG_PATH = RUNTIME_LOG_DIR / "web_runtime.log"
@@ -72,14 +72,33 @@ VIDEO_CACHE_LOCK = threading.Lock()
 JOB_STORE: dict[str, dict[str, Any]] = {}
 JOB_STORE_LOCK = threading.Lock()
 
+
+def load_env_file() -> None:
+    """Load KEY=VALUE pairs from repo-root .env into os.environ (real env wins)."""
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+load_env_file()
+
 # Local trial plans (auto-detect env keys)
 LOCAL_TRIAL_PLANS = {
     "trial-minimax-direct": {
         "name": "免费试用 · MiniMax M3",
-        "description": "本地内测免费额度：直接使用 MiniMax M3，作为默认教学脚本生成模型。",
+        "description": "本地内测免费额度：通过 MiniMax Token Plan 调用 MiniMax M3，作为默认教学脚本生成模型。",
         "model_label": "MiniMax M3 试用",
         "attempts": (
-            {"provider_id": "minimax-coding-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M3"},
+            {"provider_id": "minimax-token-cn", "env": "MINIMAX_API_KEY", "model": "MiniMax-M3"},
         ),
     },
 }
@@ -280,12 +299,16 @@ def detect_scene_name(code: str, fallback: str) -> str:
     return fallback
 
 
-def render_scene(scene_file: Path, scene_name: str) -> None:
+RENDER_QUALITY_FLAGS = {"l": "-ql", "m": "-qm", "h": "-qh"}
+
+
+def render_scene(scene_file: Path, scene_name: str, quality: str = "m") -> None:
+    quality_flag = RENDER_QUALITY_FLAGS.get(quality, "-qm")
     cmd = [
         sys.executable,
         "-m",
         "manim",
-        "-ql",
+        quality_flag,
         "--media_dir",
         "media",
         str(scene_file),
@@ -494,6 +517,9 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
     endpoint = str(payload.get("endpoint", "")).strip()
     scene_name = safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
     no_render = bool(payload.get("noRender", False))
+    quality = str(payload.get("quality", "m")).strip().lower()
+    if quality not in RENDER_QUALITY_FLAGS:
+        quality = "m"
 
     try:
         temperature = float(payload.get("temperature", 0.2))
@@ -656,7 +682,7 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 base_url=base_url or None,
                 endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
                 model=active_model,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=load_system_prompt(),
                 user_prompt=effective_prompt,
                 temperature=temperature,
             )
@@ -813,7 +839,7 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 technical_message=f"RENDER_START file={scene_file.name} scene={detected_scene_name}",
                 attempt=attempt,
             )
-            render_scene(scene_file, detected_scene_name)
+            render_scene(scene_file, detected_scene_name, quality)
             video_path = find_latest_video(scene_file, detected_scene_name)
             if video_path is None:
                 raise RuntimeError("Render completed but output video was not found.")
@@ -839,9 +865,9 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 "ALIGNMENT_FALLBACK",
                 f"request_id={job_id} scene={detected_scene_name} reason=initial_response_uses_fast_metadata_alignment",
             )
-            response["message"] = "Code generated and video rendered successfully."
+            response["message"] = "动画生成完成，视频可以播放了。"
             if attempt > 1:
-                response["message"] += f" Auto-retry succeeded on attempt {attempt}."
+                response["message"] += f" 第 {attempt} 次自动重试成功。"
             append_runtime_log(
                 "RENDER_OK",
                 f"request_id={job_id} attempt={attempt}/{max_attempts} file={scene_file.name} scene={detected_scene_name} video={video_path}",
@@ -954,6 +980,7 @@ def make_index_html() -> str:
   <title>Aegis 可视化工作台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.1.0/style.css" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet" />
   <script>
     window.MathJax = {{
@@ -965,27 +992,55 @@ def make_index_html() -> str:
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <style>
     :root {{
-      --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", Georgia, serif;
+      --serif: "LXGW WenKai Screen", "LXGW WenKai", "Noto Serif SC", "PingFang SC", "Songti SC", serif;
       --sans: var(--serif);
-      --mono: "JetBrains Mono", "SF Mono", Consolas, "Noto Serif SC", monospace;
-      --bg: #f5f4ed;
-      --bg-2: #faf9f5;
-      --bg-3: #e8e6dc;
-      --fg: #141413;
-      --fg-bright: #141413;
-      --muted: #6b6a64;
-      --muted-2: #504e49;
-      --accent: #1B365D;
-      --accent-2: #2D5A8A;
-      --accent-3: #3d3d3a;
-      --danger: #8a4f3d;
-      --ok: #3f6b50;
-      --code-bg: #141413;
-      --border: #e8e6dc;
-      --border-light: #d6d2c4;
-      --pixel: #1B365D;
-      --radius: 8px;
+      --mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+      --bg: #17171b;
+      --bg-2: #1f1f26;
+      --bg-3: #2a2a33;
+      --fg: #f0f0f3;
+      --fg-bright: #f0f0f3;
+      --muted: rgba(235, 235, 245, 0.62);
+      --muted-2: rgba(235, 235, 245, 0.80);
+      --accent: #4a8ed6;
+      --accent-2: #78b4f0;
+      --accent-3: #d6d6de;
+      --danger: #cf7a5f;
+      --ok: #6fae8a;
+      --code-bg: #121216;
+      --border: rgba(255, 255, 255, 0.10);
+      --border-light: rgba(255, 255, 255, 0.18);
+      --pixel: #78b4f0;
+      --radius: 12px;
+      --radius-lg: 16px;
       --speed: 200ms;
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+      --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+      --accent-tint: rgba(120, 180, 240, 0.16);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.30);
+      --shadow-md: 0 16px 42px rgba(0, 0, 0, 0.45);
+    }}
+    [data-theme="light"] {{
+      --bg: #f2f2f7;
+      --bg-2: #fffdf8;
+      --bg-3: #e9e9ee;
+      --fg: #1c1c1e;
+      --fg-bright: #1c1c1e;
+      --muted: rgba(60, 60, 67, 0.62);
+      --muted-2: rgba(60, 60, 67, 0.80);
+      --accent: #2f6cb3;
+      --accent-2: #2b6cb8;
+      --accent-3: #3d3d3a;
+      --danger: #b3563e;
+      --ok: #3f7a5a;
+      --code-bg: #2a2a33;
+      --border: rgba(60, 60, 60, 0.12);
+      --border-light: rgba(60, 60, 60, 0.22);
+      --pixel: #2f6cb3;
+      --accent-tint: rgba(120, 180, 240, 0.16);
+      --shadow-sm: 0 1px 2px rgba(37, 55, 84, 0.05), 0 4px 16px rgba(37, 55, 84, 0.06);
+      --shadow-md: 0 16px 42px rgba(37, 55, 84, 0.10);
     }}
 
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -1340,6 +1395,7 @@ def make_index_html() -> str:
       gap: 10px;
     }}
     .process-panel.visible {{ display: grid; animation: field-in 240ms ease-out; }}
+    .process-panel {{ position: relative; }}
 
     .process-head {{
       display: flex;
@@ -1413,6 +1469,32 @@ def make_index_html() -> str:
     .process-step.done .process-dot {{
       border-color: var(--ok);
       background: var(--ok);
+    }}
+    .process-panel.working .process-head #processMessage::after {{
+      content: "\u2026";
+      display: inline-block;
+      margin-left: 2px;
+      animation: think-dots 1.2s ease-in-out infinite;
+    }}
+    .process-panel.working::after {{
+      content: "";
+      position: absolute;
+      top: 0;
+      left: -30%;
+      width: 30%;
+      height: 2px;
+      border-radius: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0.65;
+      animation: shimmer-slide 1.5s linear infinite;
+    }}
+    @keyframes think-dots {{
+      0%, 100% {{ opacity: 0.25; }}
+      50% {{ opacity: 1; }}
+    }}
+    @keyframes shimmer-slide {{
+      from {{ transform: translateX(0); }}
+      to {{ transform: translateX(433%); }}
     }}
 
     /* ── Result Panel ── */
@@ -1891,41 +1973,340 @@ def make_index_html() -> str:
       50% {{ opacity: 1; }}
     }}
 
+
+    /* ════════ D 夜航 2.0 覆盖层 ════════ */
+    body::before {{ content: none; }}
+    body {{
+      font-size: 15px;
+      transition: background 250ms ease, color 250ms ease;
+    }}
+
+    /* 顶栏 */
+    .topbar {{
+      position: sticky; top: 0; z-index: 30;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 22px;
+      background: color-mix(in srgb, var(--bg-2) 72%, transparent);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      border-bottom: 1px solid var(--border);
+    }}
+    .topbar .brand {{ display: flex; align-items: center; gap: 10px; font-size: 1.02rem; color: var(--fg-bright); }}
+    .topbar .ghost-btn {{ padding: 10px 18px; }}
+    .brand-mark {{
+      display: grid; place-items: center; width: 30px; height: 30px;
+      border-radius: 9px; background: var(--accent); color: #fffdf8;
+      font-size: 1.05rem; line-height: 1; box-shadow: var(--shadow-sm);
+    }}
+
+    /* 按钮通用：手写信 + 按压反馈 */
+    .btn, .tiny-btn, .ghost-btn, .go {{ font-family: inherit; }}
+    .btn {{ text-transform: none; letter-spacing: 0.04em; border-radius: 12px; }}
+    .tiny-btn {{ border-radius: 10px; }}
+    .ghost-btn {{ background: transparent; white-space: nowrap; }}
+    .ghost-btn:hover {{ background: var(--bg-3); }}
+    .btn:active, .tiny-btn:active, .ghost-btn:active, .go:active {{ transform: scale(0.97); }}
+    :focus-visible {{ outline: none; box-shadow: 0 0 0 3px var(--accent-tint), 0 0 0 1.5px var(--accent-2); }}
+    input:focus, select:focus, textarea:focus {{
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px var(--accent-tint);
+      background: var(--bg-card, var(--bg-2));
+    }}
+    input, select, textarea {{ background: var(--bg-2); border-radius: 12px; }}
+    ::placeholder {{ color: var(--muted); opacity: 1; }}
+
+    label {{
+      text-transform: none; font-family: inherit;
+      font-size: 0.87rem; color: var(--muted); letter-spacing: 0;
+    }}
+
+    .panel {{ border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }}
+    .shell > .panel, .result-wrap, .lesson-pair, .rpane, .code-section {{ min-width: 0; }}
+
+    .tag, .provider-pill {{
+      background: var(--accent-tint); color: var(--accent-2);
+      border-color: transparent; font-family: var(--mono); font-size: 0.72rem;
+    }}
+    .hero small {{ background: var(--accent-tint); border-color: transparent; color: var(--accent-2); }}
+
+    .status-box {{ background: var(--bg-2); }}
+    .status-box.error {{ background: rgba(207, 122, 95, 0.12); color: var(--danger); }}
+    .status-box.success {{ background: rgba(111, 174, 138, 0.12); color: var(--ok); }}
+
+    /* ── 落地舞台（landing）── */
+    body.landing .bench {{ display: none; }}
+    body:not(.landing) .stage {{ display: none; }}
+    .stage {{ max-width: 780px; margin: 0 auto; padding: 9vh 24px 70px; text-align: center; }}
+    .kicker {{
+      font-size: 0.82rem; letter-spacing: 0.2em; color: var(--accent-2);
+      animation: stage-rise var(--speed) ease-out both; animation-duration: 560ms;
+      animation-timing-function: var(--ease-soft);
+    }}
+    .stage h1 {{
+      margin-top: 14px;
+      font-size: clamp(1.9rem, 4.6vw, 2.9rem);
+      font-weight: 600; line-height: 1.22; letter-spacing: -0.015em;
+      color: var(--fg-bright);
+      animation: stage-rise 560ms var(--ease-soft) 80ms both;
+    }}
+    .stage-sub {{
+      margin: 14px auto 0; max-width: 34em; color: var(--muted);
+      animation: stage-rise 560ms var(--ease-soft) 160ms both;
+    }}
+    @keyframes stage-rise {{
+      from {{ opacity: 0; transform: translateY(14px); }}
+      to {{ opacity: 1; transform: translateY(0); }}
+    }}
+    .ask {{
+      margin: 34px auto 0; max-width: 680px;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 20px; box-shadow: var(--shadow-md);
+      padding: 16px 16px 12px; text-align: left;
+      transition: border-color var(--speed) ease, box-shadow var(--speed) ease;
+      animation: stage-rise 560ms var(--ease-soft) 240ms both;
+    }}
+    .ask:focus-within {{ border-color: var(--accent-2); box-shadow: 0 0 0 3px var(--accent-tint), var(--shadow-md); }}
+    .ask textarea {{
+      width: 100%; border: none; background: transparent; color: var(--fg);
+      font: inherit; line-height: 1.6; min-height: 84px; resize: none; outline: none;
+      box-shadow: none;
+    }}
+    .ask textarea:focus {{ box-shadow: none; border: none; }}
+    .ask-foot {{ display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }}
+    .ask-hint {{ font-size: 0.76rem; color: var(--muted); padding-left: 4px; }}
+    .go {{
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 22px; font-size: 0.95rem; letter-spacing: 0.04em;
+      color: #fffdf8; background: var(--accent); border-radius: 12px;
+      box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 30%, transparent);
+    }}
+    .go:hover {{ background: color-mix(in srgb, var(--accent) 92%, black); }}
+    .go .spinner {{
+      width: 14px; height: 14px; border-radius: 50%; display: none;
+      border: 2px solid rgba(255, 253, 248, 0.35); border-top-color: #fffdf8;
+      animation: go-spin 0.8s linear infinite;
+    }}
+    @keyframes go-spin {{ to {{ transform: rotate(360deg); }} }}
+
+    .ex-head {{ margin: 40px 0 14px; font-size: 0.84rem; color: var(--muted); }}
+    .examples {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
+    .ex {{
+      text-align: left; background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 14px; padding: 14px 16px; color: var(--muted);
+      font: inherit; line-height: 1.55;
+      transition: border-color var(--speed) ease, box-shadow var(--speed) ease,
+                  transform var(--speed) var(--ease-out);
+      animation: stage-rise 560ms var(--ease-soft) both;
+    }}
+    .ex:nth-of-type(1) {{ animation-delay: 380ms; }}
+    .ex:nth-of-type(2) {{ animation-delay: 440ms; }}
+    .ex:nth-of-type(3) {{ animation-delay: 500ms; }}
+    .ex:hover {{ border-color: var(--border-light); box-shadow: var(--shadow-sm); transform: translateY(-2px); }}
+    .ex .kind {{ display: block; font-size: 0.76rem; color: var(--accent-2); margin-bottom: 6px; }}
+    .ex .txt {{
+      font-size: 0.86rem; display: -webkit-box;
+      -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }}
+
+    .works-head {{ margin: 46px 0 14px; font-size: 0.84rem; color: var(--muted); }}
+    .works {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }}
+    .thumb {{
+      position: relative; aspect-ratio: 16 / 10; border-radius: 12px; overflow: hidden;
+      border: 1px solid var(--border); text-align: left; padding: 0;
+      background: var(--bg-3);
+    }}
+    .thumb .art {{
+      position: absolute; inset: 0; display: grid; place-items: center;
+      font-size: 1.6rem; color: rgba(255, 255, 255, 0.9);
+      transition: transform 250ms var(--ease-out);
+    }}
+    .thumb:hover .art {{ transform: scale(1.06); }}
+    .thumb .dur {{
+      position: absolute; right: 6px; bottom: 6px;
+      font-size: 0.68rem; color: #fff; background: rgba(0, 0, 0, 0.55);
+      padding: 1px 7px; border-radius: 999px;
+    }}
+    .thumb .cap {{
+      position: absolute; left: 0; right: 0; bottom: 0;
+      padding: 20px 10px 7px; font-size: 0.76rem; color: #fff; text-align: left;
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }}
+
+    /* ── 工作台（bench）── */
+    .bench .advanced {{
+      border: 1px solid var(--border); border-radius: 12px;
+      background: color-mix(in srgb, var(--bg) 40%, var(--bg-2));
+      overflow: hidden;
+    }}
+    .bench .advanced summary {{
+      list-style: none; cursor: pointer; user-select: none;
+      padding: 11px 15px; font-size: 0.87rem; color: var(--muted);
+      display: flex; align-items: center; gap: 8px;
+    }}
+    .bench .advanced summary::-webkit-details-marker {{ display: none; }}
+    .bench .advanced summary:hover {{ color: var(--fg); }}
+    .chevron {{ transition: transform var(--speed) var(--ease-drawer); font-size: 0.7rem; }}
+    .advanced[open] .chevron {{ transform: rotate(90deg); }}
+    .advanced-body {{ padding: 4px 15px 16px; display: grid; gap: 14px; }}
+    .advanced-body .field, .advanced-body .row {{ animation: none; }}
+
+    /* 右栏 tabs */
+    .rtabs {{
+      display: flex; gap: 4px; padding: 12px 16px 0;
+      border-bottom: 1px solid var(--border);
+    }}
+    .rtab {{
+      padding: 8px 16px 10px; font-size: 0.9rem; color: var(--muted);
+      background: transparent; border: none; border-radius: 10px 10px 0 0;
+      position: relative; font-family: inherit;
+    }}
+    .rtab::after {{
+      content: ''; position: absolute; left: 14px; right: 14px; bottom: 0;
+      height: 2px; border-radius: 2px; background: transparent;
+      transition: background var(--speed) var(--ease-out);
+    }}
+    .rtab[aria-selected="true"] {{ color: var(--fg-bright); }}
+    .rtab[aria-selected="true"]::after {{ background: var(--accent-2); }}
+    .rtab:hover {{ color: var(--fg); }}
+    .rpane {{ display: none; }}
+    .rpane.active {{ display: block; }}
+    .lesson-pair {{ display: block; }}
+    body.learning-mode .lesson-pair {{ display: block; }}
+    body.learning-mode .code-section {{ display: grid; }}
+    .video-card video {{ width: 100%; border-radius: 14px; background: var(--code-bg); }}
+    .video-actions {{ display: flex; justify-content: flex-end; margin-bottom: 10px; }}
+    .video-empty {{
+      border-radius: 14px; padding: 40px 24px;
+      background:
+        radial-gradient(120% 90% at 50% 0%, var(--accent-tint), transparent 60%),
+        color-mix(in srgb, var(--bg) 55%, var(--bg-2));
+      border: 1px dashed var(--border-light);
+      display: grid; place-items: center; gap: 10px; text-align: center;
+      color: var(--muted);
+    }}
+    .video-empty b {{ color: var(--fg); font-weight: 600; }}
+    .video-empty small {{ max-width: 36ch; }}
+    .play-dot {{
+      width: 50px; height: 50px; border-radius: 50%;
+      display: grid; place-items: center;
+      background: var(--bg-2); color: var(--accent-2);
+      box-shadow: var(--shadow-md); font-size: 1.05rem; padding-left: 3px;
+    }}
+
+    .foot {{ font-size: 0.75rem; color: var(--muted); }}
+
+    /* 旧 CSS 硬编码浅色背景的暗色修复 */
+    .vision-drop-zone {{
+      background: color-mix(in srgb, var(--bg) 50%, var(--bg-2));
+      border: 1px dashed var(--border-light); color: var(--muted);
+    }}
+    .vision-drop-zone.drag-over {{ background: var(--accent-tint); border-color: var(--accent-2); }}
+    .vision-confirm-card {{ background: var(--bg-2); border-color: var(--border-light); }}
+    .prompt-preview {{ background: var(--bg-2); border-color: var(--border-light); color: var(--fg); }}
+    .rich-text code {{ background: var(--accent-tint); border-color: transparent; color: var(--accent-2); }}
+    .process-panel {{ background: var(--bg-2); border-color: var(--border); color: var(--fg); }}
+    .process-feed-item {{ background: transparent; color: var(--muted-2); }}
+    .process-feed {{ background: transparent; }}
+    .video-card {{ background: var(--code-bg); border-color: var(--border); }}
+    .alignment-panel {{ background: var(--bg-2); border-color: var(--border); }}
+    .tech-details, .tech-log {{ background: transparent; color: var(--muted); }}
+    .warning-box {{ background: var(--accent-tint); border-color: var(--border-light); color: var(--fg); }}
+    .community-hub {{ background: var(--bg-2); border-color: var(--border); }}
+    .community-search-row input {{ background: var(--bg); border-color: var(--border); }}
+    .community-work-card {{ background: var(--bg-3); border-color: var(--border); }}
+    .community-search-status, .community-actions {{ background: transparent; color: var(--muted); }}
+    .review-controls select {{ background: var(--bg-2); }}
+    .review-controls input {{ background: var(--bg); }}
+    .review-item {{ background: var(--bg-3); border-color: var(--border); }}
+    .alignment-warning {{ background: var(--accent-tint); border-color: var(--border-light); color: var(--fg); }}
+
+    /* 滚动条：MD3 极细 */
+    ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+    ::-webkit-scrollbar-track {{ background: transparent; }}
+    ::-webkit-scrollbar-thumb {{ background: var(--border-light); border-radius: 999px; }}
+    ::-webkit-scrollbar-thumb:hover {{ background: var(--muted); }}
+
+    @media (max-width: 960px) {{
+      .stage {{ padding: 6vh 18px 60px; }}
+      .examples {{ grid-template-columns: 1fr; }}
+      .works {{ grid-template-columns: repeat(2, 1fr); }}
+      .video-actions .ghost-btn {{ padding: 12px 20px; min-height: 44px; }}
+      .topbar .ghost-btn {{ padding: 10px 16px; min-height: 44px; }}
+    }}
+    @media (prefers-reduced-motion: reduce) {{
+      * {{ animation-duration: 0.2s !important; transition-duration: 0.2s !important; }}
+      .process-panel.working::after, .process-panel.working .process-head #processMessage::after {{ animation: none !important; }}
+      .stage h1, .stage-sub, .kicker, .ask, .ex {{ transform: none !important; }}
+    }}
   </style>
 </head>
-<body>
+<body class="landing">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">A</span>Aegis</div>
+    <nav>
+      <a class="ghost-btn" href="/instant-svg/" style="text-decoration: none; display: inline-flex; align-items: center;">Instant SVG</a>
+      <button id="themeBtn" class="ghost-btn" type="button">☀︎ 亮色模式</button>
+    </nav>
+  </header>
+
+  <section class="stage" id="stage">
+    <div class="kicker">AI 经济学教学动画</div>
+    <h1>把讲不透的概念，<br />变成看得见的动画。</h1>
+    <p class="stage-sub">输入一个经济学问题，Aegis 为你生成一段讲解动画和逐段同步的讲稿。打开就能用，不需要配置任何环境。</p>
+
+    <div class="ask">
+      <textarea id="stagePrompt" rows="3" placeholder="描述你想讲清楚的概念，例如：为什么对奢侈品征税，负担反而可能落在工人身上？用供求图演示税收归宿。"></textarea>
+      <div class="ask-foot">
+        <span class="ask-hint">⏎ 直接生成 · Shift+⏎ 换行</span>
+        <button id="stageGo" class="go" type="button"><span class="spinner"></span><span>生成动画</span></button>
+      </div>
+    </div>
+
+    <div class="ex-head">试试这些 —— 点一下直接开始</div>
+    <div class="examples">
+      <button class="ex" type="button" data-p="用供求图动态演示：为什么对奢侈品征税，税负最终落在谁头上？给出关键结论。">
+        <span class="kind">◈ 动态演示</span>
+        <span class="txt">用供求图动态演示：为什么对奢侈品征税，税负最终落在谁头上？给出关键结论。</span>
+      </button>
+      <button class="ex" type="button" data-p="逐步推导拉弗曲线为什么是倒 U 形，每推一步画出对应的图形变化。">
+        <span class="kind">◈ 步骤拆解</span>
+        <span class="txt">逐步推导拉弗曲线为什么是倒 U 形，每推一步画出对应的图形变化。</span>
+      </button>
+      <button class="ex" type="button" data-p="对比完全竞争和垄断下的消费者剩余，用并排的面积图展示两者的差异。">
+        <span class="kind">◈ 对比</span>
+        <span class="txt">对比完全竞争和垄断下的消费者剩余，用并排的面积图展示两者的差异。</span>
+      </button>
+    </div>
+
+    <div class="works-head">热门教学话题 —— 点一下，直接生成</div>
+    <div class="works">
+      <button class="thumb" type="button" data-q="税收楔子">
+        <span class="art" style="background:linear-gradient(135deg,#2b4a6f,#4a8ed6)">📊</span>
+        <span class="dur">03:12</span><span class="cap">税收楔子如何挤出消费者剩余</span>
+      </button>
+      <button class="thumb" type="button" data-q="拉弗曲线">
+        <span class="art" style="background:linear-gradient(135deg,#5a3a6f,#a86fd6)">📈</span>
+        <span class="dur">02:40</span><span class="cap">拉弗曲线为什么是倒 U 形</span>
+      </button>
+      <button class="thumb" type="button" data-q="埃奇沃斯盒">
+        <span class="art" style="background:linear-gradient(135deg,#2f5a4a,#5aba8a)">⚖️</span>
+        <span class="dur">04:05</span><span class="cap">埃奇沃斯盒：交换的效率</span>
+      </button>
+      <button class="thumb" type="button" data-q="货币政策">
+        <span class="art" style="background:linear-gradient(135deg,#6f4a2b,#d69a5a)">🏦</span>
+        <span class="dur">02:58</span><span class="cap">货币政策如何传导到物价</span>
+      </button>
+    </div>
+  </section>
+
+  <div class="bench">
   <main class="shell">
     <section class="panel">
-      <header class="hero">
-        <h1>Aegis 经济学动画工作台</h1>
-        <p>把一道经济学问题、一张图或一段文字，转成可播放的 Manim 教学动画。</p>
-        <small>API Key 只用于本次生成，不写入仓库。</small>
-      </header>
-
       <form id="generate-form" class="form-wrap">
         <div class="field">
-          <label for="provider">模型服务</label>
-          <select id="provider" name="provider"></select>
-          <div class="provider-meta">
-            <span id="providerRegion" class="provider-pill">-</span>
-            <span id="providerProtocol" class="provider-pill">-</span>
-            <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
-          </div>
-          <div id="providerHelp" class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。</div>
-        </div>
-
-        <div id="apiKeyField" class="field">
-          <label id="apiKeyLabel" for="apiKey">API Key</label>
-          <div class="key-row">
-            <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" />
-            <button id="toggleKey" class="tiny-btn" type="button">显示</button>
-          </div>
-          <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
-        </div>
-
-        <div class="field">
-          <label for="prompt">你要讲清楚的问题</label>
-          <textarea id="prompt" name="prompt" placeholder="例如：我不理解税收楔子如何导致无谓损失，请做动态演示并给出关键结论。" required></textarea>
+          <label for="prompt">你要讲清楚的问题 <span class="help" id="promptCounter">0 / 2000</span></label>
+          <textarea id="prompt" name="prompt" maxlength="2000" placeholder="描述你想讲清楚的概念、题目或现象。太长的背景资料会拖慢生成，建议一次聚焦一个概念。" required></textarea>
           <div id="promptPreview" class="prompt-preview">
             <span class="prompt-preview-label">公式预览</span>
             <div id="promptPreviewContent" class="rich-text"></div>
@@ -1952,6 +2333,31 @@ def make_index_html() -> str:
           </div>
         </div>
 
+        <button id="submitBtn" class="btn" type="submit">生成动画</button>
+
+        <details class="advanced">
+          <summary><span class="chevron">▶</span>高级设置<span class="help" style="margin-left:4px">模型服务、API Key、渲染参数</span></summary>
+          <div class="advanced-body">
+        <div class="field">
+          <label for="provider">模型服务</label>
+          <select id="provider" name="provider"></select>
+          <div class="provider-meta">
+            <span id="providerRegion" class="provider-pill">-</span>
+            <span id="providerProtocol" class="provider-pill">-</span>
+            <a id="providerDoc" class="provider-doc hidden" href="#" target="_blank" rel="noreferrer">文档</a>
+          </div>
+          <div id="providerHelp" class="help">支持智谱、OpenAI-Compatible、本地 Codex 代理、MiniMax Token/Coding Plan。</div>
+        </div>
+
+        <div id="apiKeyField" class="field">
+          <label id="apiKeyLabel" for="apiKey">API Key</label>
+          <div class="key-row">
+            <input id="apiKey" name="apiKey" type="password" placeholder="输入你自己的 API Key" />
+            <button id="toggleKey" class="tiny-btn" type="button">显示</button>
+          </div>
+          <div id="apiKeyHelp" class="help">Key 仅用于本次请求，不写入仓库；本地代理如果不需要鉴权可以留空。</div>
+        </div>
+
         <div class="row">
           <div class="field">
             <label for="model">模型</label>
@@ -1975,12 +2381,22 @@ def make_index_html() -> str:
           </div>
         </div>
 
+        <div class="field">
+          <label for="renderQuality">视频清晰度</label>
+          <select id="renderQuality" name="renderQuality">
+            <option value="l">低 · 480p（最快）</option>
+            <option value="m" selected>中 · 720p（推荐）</option>
+            <option value="h">高 · 1080p（最慢）</option>
+          </select>
+        </div>
+
         <label class="check-row" for="noRender">
           <input id="noRender" name="noRender" type="checkbox" />
           只生成代码，不渲染视频（调试模式）
         </label>
 
-        <button id="submitBtn" class="btn" type="submit">生成动画草稿</button>
+          </div>
+        </details>
         <div id="processPanel" class="process-panel">
           <div class="process-head">
             <span id="processMessage">正在准备任务...</span>
@@ -2035,11 +2451,25 @@ def make_index_html() -> str:
           <pre id="codeOutput"># 生成的 Manim 代码会显示在这里</pre>
         </section>
 
+        <nav class="rtabs" role="tablist">
+          <button class="rtab" type="button" data-pane="pane-video" aria-selected="true">视频</button>
+          <button class="rtab" type="button" data-pane="pane-works" aria-selected="false">作品仓库</button>
+          <button class="rtab" type="button" data-pane="pane-script" aria-selected="false">同步讲稿</button>
+          <button class="rtab" type="button" data-pane="pane-review" aria-selected="false">审阅</button>
+        </nav>
         <div class="lesson-pair">
+          <div class="rpane active" id="pane-video">
+          <div id="videoEmpty" class="video-empty">
+            <div class="play-dot">▶</div>
+            <b>生成后，视频会出现在这里</b>
+            <small>通常需要 45–120 秒。左侧点「生成动画」开始。</small>
+          </div>
+          <div class="video-actions"><button id="downloadVideoBtn" class="ghost-btn" type="button" style="display: none;">⤓ 下载视频</button></div>
           <div id="videoCard" class="video-card">
             <video id="videoPlayer" controls preload="metadata"></video>
           </div>
-
+          </div>
+          <div class="rpane" id="pane-works">
           <section id="communityHub" class="community-hub">
             <div class="community-hub-head">
               <div>
@@ -2067,7 +2497,8 @@ def make_index_html() -> str:
               <button class="ghost-btn rating-btn" type="button" data-rating="1">1分</button>
             </div>
           </div>
-
+          </div>
+          <div class="rpane" id="pane-script">
           <section id="alignmentPanel" class="alignment-panel">
             <div class="alignment-head">
               <div>
@@ -2079,7 +2510,8 @@ def make_index_html() -> str:
             <div id="alignmentWarning" class="alignment-warning"></div>
             <div id="alignmentList" class="alignment-list"></div>
           </section>
-
+          </div>
+          <div class="rpane" id="pane-review">
           <details id="reviewPanel" class="review-panel">
             <summary>管理员审阅队列 · 候选仓库审阅</summary>
             <div class="review-controls">
@@ -2094,12 +2526,15 @@ def make_index_html() -> str:
             <div id="reviewQueueStatus">输入审阅 Token 后刷新候选队列。</div>
             <div id="reviewQueueList" class="review-list"></div>
           </details>
+          </div>
+        </div>
         </div>
 
         <div class="foot">诊断入口：<b>/api/health</b> 与 <b>/api/bugs/recent?limit=20</b></div>
       </div>
     </section>
   </main>
+  </div>
 
   <script>
     const PROVIDER_CONFIG = {provider_config_json};
@@ -2281,6 +2716,12 @@ def make_index_html() -> str:
       statusBox.textContent = message;
     }}
 
+    function friendlyError(err, fallback) {{
+      const raw = err && err.message ? err.message : "";
+      if (/render backend/i.test(raw)) return "作品仓库服务当前未连接（本地模式）。生成动画不受影响。";
+      return raw || fallback;
+    }}
+
     function textHasRichSyntax(text) {{
       return /(\\$\\$[\\s\\S]+?\\$\\$|\\\\\\[[\\s\\S]+?\\\\\\]|\\\\\\([\\s\\S]+?\\\\\\)|\\$[^$\\n]+\\$|\\*\\*[^*]+\\*\\*|`[^`]+`|^\\s*#{{1,4}}\\s+)/m.test(text || "");
     }}
@@ -2346,6 +2787,10 @@ def make_index_html() -> str:
 
     function updatePromptPreview() {{
       const text = promptInput.value || "";
+      const counter = document.getElementById("promptCounter");
+      if (counter) {{
+        counter.textContent = text.length + " / 2000";
+      }}
       if (!textHasRichSyntax(text)) {{
         promptPreview.classList.remove("visible");
         promptPreviewContent.replaceChildren();
@@ -2419,6 +2864,7 @@ def make_index_html() -> str:
     }}
 
     function setProcessStage(stageIndex) {{
+      processPanel.classList.add("working");
       processSteps.forEach((step, index) => {{
         step.classList.toggle("done", index < stageIndex);
         step.classList.toggle("active", index === stageIndex);
@@ -2450,6 +2896,11 @@ def make_index_html() -> str:
       updateProcess();
       if (processTimer) window.clearInterval(processTimer);
       processTimer = window.setInterval(updateProcess, 1000);
+      const videoEmpty = document.getElementById("videoEmpty");
+      if (videoEmpty) {{
+        videoEmpty.style.display = "grid";
+        videoEmpty.innerHTML = '<div class="play-dot">▶</div><b>正在为你的问题生成动画…</b><small>通常需要 45–120 秒。可以切到「同步讲稿」先看大纲。</small>';
+      }}
     }}
 
     function stopProcess() {{
@@ -2459,7 +2910,25 @@ def make_index_html() -> str:
       }}
       processStartedAt = 0;
       processPanel.classList.remove("visible");
+      processPanel.classList.remove("working");
       processSteps.forEach((step) => step.classList.remove("active", "done"));
+    }}
+
+    function finishProcess() {{
+      if (processTimer) {{
+        window.clearInterval(processTimer);
+        processTimer = null;
+      }}
+      processStartedAt = 0;
+      processPanel.classList.remove("working");
+      processSteps.forEach((step) => {{
+        step.classList.remove("active");
+        step.classList.add("done");
+      }});
+      processMessage.textContent = "全部步骤完成，视频可以播放了。";
+      window.setTimeout(() => {{
+        processPanel.classList.remove("visible");
+      }}, 3000);
     }}
 
     function resetProcessDetails() {{
@@ -2586,6 +3055,7 @@ def make_index_html() -> str:
 
     async function searchCommunityRepository(payload = {{}}) {{
       communitySearchBtn.disabled = true;
+      let backendUnavailable = false;
       const query = communitySearchInput.value.trim() || payload.prompt || promptInput.value.trim();
       setCommunitySearchStatus("正在搜索作品仓库...");
       try {{
@@ -2593,10 +3063,21 @@ def make_index_html() -> str:
         renderCommunitySearchResults(items, payload);
         return items;
       }} catch (err) {{
-        setCommunitySearchStatus(err && err.message ? err.message : "仓库搜索失败，仍可直接生成。", "warn");
+        const rawMsg = err && err.message ? err.message : "";
+        if (/render backend/i.test(rawMsg)) {{
+          backendUnavailable = true;
+          setCommunitySearchStatus("作品仓库服务当前未连接（本地模式）。生成动画不受影响；部署渲染后端后即可复用社区作品。", "warn");
+          communitySearchBtn.disabled = true;
+          communitySearchInput.disabled = true;
+          communitySearchInput.placeholder = "仓库服务未连接";
+        }} else {{
+          setCommunitySearchStatus(rawMsg || "仓库搜索失败，仍可直接生成。", "warn");
+        }}
         return [];
       }} finally {{
-        communitySearchBtn.disabled = false;
+        if (!backendUnavailable) {{
+          communitySearchBtn.disabled = false;
+        }}
       }}
     }}
 
@@ -2662,7 +3143,7 @@ def make_index_html() -> str:
         setCommunitySearchStatus("已提交候选仓库，审阅通过后会出现在公开搜索里。", "success");
         setStatus("已提交到候选仓库，审阅通过后进入社区复用库。", "success");
       }} catch (err) {{
-        setStatus(err && err.message ? err.message : "提交失败", "error");
+        setStatus(friendlyError(err, "提交失败"), "error");
       }} finally {{
         publishWorkBtn.disabled = false;
       }}
@@ -2680,7 +3161,7 @@ def make_index_html() -> str:
         if (!response.ok || !data.ok) throw new Error(data.error || "评分失败");
         setStatus("评分已保存，谢谢反馈。", "success");
       }} catch (err) {{
-        setStatus(err && err.message ? err.message : "评分失败", "error");
+        setStatus(friendlyError(err, "评分失败"), "error");
       }}
     }}
 
@@ -2763,7 +3244,12 @@ def make_index_html() -> str:
         if (!response.ok || !data.ok) throw new Error(data.error || "刷新失败");
         renderReviewQueue(Array.isArray(data.items) ? data.items : []);
       }} catch (err) {{
-        setReviewStatus(err && err.message ? err.message : "刷新失败");
+        const rawMsg = err && err.message ? err.message : "";
+        if (/render backend/i.test(rawMsg)) {{
+          setReviewStatus("审阅服务当前未连接（本地模式）。部署渲染后端后即可使用审阅队列。");
+        }} else {{
+          setReviewStatus(rawMsg || "刷新失败");
+        }}
       }} finally {{
         loadReviewQueueBtn.disabled = false;
       }}
@@ -2940,7 +3426,24 @@ def make_index_html() -> str:
       if (data.videoId) {{
         videoPlayer.src = "/api/video/" + data.videoId;
         videoCard.classList.add("visible");
+        const videoEmpty = document.getElementById("videoEmpty");
+        if (videoEmpty) {{
+          videoEmpty.style.display = "none";
+        }}
         enterLearningMode();
+        finishProcess();
+        const dlBtn = document.getElementById("downloadVideoBtn");
+        if (dlBtn) {{
+          dlBtn.style.display = "inline-flex";
+          dlBtn.onclick = function () {{
+            const a = document.createElement("a");
+            a.href = videoPlayer.src;
+            a.download = (latestSceneName || "aegis-animation") + ".mp4";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }};
+        }}
         if (data.alignment) {{
           setAlignment(data.alignment);
         }} else {{
@@ -3214,6 +3717,7 @@ def make_index_html() -> str:
         endpoint: preset.serverManaged ? "" : baseUrlInput.value.trim(),
         sceneName: document.getElementById("sceneName").value.trim() || "GeneratedScene",
         temperature: Number(document.getElementById("temperature").value || 0.2),
+        quality: (document.getElementById("renderQuality") || {{}}).value || "m",
         noRender: document.getElementById("noRender").checked
       }};
       latestPrompt = payload.prompt;
@@ -3298,6 +3802,80 @@ def make_index_html() -> str:
     renderProviderOptions();
     updateProviderUI(false);
     updatePromptPreview();
+  </script>
+  <script>
+
+    // ── D 夜航 2.0：主题 / 落地舞台 / 右栏 Tabs ──
+    (function () {{
+      var root = document.documentElement;
+      var saved = null;
+      try {{ saved = localStorage.getItem("aegis-theme"); }} catch (e) {{}}
+      if (saved === "light") {{ root.setAttribute("data-theme", "light"); }}
+      var themeBtn = document.getElementById("themeBtn");
+      function themeLabel() {{
+        themeBtn.textContent = root.getAttribute("data-theme") === "light" ? "☾ 暗色模式" : "☀︎ 亮色模式";
+      }}
+      themeLabel();
+      themeBtn.addEventListener("click", function () {{
+        var toLight = root.getAttribute("data-theme") !== "light";
+        if (toLight) {{ root.setAttribute("data-theme", "light"); }} else {{ root.removeAttribute("data-theme"); }}
+        try {{ localStorage.setItem("aegis-theme", toLight ? "light" : "dark"); }} catch (e) {{}}
+        themeLabel();
+      }});
+
+      function enterBench() {{
+        document.body.classList.remove("landing");
+        window.scrollTo(0, 0);
+      }}
+      var stagePrompt = document.getElementById("stagePrompt");
+      function startFromStage() {{
+        var text = stagePrompt.value.trim();
+        if (!text) {{ stagePrompt.focus(); return; }}
+        var promptBox = document.getElementById("prompt");
+        promptBox.value = text;
+        promptBox.dispatchEvent(new Event("input", {{ bubbles: true }}));
+        enterBench();
+        submitBtn.click();
+      }}
+      document.getElementById("stageGo").addEventListener("click", startFromStage);
+      stagePrompt.addEventListener("keydown", function (e) {{
+        if (e.key === "Enter" && !e.shiftKey) {{ e.preventDefault(); startFromStage(); }}
+      }});
+      Array.prototype.forEach.call(document.querySelectorAll(".ex"), function (el) {{
+        el.addEventListener("click", function () {{
+          stagePrompt.value = el.getAttribute("data-p");
+          startFromStage();
+        }});
+      }});
+      Array.prototype.forEach.call(document.querySelectorAll(".thumb"), function (el) {{
+        el.addEventListener("click", function () {{
+          var topic = el.getAttribute("data-q") || "";
+          var stageBox = document.getElementById("stagePrompt");
+          stageBox.value = "用供求图动态演示：" + topic + "。给出关键结论。";
+          startFromStage();
+        }});
+      }});
+      Array.prototype.forEach.call(document.querySelectorAll(".rtab"), function (tab) {{
+        tab.addEventListener("click", function () {{
+          Array.prototype.forEach.call(document.querySelectorAll(".rtab"), function (t) {{
+            t.setAttribute("aria-selected", "false");
+          }});
+          Array.prototype.forEach.call(document.querySelectorAll(".rpane"), function (p) {{
+            p.classList.remove("active");
+          }});
+          tab.setAttribute("aria-selected", "true");
+          var pane = document.getElementById(tab.getAttribute("data-pane"));
+          if (pane) {{ pane.classList.add("active"); }}
+        }});
+      }});
+      var tcBtn = document.getElementById("toggleCodeBtn");
+      if (tcBtn) {{
+        tcBtn.addEventListener("click", function () {{
+          var worksTab = document.querySelector('.rtab[data-pane="pane-works"]');
+          if (worksTab) {{ worksTab.click(); }}
+        }});
+      }}
+    }})();
   </script>
 </body>
 </html>
@@ -3556,6 +4134,27 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             self._send_html(make_index_html())
             return
 
+        if route == "/instant-svg" or route.startswith("/instant-svg/"):
+            rel = route[len("/instant-svg"):].lstrip("/") or "index.html"
+            base_dir = (Path(__file__).resolve().parents[1] / "apps" / "instant-svg").resolve()
+            target = (base_dir / rel).resolve()
+            if not str(target).startswith(str(base_dir)) or not target.is_file():
+                self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+                return
+            content_types = {
+                ".html": "text/html; charset=utf-8",
+                ".js": "text/javascript; charset=utf-8",
+                ".mjs": "text/javascript; charset=utf-8",
+                ".css": "text/css; charset=utf-8",
+                ".json": "application/json; charset=utf-8",
+                ".svg": "image/svg+xml",
+                ".png": "image/png",
+                ".ico": "image/x-icon",
+            }
+            content_type = content_types.get(target.suffix.lower(), "application/octet-stream")
+            self._send_bytes(HTTPStatus.OK, target.read_bytes(), {"Content-Type": content_type})
+            return
+
         if route == "/api/health":
             self._send_json(
                 HTTPStatus.OK,
@@ -3736,6 +4335,9 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         endpoint = str(payload.get("endpoint", "")).strip()
         scene_name = safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
         no_render = bool(payload.get("noRender", False))
+        quality = str(payload.get("quality", "m")).strip().lower()
+        if quality not in RENDER_QUALITY_FLAGS:
+            quality = "m"
 
         try:
             temperature = float(payload.get("temperature", 0.2))
@@ -3850,7 +4452,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                     base_url=base_url or None,
                     endpoint=(endpoint or DEFAULT_ZHIPU_ENDPOINT) if provider.id == "zhipu" else None,
                     model=model,
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=load_system_prompt(),
                     user_prompt=effective_prompt,
                     temperature=temperature,
                 )
@@ -3929,7 +4531,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                render_scene(scene_file, detected_scene_name)
+                render_scene(scene_file, detected_scene_name, quality)
                 video_path = find_latest_video(scene_file, detected_scene_name)
                 if video_path is None:
                     raise RuntimeError("Render completed but output video was not found.")
