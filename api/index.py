@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import ipaddress
+import math
 import os
 import socket
 import sys
 import time
 from datetime import datetime, timezone
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib import request as urllib_request
@@ -33,6 +32,7 @@ from manim_agent import (  # noqa: E402
     load_system_prompt,
 )
 from manim_knowledge import precheck_manim_code, summarize_precheck_for_prompt  # noqa: E402
+from alignment import generate_alignment  # noqa: E402
 from vision_analysis import (  # noqa: E402
     MAX_VISION_REQUEST_BYTES,
     analyze_image_payload,
@@ -45,9 +45,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 import web_app as local_web_app  # noqa: E402
 
 SYSTEM_PROMPT = load_system_prompt()
-DISABLED_CLOUD_PROVIDERS = {"codex-cli", "codex-local-proxy"}
-LOCAL_HOSTNAMES = {"localhost"}
 MAX_PUBLIC_BODY_BYTES = 32_000
+# /api/render 携带完整 Manim 代码文本，与本地 core/web_app.py 的 RENDER_BODY_MAX_BYTES 保持一致
+RENDER_BODY_MAX_BYTES = 256 * 1024
 MAX_PUBLIC_PROMPT_CHARS = 4_000
 MAX_PUBLIC_RENDER_PLAYS = 24
 MAX_PUBLIC_RENDER_WAITS = 20
@@ -70,23 +70,11 @@ PUBLIC_CHINESE_SCENE_CONTRACT = (
 )
 PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "45"))
 PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS = int(os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "25"))
-PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS = int(
-    os.environ.get("PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "55"))
-)
 PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "150"))
 )
-PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS = int(
-    os.environ.get("PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "90"))
-)
-PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS = int(
-    os.environ.get("PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "35"))
-)
 PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "90"))
-)
-PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS = int(
-    os.environ.get("PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_REPAIR_TIMEOUT_SECONDS", "60"))
 )
 PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS = int(
     os.environ.get("PUBLIC_TRIAL_MIMO_TIMEOUT_SECONDS", os.environ.get("PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS", "150"))
@@ -122,9 +110,6 @@ PUBLIC_TRIAL_PLANS = {
         ),
     },
 }
-CLOUD_ENDPOINT_ERROR = (
-    "Vercel 云端只支持公网 HTTPS 模型端点；本机、内网和 http:// 地址请在本地 Aegis Web 使用。"
-)
 
 # Render backend configuration
 RENDER_BACKEND_URL = os.environ.get("RENDER_BACKEND_URL", "").rstrip("/")
@@ -139,7 +124,7 @@ def _render_backend_headers() -> dict[str, str]:
     return headers
 
 
-def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, object] | None = None, timeout: int = 15) -> tuple[int, dict[str, object]]:
+def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, object] | None = None, timeout: int = 15, extra_headers: dict[str, str] | None = None) -> tuple[int, dict[str, object]]:
     """Proxy a request to the render backend. Returns (http_status, json_body).
 
     If the first attempt fails due to a connection error (e.g. Render free tier
@@ -151,6 +136,12 @@ def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, 
             "error": "渲染后端未配置。请设置 RENDER_BACKEND_URL 环境变量。",
         }
 
+    def _headers() -> dict[str, str]:
+        headers = _render_backend_headers()
+        if extra_headers:
+            headers.update(extra_headers)
+        return headers
+
     def _try_once() -> tuple[int, str] | None:
         """Return (status, body) on success, None on connection failure."""
         url = f"{RENDER_BACKEND_URL}{path}"
@@ -158,11 +149,11 @@ def _proxy_to_render_backend(path: str, method: str = "GET", payload: dict[str, 
             if method == "POST" and payload is not None:
                 data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 req = urllib_request.Request(
-                    url, data=data, headers=_render_backend_headers(), method="POST"
+                    url, data=data, headers=_headers(), method="POST"
                 )
             else:
                 req = urllib_request.Request(
-                    url, headers=_render_backend_headers(), method=method
+                    url, headers=_headers(), method=method
                 )
             with urllib_request.urlopen(req, timeout=timeout) as resp:
                 return resp.status, resp.read().decode("utf-8")
@@ -479,10 +470,6 @@ def trial_generation_prompt(prompt: str) -> str:
 
 
 def trial_timeout_seconds(provider_id: str, *, repair: bool = False) -> int:
-    if provider_id == "kimi-code":
-        return PUBLIC_TRIAL_KIMI_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_KIMI_TIMEOUT_SECONDS
-    if provider_id == "deepseek":
-        return PUBLIC_TRIAL_DEEPSEEK_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_DEEPSEEK_TIMEOUT_SECONDS
     if provider_id.startswith("minimax"):
         return PUBLIC_TRIAL_MINIMAX_REPAIR_TIMEOUT_SECONDS if repair else PUBLIC_TRIAL_MINIMAX_TIMEOUT_SECONDS
     if provider_id == "mimo":
@@ -1037,52 +1024,6 @@ class {safe_scene_name}(Scene):
 '''
 
 
-def is_private_or_local_host(host: str) -> bool:
-    normalized = host.strip("[]").lower().rstrip(".")
-    if (
-        normalized in LOCAL_HOSTNAMES
-        or normalized.endswith(".localhost")
-        or normalized.endswith(".local")
-    ):
-        return True
-
-    try:
-        ip = ipaddress.ip_address(normalized)
-    except ValueError:
-        return False
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
-
-
-def validate_cloud_model_endpoint(raw_url: str, *, field_name: str) -> str | None:
-    cleaned = raw_url.strip()
-    if not cleaned:
-        return None
-
-    parsed = urlparse(cleaned)
-    if parsed.scheme.lower() != "https" or not parsed.hostname:
-        return CLOUD_ENDPOINT_ERROR
-    if is_private_or_local_host(parsed.hostname):
-        return CLOUD_ENDPOINT_ERROR
-
-    try:
-        resolved = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return f"{field_name} 无法解析，请填写公网可访问的 HTTPS 模型端点。"
-
-    for result in resolved:
-        address = result[4][0]
-        if is_private_or_local_host(address):
-            return CLOUD_ENDPOINT_ERROR
-    return None
-
-
 def build_trial_fallback_response(
     *,
     trial_provider_id: str,
@@ -1339,76 +1280,96 @@ def generate_manim_code_for_gateway(payload: dict[str, object]) -> tuple[int, di
     }
 
 
-def generate_manim_code_with_client_provider(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+def generate_alignment_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    """云端 /api/align：镜像本地 _handle_align 的 trial 解析（G3）。
+
+    云端与 /api/generate 同标准开放；X-Aegis-Token 请求头仅透传不校验，
+    与云端网关现有鉴权模型保持一致。
+    """
     request_id = build_request_id()
     prompt = str(payload.get("prompt", "")).strip()
-    if not prompt:
-        return HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请输入要讲清楚的问题。", "requestId": request_id}
-
-    provider_id = str(payload.get("provider", DEFAULT_PROVIDER)).strip() or DEFAULT_PROVIDER
-    if provider_id in DISABLED_CLOUD_PROVIDERS:
+    code = str(payload.get("code", "")).strip()
+    if len(prompt) < 6 or not code:
         return HTTPStatus.BAD_REQUEST, {
             "ok": False,
-            "error": "这个 Provider 只能在本机使用，不能在 Vercel 云端运行。",
+            "error": "Prompt and code are required for alignment.",
+            "requestId": request_id,
+        }
+    if len(prompt) > MAX_PUBLIC_PROMPT_CHARS:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": f"问题太长了，请先压缩到 {MAX_PUBLIC_PROMPT_CHARS} 字以内。",
             "requestId": request_id,
         }
 
-    provider = resolve_provider(provider_id)
-    api_key = str(payload.get("apiKey", "")).strip()
-    model = str(payload.get("model", "")).strip() or provider.default_model or DEFAULT_MODEL
-    base_url = str(payload.get("baseUrl", "")).strip()
-    endpoint = str(payload.get("endpoint", "")).strip()
-    temperature = clamp_temperature(payload.get("temperature", 0.2))
+    provider_id = str(payload.get("provider", PUBLIC_TRIAL_DEFAULT_PROVIDER)).strip() or PUBLIC_TRIAL_DEFAULT_PROVIDER
+    plan = PUBLIC_TRIAL_PLANS.get(provider_id)
+    if not plan:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": "公开内测页只支持内置免费试用模型。",
+            "requestId": request_id,
+        }
 
-    for field_name, raw_url in (("Base URL", base_url), ("Endpoint", endpoint)):
-        endpoint_error = validate_cloud_model_endpoint(raw_url, field_name=field_name)
-        if endpoint_error:
-            return HTTPStatus.BAD_REQUEST, {"ok": False, "error": endpoint_error, "requestId": request_id}
+    resolved_attempt = None
+    for attempt in plan["attempts"]:
+        env_key = read_server_key(str(attempt["env"]))
+        if env_key:
+            resolved_attempt = attempt
+            resolved_api_key = env_key
+            break
+    if resolved_attempt is None:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "试用模型暂不可用，请稍后重试。",
+            "requestId": request_id,
+        }
+
+    provider = resolve_provider(str(resolved_attempt["provider_id"]))
+    model = str(resolved_attempt["model"]) or provider.default_model or DEFAULT_MODEL
+    trial_base_url = str(resolved_attempt.get("base_url", "")).strip()
+    scene_name = local_web_app.safe_scene_name(str(payload.get("sceneName", "GeneratedScene")))
+    video_duration_raw = payload.get("videoDuration")
+    try:
+        video_duration = float(video_duration_raw) if video_duration_raw is not None else None
+    except (TypeError, ValueError):
+        video_duration = None
+    if video_duration is not None and (not math.isfinite(video_duration) or video_duration <= 0):
+        video_duration = None
+    temperature = min(0.4, clamp_temperature(payload.get("temperature", 0.2)))
+
+    def call_alignment_model(system_prompt: str, user_prompt: str) -> str:
+        raw_text, _provider_name, _resolved_endpoint = generate_code_with_llm(
+            provider_id=provider.id,
+            api_key=resolved_api_key,
+            base_url=trial_base_url,
+            endpoint="",
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+        )
+        return raw_text
 
     try:
-        raw_code, used_provider, used_endpoint = generate_code_with_llm(
-            provider_id=provider.id,
-            api_key=api_key,
-            base_url=base_url,
-            endpoint=endpoint,
-            model=model,
-            system_prompt=SYSTEM_PROMPT,
-            user_prompt=prompt,
-            temperature=temperature,
-            timeout=PUBLIC_TRIAL_MODEL_TIMEOUT_SECONDS,
+        alignment = generate_alignment(
+            prompt=prompt,
+            code=code,
+            scene_name=scene_name,
+            video_duration=video_duration,
+            llm_call=call_alignment_model,
         )
-        cleaned_code = extract_python_only(raw_code)
-        patched_code, compatibility_notes = apply_runtime_compatibility_fixes(cleaned_code)
-        detected_scene_name = local_web_app.detect_scene_name(patched_code, scene_name)
-    except ValueError as exc:
-        return HTTPStatus.BAD_REQUEST, {
-            "ok": False,
-            "error": str(exc),
-            "requestId": request_id,
-        }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 网关兜底，不向上抛线程异常
+        print(f"[{request_id}] gateway alignment failed: {type(exc).__name__}", file=sys.stderr)
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": "Model request failed.",
+            "error": "讲稿对齐暂时失败，请稍后重试。",
             "requestId": request_id,
         }
-
     return HTTPStatus.OK, {
         "ok": True,
-        "provider": used_provider.id,
-        "providerName": used_provider.name,
-        "model": model,
-        "endpoint": used_endpoint,
-        "code": patched_code,
-        "warnings": compatibility_notes,
-        "compatibilityNotes": compatibility_notes,
-        "sceneName": detected_scene_name,
-        "sceneNameInput": scene_name,
-        "codeFile": "vercel-generated-code",
         "requestId": request_id,
-        "rendered": False,
-        "renderBackend": "external-required",
-        "message": "Vercel 已生成 Manim 代码；视频渲染需要后端服务承载。",
+        "alignment": alignment,
     }
 
 
@@ -1469,12 +1430,20 @@ def proxy_community_request(
     query: str = "",
     method: str = "GET",
     payload: dict[str, object] | None = None,
+    review_token: str = "",
 ) -> tuple[int, dict[str, object]]:
     if route == "/api/community/search" and method == "GET":
         backend_path = "/community/search" + (f"?{query}" if query else "")
         return _proxy_to_render_backend(backend_path, method="GET", timeout=15)
     if route == "/api/community/review/queue" and method == "GET":
         backend_path = "/community/review/queue" + (f"?{query}" if query else "")
+        if review_token:
+            return _proxy_to_render_backend(
+                backend_path,
+                method="GET",
+                timeout=20,
+                extra_headers={"X-Review-Token": review_token},
+            )
         return _proxy_to_render_backend(backend_path, method="GET", timeout=20)
     if method != "POST":
         return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
@@ -1494,152 +1463,12 @@ def proxy_community_request(
     return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
 
 
-class handler(BaseHTTPRequestHandler):
-    def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def _send_html(self, html: str) -> None:
-        body = html.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+# Vercel Python Runtime 在本模块寻找 ASGI 入口变量 `app`（历史上是文件末尾的 handler 类，
+# 死代码清理后 ASGI 实现统一由根 app.py 承载）。必须惰性委托而非模块级 `from app import app`：
+# 模块级导入会把根 app.py 抢注进 sys.modules["app"]，与 render_backend/app.py 的模块名冲突，
+# 破坏 cloud_run_worker 的 `from app import JobStatus` 解析（全套 pytest 收集因此中断）。
+async def app(scope, receive, send):  # noqa: D103
+    from app import app as _asgi_app
 
-    def _read_json_body(self, *, max_bytes: int = MAX_PUBLIC_BODY_BYTES) -> dict[str, object]:
-        raw_len = self.headers.get("Content-Length", "0")
-        try:
-            body_len = int(raw_len)
-        except ValueError:
-            return {}
-        if body_len > max_bytes:
-            raise ValueError("请求体太大，请缩短问题后再试。")
-        if body_len <= 0:
-            return {}
-        raw = self.rfile.read(body_len)
-        parsed = json.loads(raw.decode("utf-8"))
-        if not isinstance(parsed, dict):
-            return {}
-        return parsed
-
-    def do_GET(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        route = parsed.path
-        if route == "/favicon.ico":
-            self.send_response(HTTPStatus.NO_CONTENT)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        if route == "/":
-            self._send_html(build_index_html())
-            return
-        if route == "/api/health":
-            self._send_json(HTTPStatus.OK, build_health_payload())
-            return
-        if route == "/api/community/search":
-            status, response = proxy_community_request(route, query=parsed.query)
-            self._send_json(HTTPStatus(status), response)
-            return
-        if route == "/api/community/review/queue":
-            status, response = proxy_community_request(route, query=parsed.query)
-            self._send_json(HTTPStatus(status), response)
-            return
-        # Render proxy: status
-        if route.startswith("/api/render/status/"):
-            job_id = route.split("/api/render/status/", 1)[-1]
-            status, response = _proxy_to_render_backend(f"/status/{job_id}")
-            self._send_json(HTTPStatus(status), response)
-            return
-        # Render proxy: download (return redirect URL)
-        if route.startswith("/api/render/download/"):
-            job_id = route.split("/api/render/download/", 1)[-1]
-            status, response = _proxy_to_render_backend(f"/download/{job_id}")
-            video_url = _extract_download_video_url(response)
-            if status == HTTPStatus.OK and video_url:
-                self.send_response(HTTPStatus.FOUND)
-                self.send_header("Location", video_url)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            self._send_json(HTTPStatus(status), response)
-            return
-        self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found.", "path": route, "raw_path": self.path, "method": "POST"})
-
-    def do_HEAD(self) -> None:  # noqa: N802
-        route = urlparse(self.path).path
-        if route == "/favicon.ico":
-            self.send_response(HTTPStatus.NO_CONTENT)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        if route == "/":
-            body = build_index_html().encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            return
-        self.send_response(HTTPStatus.NOT_FOUND)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def do_POST(self) -> None:  # noqa: N802
-        route = urlparse(self.path).path
-        # 诊断：记录所有 POST 请求的路径信息
-        print(f"[DEBUG] POST path={self.path!r} route={route!r}", file=sys.stderr)
-        if route == "/api/generate":
-            try:
-                payload = self._read_json_body()
-            except Exception as exc:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-                return
-            status, response = generate_manim_code_for_gateway(payload)
-            self._send_json(HTTPStatus(status), response)
-            return
-        if route == "/api/vision/analyze":
-            if not is_vision_public_enabled():
-                status, response = disabled_vision_response()
-                self._send_json(HTTPStatus(status), response)
-                return
-            try:
-                payload = self._read_json_body(max_bytes=MAX_VISION_REQUEST_BYTES)
-            except Exception as exc:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-                return
-            status, response = analyze_image_payload(payload)
-            self._send_json(HTTPStatus(status), response)
-            return
-        if route == "/api/community/works" or route.startswith("/api/community/works/"):
-            try:
-                payload = self._read_json_body()
-            except Exception as exc:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-                return
-            status, response = proxy_community_request(route, method="POST", payload=payload)
-            self._send_json(HTTPStatus(status), response)
-            return
-        if route == "/api/render" or route.startswith("/api/render/"):
-            try:
-                payload = self._read_json_body()
-            except Exception as exc:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-                return
-            render_payload, error_payload = build_render_backend_submit_payload(payload)
-            if error_payload is not None or render_payload is None:
-                self._send_json(HTTPStatus.BAD_REQUEST, error_payload or {"ok": False, "error": "Invalid render payload."})
-                return
-            # Proxy to render backend async endpoint
-            status, response = _proxy_to_render_backend(
-                "/render-async",
-                method="POST",
-                payload=render_payload,
-                timeout=15,
-            )
-            self._send_json(HTTPStatus(status), response)
-            return
-        self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+    await _asgi_app(scope, receive, send)

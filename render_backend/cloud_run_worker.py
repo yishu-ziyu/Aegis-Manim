@@ -5,7 +5,13 @@ from __future__ import annotations
 import os
 import sys
 
-from app import JobStatus, _execute_render_job, _get_job, _update_job
+# 模块名歧义防护：仓库根的 app.py 与 render_backend/app.py 同名。优先用包路径明确导入；
+# 当本文件以裸脚本方式从 render_backend 目录执行（无上级包可见）时回退裸导入。
+# 顺序不可颠倒：若先试裸导入，根 app.py 恰好占据 sys.modules["app"] 时会静默绑定错对象。
+try:
+    from render_backend.app import JobStatus, _execute_render_job, _get_job, _update_job
+except ImportError:
+    from app import JobStatus, _execute_render_job, _get_job, _update_job  # noqa: F401
 
 
 def main() -> int:
