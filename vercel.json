@@ -64,5 +64,8 @@
       "source": "/api/health",
       "destination": "/api/index"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": false
+  }
 }
