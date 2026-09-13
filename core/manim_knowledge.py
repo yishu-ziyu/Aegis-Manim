@@ -187,15 +187,34 @@ def precheck_manim_code(code: str, expected_scene_name: str) -> list[PrecheckIss
         ends_on_assignment = isinstance(last_stmt, (ast.Assign, ast.AnnAssign))
         play_count = 0
         has_wait = False
+        last_play_lineno = -1
+        wait_linenos = []
         for node in ast.walk(construct):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 func = node.func
                 if isinstance(func.value, ast.Name) and func.value.id == "self":
                     if func.attr == "play":
                         play_count += 1
+                        last_play_lineno = max(last_play_lineno, node.lineno)
                     elif func.attr == "wait":
                         has_wait = True
-        if ends_on_assignment or (play_count >= 3 and not has_wait):
+                        wait_linenos.append(node.lineno)
+        # 场景是否已在最后一次 play 之后正常"定格"（wait 位于最后一个 play 之后）。
+        waited_after_last_play = any(lineno > last_play_lineno for lineno in wait_linenos)
+        # 权衡说明（收紧截断启发式 + 保留 F-043 防护）：
+        # F-043 真实案例 = LLM 输出被 max_tokens 截断在赋值行、已有若干 play、无 wait。
+        # 旧逻辑 `ends_on_assignment` 单独命中会把「play -> wait -> 再定义辅助变量收尾」
+        # 的正常场景误判为截断。收紧为「以赋值结尾 且 至少有一个 play 且 最后一个 play
+        # 之后没有 wait」：正常收尾的脚本总会在最后一个 play 后跟 wait（waited_after_last_play
+        # 为 True → 不命中），而被截断的脚本停在赋值行、其最后 play 后不可能有 wait，
+        # 因此 F-043 防护保持。同时保留「play_count>=3 且无 wait」独立信号，
+        # 拦截只写 play 循环未落 wait 的截断形态。两个分支都要求已有动画动作，
+        # 纯声明式脚本（无 play）由 scene-structure 检查兜底，不在此误判。
+        if (
+            ends_on_assignment
+            and play_count >= 1
+            and not waited_after_last_play
+        ) or (play_count >= 3 and not has_wait):
             issues.append(
                 PrecheckIssue(
                     category="truncated-output",
@@ -292,7 +311,8 @@ def classify_render_error(detail: str) -> ErrorClassification:
     text = detail or ""
     lowered = text.lower()
 
-    if "latex" in lowered or "tex" in lowered or "standalone.cls" in lowered:
+    # 词边界匹配 "tex"：避免 "text"/"context" 子串误命中（"latex" 单独覆盖）。
+    if "latex" in lowered or re.search(r"\btex\b", lowered) or "standalone.cls" in lowered:
         return _classification(
             "latex",
             "这版动画的文字渲染依赖 LaTeX，正在改成更稳定的文本表达。",
