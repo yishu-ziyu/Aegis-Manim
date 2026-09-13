@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from llm_providers import (
@@ -14,7 +15,6 @@ from llm_providers import (
     DEFAULT_PROVIDER,
     DEFAULT_ZHIPU_ENDPOINT,
     generate_code_with_provider,
-    normalize_chat_completions_endpoint,
     resolve_provider,
 )
 
@@ -119,10 +119,6 @@ def resolve_api_key(cli_api_key: str | None, provider_id: str | None = None) -> 
         if value and value.strip():
             return value.strip()
     return None
-
-
-def normalize_zhipu_endpoint(endpoint: str | None) -> str:
-    return normalize_chat_completions_endpoint(endpoint)
 
 
 def is_placeholder_api_key(value: str) -> bool:
@@ -384,55 +380,6 @@ def apply_runtime_compatibility_fixes(code: str) -> tuple[str, list[str]]:
         patched = candidate
 
     return patched, notes
-
-
-def extract_assistant_text(response_json: dict) -> str:
-    choices = response_json.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError(f"Unexpected API response (missing choices): {response_json}")
-
-    message = choices[0].get("message")
-    if not isinstance(message, dict):
-        raise RuntimeError(f"Unexpected API response (missing message): {response_json}")
-
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-
-    # Some OpenAI-compatible providers return segmented content.
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        if parts:
-            return "\n".join(parts)
-
-    raise RuntimeError(f"Unexpected API response (missing text content): {response_json}")
-
-
-def generate_code_with_zhipu(
-    *,
-    api_key: str,
-    endpoint: str,
-    model: str,
-    system_prompt: str,
-    user_prompt: str,
-    temperature: float,
-) -> str:
-    code, _provider, _resolved_endpoint = generate_code_with_provider(
-        provider_id="zhipu",
-        api_key=api_key,
-        base_url=None,
-        endpoint=endpoint,
-        model=model,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=temperature,
-    )
-    return code
 
 
 def generate_code_with_llm(

@@ -9,7 +9,8 @@ def load_registry():
     if not os.path.exists(REGISTRY_PATH):
         # Fallback if running from core/ maybe? No, assuming running from root
         if os.path.exists(f"../{REGISTRY_PATH}"):
-            return json.load(open(f"../{REGISTRY_PATH}", encoding="utf-8"))
+            with open(f"../{REGISTRY_PATH}", encoding="utf-8") as f:
+                return json.load(f)
         print(f"Error: Registry file '{REGISTRY_PATH}' not found.")
         return []
 

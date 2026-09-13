@@ -148,9 +148,12 @@ def _extract_json_object(text: str) -> dict[str, object]:
         pass
     match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
     if match:
-        parsed = json.loads(match.group(0))
-        if isinstance(parsed, dict):
-            return parsed
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
     return {
         "image_type": "unknown",
         "recognized_content": stripped,

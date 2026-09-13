@@ -244,7 +244,7 @@ def build_fallback_alignment(
     if not isinstance(duration, (int, float)) or duration <= 0:
         duration = DEFAULT_FALLBACK_DURATION
 
-    warnings = ["Generated low-confidence fallback alignment; please review before using it for teaching."]
+    warnings = ["低置信度兜底对齐，教学使用前请人工审阅。"]
     for warning in signals.get("warnings", []):
         if str(warning).strip():
             warnings.append(str(warning).strip())

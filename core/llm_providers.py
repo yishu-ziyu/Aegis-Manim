@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import tempfile
-import hashlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib import error, request
@@ -38,7 +37,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_type="openai-compatible",
         region="cn",
         base_url=DEFAULT_ZHIPU_BASE_URL,
-        default_model=DEFAULT_MODEL,
+        default_model="glm-4-flash",
         models=("glm-5", "glm-4.5", "glm-4-plus", "glm-4-flash"),
         doc="https://open.bigmodel.cn/dev/api",
         api_key_placeholder="BIGMODEL_API_KEY",
@@ -535,16 +534,6 @@ def max_tokens_for_provider(provider_id: str, model: str) -> int | None:
     return int(raw) if raw else None
 
 
-def extra_openai_payload_for_provider(provider_id: str, model: str, user_prompt: str) -> dict[str, object]:
-    if provider_id != "kimi-code":
-        return {}
-    digest = hashlib.sha256(f"{model}\n{user_prompt}".encode("utf-8")).hexdigest()
-    return {
-        "prompt_cache_key": f"aegis-manim-{digest[:24]}",
-        "safety_identifier": f"aegis-public-{digest[24:48]}",
-    }
-
-
 def generate_code_with_provider(
     *,
     provider_id: str | None,
@@ -601,11 +590,6 @@ def generate_code_with_provider(
                 provider_name=preset.name,
                 timeout=timeout,
                 max_tokens=max_tokens_for_provider(preset.id, selected_model),
-                extra_payload=extra_openai_payload_for_provider(
-                    preset.id,
-                    selected_model,
-                    user_prompt,
-                ),
             ),
             preset,
             openai_chat_completions_url(normalized_base),
