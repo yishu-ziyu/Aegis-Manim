@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 from glob import glob
 from http import HTTPStatus
@@ -53,7 +55,6 @@ from vision_analysis import (
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-SYSTEM_PROMPT = load_system_prompt()  # legacy snapshot; request paths must call load_system_prompt() so prompt edits hot-reload
 GENERATED_DIR = PROJECT_ROOT / "generated"
 RUNTIME_LOG_DIR = PROJECT_ROOT / "logs"
 RUNTIME_LOG_PATH = RUNTIME_LOG_DIR / "web_runtime.log"
@@ -67,29 +68,19 @@ RENDER_BACKEND_API_KEY = os.getenv(
     "RENDER_BACKEND_API_KEY",
     os.getenv("MANIM_API_KEY", "dev-key-change-in-production"),
 ).strip()
-VIDEO_CACHE: dict[str, Path] = {}
+VIDEO_CACHE: "OrderedDict[str, Path]" = OrderedDict()
 VIDEO_CACHE_LOCK = threading.Lock()
+VIDEO_CACHE_MAX = 50
 JOB_STORE: dict[str, dict[str, Any]] = {}
 JOB_STORE_LOCK = threading.Lock()
-
-
-def load_env_file() -> None:
-    """Load KEY=VALUE pairs from repo-root .env into os.environ (real env wins)."""
-    env_path = Path(__file__).resolve().parents[1] / ".env"
-    if not env_path.exists():
-        return
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-load_env_file()
+# G5 内存淘汰：job 数量上限 + TTL 惰性清理 + 单 job 事件封顶，防长跑进程膨胀。
+JOB_STORE_MAX = 100
+JOB_TTL_SECONDS = 2 * 60 * 60
+JOB_EVENT_MAX = 500
+# G6 请求体上限：generate/align/community 64KB、render 256KB；vision 沿用
+# vision_analysis.MAX_VISION_REQUEST_BYTES（7MB，env 可覆盖），不破坏现有上传。
+GENERATE_BODY_MAX_BYTES = 64 * 1024
+RENDER_BODY_MAX_BYTES = 256 * 1024
 
 # Local trial plans (auto-detect env keys)
 LOCAL_TRIAL_PLANS = {
@@ -114,7 +105,8 @@ def build_local_trial_config() -> dict[str, object]:
             os.getenv(str(att["env"]), "").strip()
             for att in plan["attempts"]
         )
-        if not has_any_key and not AEGIS_CLOUD_GENERATE_URL:
+        # G9: 试用入口仅在本地 key 实际可用时展示，消除「展示但必然失败」。
+        if not has_any_key:
             continue
         available[provider_id] = {
             "id": provider_id,
@@ -146,13 +138,19 @@ def ensure_runtime_log_dir() -> None:
     RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+RUNTIME_LOG_LOCK = threading.Lock()
+BUG_LOG_LOCK = threading.Lock()
+
+
 def append_runtime_log(event: str, detail: str) -> None:
-    ensure_runtime_log_dir()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     safe_detail = detail.replace("\n", " ").strip()
     line = f"[{timestamp}] {event} | {safe_detail}\n"
-    with RUNTIME_LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(line)
+    # 只锁文件写入段：目录创建与格式化不持锁，避免高并发下串行化无关逻辑
+    with RUNTIME_LOG_LOCK:
+        ensure_runtime_log_dir()
+        with RUNTIME_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(line)
 
 
 def build_request_id() -> str:
@@ -251,8 +249,11 @@ def append_bug_log(
         entry["detail"] = safe_short_text(detail, 3000)
     if context:
         entry["context"] = context
-    with BUG_LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    # 只锁文件写入段；条目构造不持锁
+    with BUG_LOG_LOCK:
+        ensure_runtime_log_dir()
+        with BUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def read_recent_bug_entries(limit: int, request_id: str | None = None) -> list[dict[str, Any]]:
@@ -302,6 +303,16 @@ def detect_scene_name(code: str, fallback: str) -> str:
 RENDER_QUALITY_FLAGS = {"l": "-ql", "m": "-qm", "h": "-qh"}
 
 
+def render_timeout_seconds() -> int:
+    """渲染子进程超时：默认 600s，AEGIS_RENDER_TIMEOUT 可覆盖，非法值回落默认。"""
+    raw = os.getenv("AEGIS_RENDER_TIMEOUT", "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 600
+    return value if value > 0 else 600
+
+
 def render_scene(scene_file: Path, scene_name: str, quality: str = "m") -> None:
     quality_flag = RENDER_QUALITY_FLAGS.get(quality, "-qm")
     cmd = [
@@ -314,12 +325,21 @@ def render_scene(scene_file: Path, scene_name: str, quality: str = "m") -> None:
         str(scene_file),
         scene_name,
     ]
-    result = subprocess.run(
-        cmd,
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=render_timeout_seconds(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        # 超时归入现有失败分类：带「渲染超时」文案，供 classify_render_error 识别
+        partial = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
+        raise RuntimeError(
+            f"渲染超时：子进程超过 {render_timeout_seconds()} 秒未完成，已被终止。"
+            + (partial.strip()[-1500:] if partial.strip() else "")
+        ) from exc
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
         stdout = (result.stdout or "").strip()
@@ -355,12 +375,54 @@ def register_video(path: Path) -> str:
     video_id = uuid4().hex
     with VIDEO_CACHE_LOCK:
         VIDEO_CACHE[video_id] = path
+        VIDEO_CACHE.move_to_end(video_id)
+        # LRU 上限：超限淘汰最久未访问的条目
+        while len(VIDEO_CACHE) > VIDEO_CACHE_MAX:
+            VIDEO_CACHE.popitem(last=False)
     return video_id
+
+
+def touch_video_cache(video_id: str) -> Path | None:
+    """读取视频路径并刷新 LRU 顺序（不存在返回 None）。"""
+    with VIDEO_CACHE_LOCK:
+        path = VIDEO_CACHE.get(video_id)
+        if path is not None:
+            VIDEO_CACHE.move_to_end(video_id)
+        return path
+
+
+def _prune_jobs_locked(now: datetime) -> None:
+    """在持有 JOB_STORE_LOCK 时调用：按 TTL 惰性清理 + 数量上限淘汰最旧。"""
+    if JOB_STORE:
+        cutoff = now.timestamp() - JOB_TTL_SECONDS
+        stale = [
+            job_id
+            for job_id, job in JOB_STORE.items()
+            if _job_timestamp(job.get("updatedAt") or job.get("createdAt")) < cutoff
+        ]
+        for job_id in stale:
+            JOB_STORE.pop(job_id, None)
+    while len(JOB_STORE) > JOB_STORE_MAX:
+        oldest_id = min(
+            JOB_STORE,
+            key=lambda job_id: _job_timestamp(
+                JOB_STORE[job_id].get("updatedAt") or JOB_STORE[job_id].get("createdAt")
+            ),
+        )
+        JOB_STORE.pop(oldest_id, None)
+
+
+def _job_timestamp(value: Any) -> float:
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def create_job(prompt: str) -> str:
     job_id = build_request_id()
-    now = datetime.now().isoformat(timespec="seconds")
+    now = datetime.now()
+    timestamp = now.isoformat(timespec="seconds")
     with JOB_STORE_LOCK:
         JOB_STORE[job_id] = {
             "ok": True,
@@ -374,9 +436,10 @@ def create_job(prompt: str) -> str:
             "result": None,
             "error": None,
             "promptHash": prompt_fingerprint(prompt) if prompt else None,
-            "createdAt": now,
-            "updatedAt": now,
+            "createdAt": timestamp,
+            "updatedAt": timestamp,
         }
+        _prune_jobs_locked(now)
     return job_id
 
 
@@ -416,6 +479,11 @@ def emit_job_event(
         job["currentStudentMessage"] = student_message
         job["events"].append(event)
         job["technicalEvents"].append(technical_event)
+        # 事件封顶：超限丢最旧，快照仍返回（有界的）全量列表
+        if len(job["events"]) > JOB_EVENT_MAX:
+            del job["events"][:-JOB_EVENT_MAX]
+        if len(job["technicalEvents"]) > JOB_EVENT_MAX:
+            del job["technicalEvents"][:-JOB_EVENT_MAX]
         job["updatedAt"] = now
 
 
@@ -447,6 +515,7 @@ def fail_job(job_id: str, error_payload: dict[str, Any], student_message: str) -
 
 def job_snapshot(job_id: str) -> dict[str, Any] | None:
     with JOB_STORE_LOCK:
+        _prune_jobs_locked(datetime.now())
         job = JOB_STORE.get(job_id)
         if not job:
             return None
@@ -502,7 +571,7 @@ def optional_positive_float(value: object) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         return None
     return parsed
 
@@ -549,18 +618,18 @@ def run_generate_job(job_id: str, payload: dict[str, Any]) -> None:
                 job_id,
                 status="failed",
                 stage="validation",
-                student_message="本地试用模型未配置：请设置 KIMI_CODE_API_KEY、DEEPSEEK_API_KEY 或 MINIMAX_API_KEY 环境变量。",
-                technical_message="LOCAL_TRIAL_NO_KEYS_CONFIGURED",
+                student_message="本地试用模型未配置：请设置 MINIMAX_API_KEY 环境变量。",
+                technical_message="LOCAL_TRIAL_NO_KEYS_CONFIGURED"
             )
             fail_job(
                 job_id,
                 {
                     "ok": False,
                     "error": "Local trial keys not configured.",
-                    "detail": "Please set KIMI_CODE_API_KEY, DEEPSEEK_API_KEY, or MINIMAX_API_KEY env var.",
+                    "detail": "Please set MINIMAX_API_KEY env var.",
                     "requestId": job_id,
                 },
-                "本地试用模型未配置：请设置 KIMI_CODE_API_KEY、DEEPSEEK_API_KEY 或 MINIMAX_API_KEY 环境变量。",
+                "本地试用模型未配置：请设置 MINIMAX_API_KEY 环境变量。",
             )
             return
 
@@ -978,6 +1047,7 @@ def make_index_html() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Aegis 可视化工作台</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>📐</text></svg>" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.1.0/style.css" rel="stylesheet" />
@@ -1056,20 +1126,6 @@ def make_index_html() -> str:
       overflow-x: hidden;
     }}
 
-    /* subtle paper grain */
-    body::before {{
-      content: '';
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.5;
-      background-image:
-        linear-gradient(#f9f8f2 1px, transparent 1px),
-        linear-gradient(90deg, #eeece2 1px, transparent 1px);
-      background-size: 32px 32px;
-      z-index: 0;
-    }}
-
     /* ── Shell ── */
     .shell {{
       position: relative;
@@ -1106,49 +1162,12 @@ def make_index_html() -> str:
       box-shadow: inset 0 0 0 1px rgba(27,54,93,0.025);
     }}
 
-    /* ── Hero ── */
-    .hero {{
-      padding: 24px 28px 18px;
-      border-bottom: 1px solid var(--border);
-      border-left: 4px solid var(--accent);
-      background: var(--bg-2);
-      position: relative;
-    }}
-
-    .hero h1 {{
-      margin: 0 0 8px;
-      font-size: 1.9rem;
-      font-weight: 500;
-      line-height: 1.18;
-      letter-spacing: 0;
-      color: var(--fg-bright);
-    }}
-
-    .hero p {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 0.95rem;
-      max-width: 38ch;
-      line-height: 1.55;
-    }}
-
-    .hero small {{
-      display: inline-flex;
-      margin-top: 12px;
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      padding: 4px 8px;
-      color: var(--accent);
-      background: #EEF2F7;
-      border: 1px solid #E4ECF5;
-      border-radius: 4px;
-    }}
-
     /* ── Form ── */
     .form-wrap {{
       padding: 18px 28px 26px;
       display: grid;
       gap: 14px;
+      scroll-margin-top: 76px; /* 返回编辑滚动定位时避开吸顶 topbar */
     }}
 
     .field {{
@@ -1592,17 +1611,6 @@ def make_index_html() -> str:
       overflow: auto;
     }}
 
-    .lesson-pair {{
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 14px;
-      align-items: stretch;
-    }}
-    body.learning-mode .lesson-pair {{
-      grid-template-columns: 1fr;
-      gap: 16px;
-    }}
-
     .video-card {{
       display: none;
       border: 1px solid var(--border);
@@ -1671,8 +1679,8 @@ def make_index_html() -> str:
       font-size: 0.78rem;
       min-height: 1.25em;
     }}
-    .community-search-status[data-state="success"] {{ color: var(--success); }}
-    .community-search-status[data-state="warn"] {{ color: var(--warn); }}
+    .community-search-status[data-state="success"] {{ color: var(--ok); }}
+    .community-search-status[data-state="warn"] {{ color: var(--danger); }}
     .community-search-list {{
       display: grid;
       gap: 8px;
@@ -1886,51 +1894,10 @@ def make_index_html() -> str:
       font-size: 0.72rem;
       color: var(--muted-2);
       text-align: right;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
     .foot b {{ color: var(--accent-3); }}
-
-    /* ── 8x8 pixel icon (CSS grid) ── */
-    .pixel-icon {{
-      width: 20px;
-      height: 20px;
-      display: grid;
-      grid-template-columns: repeat(8, 1fr);
-      grid-template-rows: repeat(8, 1fr);
-      gap: 0;
-      flex-shrink: 0;
-    }}
-    .pixel-icon .p {{ background: var(--fg); }}
-
-    /* ── Header bar ── */
-    .top-bar {{
-      position: relative;
-      z-index: 1;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 16px 32px;
-      border-bottom: 1px solid var(--border);
-    }}
-    .top-bar h1 {{
-      font-size: 1.1rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: var(--fg-bright);
-    }}
-    .top-bar .status {{
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.78rem;
-      color: var(--muted);
-    }}
-    .status-dot {{
-      width: 7px;
-      height: 7px;
-      background: var(--accent);
-      box-shadow: 0 0 3px var(--accent);
-    }}
 
     /* ── Responsive ── */
     @media (max-width: 1020px) {{
@@ -1942,18 +1909,15 @@ def make_index_html() -> str:
         grid-template-columns: 1fr;
         width: min(860px, 94vw);
       }}
-      .lesson-pair {{ grid-template-columns: 1fr; }}
-      body.learning-mode .lesson-pair {{ grid-template-columns: 1fr; }}
       .alignment-list {{ max-height: none; }}
     }}
 
     @media (max-width: 720px) {{
       .row {{ grid-template-columns: 1fr; }}
       .shell {{ margin: 16px auto 24px; }}
-      .hero, .form-wrap, .result-head, .result-wrap {{ padding-left: 16px; padding-right: 16px; }}
+      .form-wrap, .result-head, .result-wrap {{ padding-left: 16px; padding-right: 16px; }}
       .result-title-row {{ display: grid; }}
       .result-actions {{ justify-content: flex-start; }}
-      .top-bar {{ padding: 12px 16px; }}
     }}
 
     @keyframes shell-in {{
@@ -1975,7 +1939,6 @@ def make_index_html() -> str:
 
 
     /* ════════ D 夜航 2.0 覆盖层 ════════ */
-    body::before {{ content: none; }}
     body {{
       font-size: 15px;
       transition: background 250ms ease, color 250ms ease;
@@ -2027,7 +1990,6 @@ def make_index_html() -> str:
       background: var(--accent-tint); color: var(--accent-2);
       border-color: transparent; font-family: var(--mono); font-size: 0.72rem;
     }}
-    .hero small {{ background: var(--accent-tint); border-color: transparent; color: var(--accent-2); }}
 
     .status-box {{ background: var(--bg-2); }}
     .status-box.error {{ background: rgba(207, 122, 95, 0.12); color: var(--danger); }}
@@ -2036,6 +1998,14 @@ def make_index_html() -> str:
     /* ── 落地舞台（landing）── */
     body.landing .bench {{ display: none; }}
     body:not(.landing) .stage {{ display: none; }}
+    /* G1: 继续上次入口（复用 ghost-btn / landing 动效） */
+    .resume-entry {{
+      margin: 30px auto 0; display: flex; flex-direction: column; align-items: center; gap: 8px;
+      animation: stage-rise 560ms var(--ease-soft) 320ms both;
+    }}
+    .resume-entry[hidden] {{ display: none; }}
+    .resume-entry .ghost-btn {{ padding: 12px 24px; font-size: 0.95rem; }}
+    .resume-entry-hint {{ font-size: 0.8rem; color: var(--muted); }}
     .stage {{ max-width: 780px; margin: 0 auto; padding: 9vh 24px 70px; text-align: center; }}
     .kicker {{
       font-size: 0.82rem; letter-spacing: 0.2em; color: var(--accent-2);
@@ -2074,6 +2044,7 @@ def make_index_html() -> str:
     .ask textarea:focus {{ box-shadow: none; border: none; }}
     .ask-foot {{ display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }}
     .ask-hint {{ font-size: 0.76rem; color: var(--muted); padding-left: 4px; }}
+    .stage-warn {{ margin: 10px 4px 0; font-size: 0.82rem; color: var(--danger); text-align: left; }}
     .go {{
       display: inline-flex; align-items: center; gap: 8px;
       padding: 10px 22px; font-size: 0.95rem; letter-spacing: 0.04em;
@@ -2081,12 +2052,6 @@ def make_index_html() -> str:
       box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 30%, transparent);
     }}
     .go:hover {{ background: color-mix(in srgb, var(--accent) 92%, black); }}
-    .go .spinner {{
-      width: 14px; height: 14px; border-radius: 50%; display: none;
-      border: 2px solid rgba(255, 253, 248, 0.35); border-top-color: #fffdf8;
-      animation: go-spin 0.8s linear infinite;
-    }}
-    @keyframes go-spin {{ to {{ transform: rotate(360deg); }} }}
 
     .ex-head {{ margin: 40px 0 14px; font-size: 0.84rem; color: var(--muted); }}
     .examples {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
@@ -2128,7 +2093,7 @@ def make_index_html() -> str:
     }}
     .thumb .cap {{
       position: absolute; left: 0; right: 0; bottom: 0;
-      padding: 20px 10px 7px; font-size: 0.76rem; color: #fff; text-align: left;
+      padding: 20px 62px 7px 10px; font-size: 0.76rem; color: #fff; text-align: left;
       background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }}
@@ -2259,8 +2224,9 @@ def make_index_html() -> str:
       <textarea id="stagePrompt" rows="3" placeholder="描述你想讲清楚的概念，例如：为什么对奢侈品征税，负担反而可能落在工人身上？用供求图演示税收归宿。"></textarea>
       <div class="ask-foot">
         <span class="ask-hint">⏎ 直接生成 · Shift+⏎ 换行</span>
-        <button id="stageGo" class="go" type="button"><span class="spinner"></span><span>生成动画</span></button>
+        <button id="stageGo" class="go" type="button"><span>生成动画</span></button>
       </div>
+      <p class="stage-warn" id="stageWarn" hidden>请先输入要讲的概念。</p>
     </div>
 
     <div class="ex-head">试试这些 —— 点一下直接开始</div>
@@ -2277,6 +2243,11 @@ def make_index_html() -> str:
         <span class="kind">◈ 对比</span>
         <span class="txt">对比完全竞争和垄断下的消费者剩余，用并排的面积图展示两者的差异。</span>
       </button>
+    </div>
+
+    <div id="resumeEntry" class="resume-entry" hidden>
+      <button id="resumeWorkBtn" class="ghost-btn" type="button">↺ 继续上次 · <span id="resumeWorkLabel"></span></button>
+      <span class="resume-entry-hint">恢复上次生成的视频与讲稿代码</span>
     </div>
 
     <div class="works-head">热门教学话题 —— 点一下，直接生成</div>
@@ -2306,7 +2277,7 @@ def make_index_html() -> str:
       <form id="generate-form" class="form-wrap">
         <div class="field">
           <label for="prompt">你要讲清楚的问题 <span class="help" id="promptCounter">0 / 2000</span></label>
-          <textarea id="prompt" name="prompt" maxlength="2000" placeholder="描述你想讲清楚的概念、题目或现象。太长的背景资料会拖慢生成，建议一次聚焦一个概念。" required></textarea>
+          <textarea id="prompt" name="prompt" maxlength="2000" placeholder="描述你想讲清楚的概念、题目或现象。太长的背景资料会拖慢生成，建议一次聚焦一个概念。"></textarea>
           <div id="promptPreview" class="prompt-preview">
             <span class="prompt-preview-label">公式预览</span>
             <div id="promptPreviewContent" class="rich-text"></div>
@@ -2614,19 +2585,46 @@ def make_index_html() -> str:
     let processTimer = null;
     let visionSuggestedPrompt = "";
 
+    function safeStorageGet(key) {{
+      try {{ return window.localStorage.getItem(key); }} catch (e) {{ return null; }}
+    }}
+    function safeStorageSet(key, value) {{
+      try {{ window.localStorage.setItem(key, value); }} catch (e) {{}}
+    }}
+
     // ── Render backend warm-up ──
     // Render free tier spins down after 15 min of inactivity. When the page loads,
     // we fire a lightweight request in the background so the instance is likely
     // already awake by the time the user clicks "GENERATE & RENDER".
+    // G2: 失败后指数退避（首败 30s，逐次翻倍，封顶 5 分钟）；成功后重置退避，
+    // 并以 5 分钟健康间隔保活，避免固定间隔刷新 502。
     (function warmUpRenderBackend() {{
       const WARMUP_URL = "/api/render/status/health";
-      // Use a short timeout so it doesn't block anything
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      fetch(WARMUP_URL, {{ method: "GET", signal: controller.signal }})
-        .then(() => console.log("[WarmUp] Render backend ping sent."))
-        .catch(() => {{ /* Silent fail – warm-up is best-effort */ }})
-        .finally(() => clearTimeout(timeoutId));
+      const FIRST_FAILURE_BACKOFF_MS = 30000;
+      const MAX_BACKOFF_MS = 300000;
+      const HEALTHY_PING_INTERVAL_MS = 300000;
+      let failureBackoffMs = FIRST_FAILURE_BACKOFF_MS;
+      function scheduleNextPing(succeeded) {{
+        let delay;
+        if (succeeded) {{
+          failureBackoffMs = FIRST_FAILURE_BACKOFF_MS;
+          delay = HEALTHY_PING_INTERVAL_MS;
+        }} else {{
+          delay = failureBackoffMs;
+          failureBackoffMs = Math.min(failureBackoffMs * 2, MAX_BACKOFF_MS);
+        }}
+        window.setTimeout(ping, delay);
+      }}
+      function ping() {{
+        // Use a short timeout so it doesn't block anything
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        fetch(WARMUP_URL, {{ method: "GET", signal: controller.signal }})
+          .then((response) => scheduleNextPing(response.ok))
+          .catch(() => scheduleNextPing(false))
+          .finally(() => clearTimeout(timeoutId));
+      }}
+      ping();
     }})();
 
     function groupProviderIds() {{
@@ -2656,7 +2654,7 @@ def make_index_html() -> str:
         providerSelect.appendChild(optgroup);
       }});
       const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
-      providerSelect.value = localStorage.getItem(providerStorageKey) || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
+      providerSelect.value = safeStorageGet(providerStorageKey) || PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
       if (!PROVIDERS[providerSelect.value]) {{
         providerSelect.value = PROVIDER_CONFIG.defaultProvider || "{DEFAULT_PROVIDER}";
       }}
@@ -2675,17 +2673,12 @@ def make_index_html() -> str:
       providerHelp.textContent = preset.description || `${{preset.name || providerSelect.value}} · ${{preset.apiType || "compatible"}} · 模型 ID 可手动改写。`;
       apiKeyLabel.textContent = `${{preset.name || "Provider"}} API Key`;
       apiKeyInput.placeholder = preset.apiKeyPlaceholder || "API Key...";
-      apiKeyInput.required = Boolean(preset.requiresApiKey);
       const usesCodexCli = preset.apiType === "codex-cli";
       const serverManaged = Boolean(preset.serverManaged);
-      const cloudUnavailable = Boolean(preset.cloudUnavailable);
       apiKeyField.style.display = (usesCodexCli || serverManaged || preset.hideApiKey) ? "none" : "";
       baseUrlField.style.display = (usesCodexCli || serverManaged || preset.hideBaseUrl) ? "none" : "";
       modelInput.readOnly = Boolean(preset.lockModel);
-      if (cloudUnavailable) {{
-        providerHelp.textContent = `${{preset.name || providerSelect.value}} · 仅本地可执行 · 下载项目后可用。`;
-        apiKeyHelp.textContent = "这个 Provider 是下载项目后在本地 Aegis Web 使用的选项；Vercel 云端只展示能力入口。";
-      }} else if (serverManaged) {{
+      if (serverManaged) {{
         apiKeyHelp.textContent = "内测阶段由 Aegis 承担模型调用额度；页面不会接收或保存你的模型 Key。";
       }} else {{
         apiKeyHelp.textContent = preset.requiresApiKey
@@ -2695,11 +2688,11 @@ def make_index_html() -> str:
             : "这个 Provider 允许无 Key，例如本地代理；如网关要求鉴权，也可以填写。";
       }}
 
-      const savedBaseUrl = localStorage.getItem(`aegis.baseUrl.${{providerSelect.value}}`);
+      const savedBaseUrl = safeStorageGet(`aegis.baseUrl.${{providerSelect.value}}`);
       baseUrlInput.value = (usesCodexCli || serverManaged) ? "" : savedBaseUrl || preset.baseURL || "";
       baseUrlInput.placeholder = preset.baseURL || "https://api.example.com/v1";
 
-      const savedModel = localStorage.getItem(`aegis.model.${{providerSelect.value}}`);
+      const savedModel = safeStorageGet(`aegis.model.${{providerSelect.value}}`);
       if (!keepModel || !modelInput.value.trim()) {{
         modelInput.value = serverManaged ? preset.defaultModel || "" : savedModel || preset.defaultModel || "";
       }}
@@ -2707,7 +2700,7 @@ def make_index_html() -> str:
 
     providerSelect.addEventListener("change", () => {{
       const providerStorageKey = PROVIDER_CONFIG.providerStorageKey || "aegis.provider";
-      localStorage.setItem(providerStorageKey, providerSelect.value);
+      safeStorageSet(providerStorageKey, providerSelect.value);
       updateProviderUI(false);
     }});
 
@@ -2912,6 +2905,11 @@ def make_index_html() -> str:
       processPanel.classList.remove("visible");
       processPanel.classList.remove("working");
       processSteps.forEach((step) => step.classList.remove("active", "done"));
+      const videoEmpty = document.getElementById("videoEmpty");
+      if (videoEmpty && !videoPlayer.getAttribute("src")) {{
+        videoEmpty.style.display = "grid";
+        videoEmpty.innerHTML = '<div class="play-dot">▶</div><b>生成后，视频会出现在这里</b><small>通常需要 45–120 秒。左侧点「生成动画」开始。</small>';
+      }}
     }}
 
     function finishProcess() {{
@@ -2938,10 +2936,10 @@ def make_index_html() -> str:
 
     function communityRaterKey() {{
       const storageKey = "aegis.community.rater";
-      let key = localStorage.getItem(storageKey);
+      let key = safeStorageGet(storageKey);
       if (!key) {{
         key = "anon-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-        localStorage.setItem(storageKey, key);
+        safeStorageSet(storageKey, key);
       }}
       return key;
     }}
@@ -3107,6 +3105,7 @@ def make_index_html() -> str:
       }}
       setCommunityActions("reused", "已复用社区高分或精选作品，可为它评分。");
       setCommunitySearchStatus("已从作品仓库复用这个动画。", "success");
+      finishProcess();
       setStatus("已复用社区高分作品，无需重新生成和渲染。", "success");
       if (communityWorkId) {{
         fetch(`/api/community/works/${{communityWorkId}}/reuse`, {{
@@ -3177,7 +3176,7 @@ def make_index_html() -> str:
 
     function reviewToken() {{
       const token = reviewTokenInput.value.trim();
-      if (token) localStorage.setItem("aegis.community.reviewToken", token);
+      if (token) safeStorageSet("aegis.community.reviewToken", token);
       return token;
     }}
 
@@ -3237,8 +3236,9 @@ def make_index_html() -> str:
       setReviewStatus("正在刷新候选队列...");
       try {{
         const status = encodeURIComponent(reviewStatusSelect.value || "candidate");
-        const response = await fetch(`/api/community/review/queue?status=${{status}}&limit=20&reviewToken=${{encodeURIComponent(token)}}`, {{
-          cache: "no-store"
+        const response = await fetch(`/api/community/review/queue?status=${{status}}&limit=20`, {{
+          cache: "no-store",
+          headers: {{ "X-Review-Token": token }}
         }});
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || "刷新失败");
@@ -3334,11 +3334,13 @@ def make_index_html() -> str:
         }});
         renderData = await renderResponse.json();
       }} catch (e) {{
+        stopProcess();
         setStatus("渲染后端连接失败，已生成代码但无法渲染视频。", "warn");
         return;
       }}
 
       if (!renderResponse.ok || !renderData || renderData.error) {{
+        stopProcess();
         const err = (renderData && renderData.error) || "渲染任务提交失败";
         setStatus("渲染提交失败: " + err, "error");
         return;
@@ -3385,12 +3387,16 @@ def make_index_html() -> str:
           }}
           if (videoUrl) {{
             latestVideoUrl = videoUrl;
+            // G1: 渲染完成后把视频地址合并进 lastWork。
+            saveLastWork({{ videoUrl: videoUrl, videoId: "" }});
             videoPlayer.src = videoUrl;
             videoCard.classList.add("visible");
             enterLearningMode();
             setCommunityActions("rendered", "视频已生成，可提交入库审阅。");
+            finishProcess();
             setStatus("视频渲染完成！", "success");
           }} else {{
+            stopProcess();
             setStatus("渲染完成，但无法获取视频地址。", "warn");
           }}
           return;
@@ -3402,13 +3408,15 @@ def make_index_html() -> str:
             setStatus("渲染实例刚重启，正在自动重提一次...", "warn");
             return startAutoRender(code, sceneName, retryCount + 1);
           }}
-          setStatus("渲染失败: " + errMsg, "error");
+          stopProcess();
+          setStatus("渲染失败: " + errMsg + "（渲染任务ID: " + jobId + "）", "error");
           if (statusData.stderr) {{
             console.error("Render stderr:", statusData.stderr);
           }}
           return;
         }}
       }}
+      stopProcess();
       setStatus("渲染超时，请稍后手动刷新检查。", "warn");
     }}
 
@@ -3459,14 +3467,48 @@ def make_index_html() -> str:
       const reqText = requestId && requestId !== "-" ? " | 诊断ID: " + requestId : "";
       setStatus((data.message || "处理完成") + warningText + reqText, "success");
 
+      // G1: 生成成功后持久化 lastWork，供刷新后「继续上次」恢复。
+      if (latestCode) {{
+        saveLastWork({{
+          prompt: latestPrompt,
+          sceneName: latestSceneName,
+          requestId: requestId || "",
+          code: latestCode,
+          videoId: data.videoId || "",
+          videoUrl: data.videoId ? "/api/video/" + data.videoId : ""
+        }});
+      }}
+      safeStorageSet("aegis.lastJob", "");
+      refreshResumeEntry();
+
       // Auto-trigger render if code was generated and noRender is not checked
       if (latestCode && !payload.noRender && !data.videoId) {{
         startAutoRender(latestCode, latestSceneName);
       }}
     }}
 
+    // 仅当待清任务确为当前记录的 lastJob 时才清除，避免恢复轮询中的旧任务失败误清新任务的记录。
+    function clearLastJobIfCurrent(jobId) {{
+      const stored = safeStorageGet("aegis.lastJob");
+      if (!stored) return;
+      try {{
+        const parsed = JSON.parse(stored);
+        if (!parsed || !parsed.jobId || parsed.jobId === jobId) safeStorageSet("aegis.lastJob", "");
+      }} catch (e) {{
+        safeStorageSet("aegis.lastJob", "");
+      }}
+    }}
+
     async function waitForJob(statusUrl, payload) {{
+      // G8: 12 分钟总超时——超时抛错由调用方 catch 统一 stopProcess + 显示错误。
+      const waitStartedAt = Date.now();
+      const WAIT_JOB_TIMEOUT_MS = 12 * 60 * 1000;
+      const waitedJobId = (statusUrl.split("/api/jobs/")[1] || "").split(/[/?]/)[0];
       while (true) {{
+        if (Date.now() - waitStartedAt > WAIT_JOB_TIMEOUT_MS) {{
+          clearLastJobIfCurrent(waitedJobId);
+          throw new Error("任务等待超时（超过 12 分钟仍未完成），已停止轮询。请检查服务日志或稍后重试。");
+        }}
         const response = await fetch(statusUrl, {{ cache: "no-store" }});
         const job = await response.json();
         if (!response.ok || !job.ok) {{
@@ -3479,6 +3521,7 @@ def make_index_html() -> str:
           return;
         }}
         if (job.status === "failed") {{
+          clearLastJobIfCurrent(job.jobId || waitedJobId);
           const err = job.error || {{}};
           codeOutput.textContent = err.code || codeOutput.textContent || "# 这次没有可用代码";
           if (err.code) latestCode = err.code;
@@ -3662,6 +3705,8 @@ def make_index_html() -> str:
       if (file) analyzeVisionFile(file);
     }});
     document.addEventListener("paste", (event) => {{
+      const visionField = visionImageInput.closest(".field");
+      if (!visionField || visionField.hidden) return;
       const items = Array.from((event.clipboardData && event.clipboardData.items) || []);
       const imageItem = items.find((item) => item.type && item.type.startsWith("image/"));
       if (!imageItem) return;
@@ -3681,8 +3726,16 @@ def make_index_html() -> str:
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
       const preset = activePreset();
-      if (preset.cloudUnavailable) {{
-        setStatus("这个 Provider 需要下载项目后在本地运行；Vercel 云端无法访问你的本机 Codex 或 127.0.0.1 服务。", "error");
+      if (!promptInput.value.trim()) {{
+        setStatus("请先输入要讲的概念。", "error");
+        promptInput.focus();
+        return;
+      }}
+      if (!preset.serverManaged && preset.requiresApiKey && !apiKeyInput.value.trim()) {{
+        setStatus(`使用 ${{preset.name || providerSelect.value}} 需要填写 API Key：请展开高级设置补上后再生成。`, "error");
+        const advancedPanel = document.querySelector("details.advanced");
+        if (advancedPanel) advancedPanel.open = true;
+        apiKeyInput.focus();
         return;
       }}
       submitBtn.disabled = true;
@@ -3703,6 +3756,11 @@ def make_index_html() -> str:
       videoCard.classList.remove("visible");
       videoPlayer.removeAttribute("src");
       videoPlayer.load();
+      const dlBtn = document.getElementById("downloadVideoBtn");
+      if (dlBtn) {{
+        dlBtn.style.display = "none";
+        dlBtn.onclick = null;
+      }}
       clearAlignment();
       setCommunityActions();
       communitySearchList.replaceChildren();
@@ -3724,8 +3782,8 @@ def make_index_html() -> str:
       latestSceneName = payload.sceneName;
       latestProviderPayload = {{ ...payload }};
       if (!preset.serverManaged) {{
-        localStorage.setItem(`aegis.model.${{payload.provider}}`, payload.model);
-        localStorage.setItem(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
+        safeStorageSet(`aegis.model.${{payload.provider}}`, payload.model);
+        safeStorageSet(`aegis.baseUrl.${{payload.provider}}`, payload.baseUrl);
       }}
 
       try {{
@@ -3746,8 +3804,17 @@ def make_index_html() -> str:
           throw new Error((data.error || "请求失败") + detail + reqText);
         }}
         requestTag.textContent = "Req: " + (data.requestId || data.jobId || "-");
+        // G1: 提交时持久化 lastJob，刷新后可恢复进行中的任务（同步云端流无 statusUrl，不持久化）。
+        if (data.statusUrl) {{
+          safeStorageSet("aegis.lastJob", JSON.stringify({{
+            jobId: data.jobId || data.requestId || "",
+            prompt: payload.prompt,
+            startedAt: Date.now()
+          }}));
+        }}
         await waitForJob(data.statusUrl, payload);
       }} catch (err) {{
+        stopProcess();
         setStatus(err && err.message ? err.message : "请求异常", "error");
       }} finally {{
         submitBtn.disabled = false;
@@ -3758,7 +3825,7 @@ def make_index_html() -> str:
     videoPlayer.addEventListener("loadedmetadata", updateActiveSegment);
     promptInput.addEventListener("input", updatePromptPreview);
     publishWorkBtn.addEventListener("click", publishCommunityWork);
-    reviewTokenInput.value = localStorage.getItem("aegis.community.reviewToken") || "";
+    reviewTokenInput.value = safeStorageGet("aegis.community.reviewToken") || "";
     loadReviewQueueBtn.addEventListener("click", loadReviewQueue);
     reviewStatusSelect.addEventListener("change", () => {{
       if (reviewTokenInput.value.trim()) loadReviewQueue();
@@ -3782,7 +3849,7 @@ def make_index_html() -> str:
         }};
         const response = await fetch("/api/align", {{
           method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
+          headers: {{ "Content-Type": "application/json", "X-Aegis-Token": AEGIS_GENERATE_TOKEN }},
           body: JSON.stringify(payload)
         }});
         const data = await response.json();
@@ -3802,6 +3869,179 @@ def make_index_html() -> str:
     renderProviderOptions();
     updateProviderUI(false);
     updatePromptPreview();
+
+    // ── G1: 继续上次（lastWork / lastJob 持久化恢复）──
+    const resumeEntry = document.getElementById("resumeEntry");
+    const resumeWorkBtn = document.getElementById("resumeWorkBtn");
+    const resumeWorkLabel = document.getElementById("resumeWorkLabel");
+    const RESUME_JOB_MAX_AGE_MS = 15 * 60 * 1000;
+
+    function readStoredJson(key) {{
+      const raw = safeStorageGet(key);
+      if (!raw) return null;
+      try {{
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      }} catch (e) {{ return null; }}
+    }}
+
+    function saveLastWork(patch) {{
+      const current = readStoredJson("aegis.lastWork") || {{}};
+      const next = Object.assign(current, patch, {{ savedAt: Date.now() }});
+      safeStorageSet("aegis.lastWork", JSON.stringify(next));
+    }}
+
+    function refreshResumeEntry() {{
+      const lastWork = readStoredJson("aegis.lastWork");
+      const lastJob = readStoredJson("aegis.lastJob");
+      if (!lastWork && !(lastJob && lastJob.jobId)) {{
+        resumeEntry.hidden = true;
+        return;
+      }}
+      const label = (lastWork && (lastWork.prompt || lastWork.sceneName)) || (lastJob && lastJob.prompt) || "";
+      resumeWorkLabel.textContent = String(label || "上次的作品").slice(0, 24);
+      resumeEntry.hidden = false;
+    }}
+
+    function buildResumePayload(lastWork) {{
+      const preset = activePreset();
+      return {{
+        provider: providerSelect.value,
+        apiKey: preset.serverManaged ? "" : apiKeyInput.value.trim(),
+        prompt: (lastWork && lastWork.prompt) || "",
+        model: modelInput.value.trim() || preset.defaultModel || "{DEFAULT_MODEL}",
+        baseUrl: preset.serverManaged ? "" : baseUrlInput.value.trim(),
+        endpoint: preset.serverManaged ? "" : baseUrlInput.value.trim(),
+        sceneName: (lastWork && lastWork.sceneName) || "GeneratedScene",
+        temperature: 0.2,
+        quality: "m",
+        noRender: false
+      }};
+    }}
+
+    function restoreLastWork(lastWork) {{
+      if (!lastWork) return;
+      if (lastWork.prompt) {{
+        promptInput.value = String(lastWork.prompt);
+        promptInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+        latestPrompt = String(lastWork.prompt);
+      }}
+      if (lastWork.code) {{
+        latestCode = String(lastWork.code);
+        codeOutput.textContent = latestCode;
+      }}
+      if (lastWork.sceneName) {{
+        latestSceneName = String(lastWork.sceneName);
+      }}
+      sceneTag.textContent = "Scene: " + latestSceneName;
+      if (lastWork.requestId) {{
+        requestTag.textContent = "Req: " + lastWork.requestId;
+      }}
+      if (lastWork.videoUrl || lastWork.videoId) {{
+        const url = lastWork.videoUrl || "/api/video/" + lastWork.videoId;
+        latestVideoUrl = url;
+        videoPlayer.addEventListener("error", () => {{
+          setStatus("上次视频缓存已失效，已恢复代码；可重新生成视频。", "warn");
+        }}, {{ once: true }});
+        videoPlayer.src = url;
+        videoCard.classList.add("visible");
+        const videoEmpty = document.getElementById("videoEmpty");
+        if (videoEmpty) {{
+          videoEmpty.style.display = "none";
+        }}
+      }}
+      // 让「重新对齐讲稿」在恢复后也可用。
+      const preset = activePreset();
+      latestProviderPayload = {{
+        provider: providerSelect.value,
+        apiKey: preset.serverManaged ? "" : apiKeyInput.value.trim(),
+        prompt: latestPrompt,
+        model: modelInput.value.trim() || preset.defaultModel || "{DEFAULT_MODEL}",
+        baseUrl: preset.serverManaged ? "" : baseUrlInput.value.trim(),
+        endpoint: preset.serverManaged ? "" : baseUrlInput.value.trim(),
+        sceneName: latestSceneName,
+        temperature: 0.2,
+        quality: "m",
+        noRender: false
+      }};
+      realignBtn.disabled = !latestCode;
+    }}
+
+    function jobStatusUrl(jobId) {{
+      return "/api/jobs/" + encodeURIComponent(String(jobId));
+    }}
+
+    async function probeLastJob(jobId) {{
+      try {{
+        const response = await fetch(jobStatusUrl(jobId), {{ cache: "no-store" }});
+        const job = await response.json();
+        if (!response.ok || !job.ok) return null;
+        return job;
+      }} catch (e) {{
+        return null;
+      }}
+    }}
+
+    function enterBenchView() {{
+      document.body.classList.remove("landing");
+      window.scrollTo(0, 0);
+    }}
+
+    async function resumeWaitingJob(lastJob) {{
+      const payload = buildResumePayload(readStoredJson("aegis.lastWork"));
+      startProcess();
+      processStartedAt = Number(lastJob.startedAt) || processStartedAt;
+      setStatus("检测到上次任务仍在进行中，正在恢复进度...", "");
+      try {{
+        await waitForJob(jobStatusUrl(lastJob.jobId), payload);
+      }} catch (err) {{
+        stopProcess();
+        setStatus(err && err.message ? err.message : "恢复任务状态失败", "error");
+      }}
+    }}
+
+    resumeWorkBtn.addEventListener("click", async () => {{
+      const lastWork = readStoredJson("aegis.lastWork");
+      const lastJob = readStoredJson("aegis.lastJob");
+      enterBenchView();
+      restoreLastWork(lastWork);
+      if (lastJob && lastJob.jobId) {{
+        const age = Date.now() - Number(lastJob.startedAt || 0);
+        const job = await probeLastJob(lastJob.jobId);
+        if (job && (job.status === "queued" || job.status === "running")) {{
+          if (age >= 0 && age < RESUME_JOB_MAX_AGE_MS) {{
+            await resumeWaitingJob(lastJob);
+          }} else {{
+            setStatus("上次任务已超过 15 分钟，无法恢复进度；已恢复上次的作品，可重新生成。", "warn");
+          }}
+          return;
+        }}
+        if (job && job.status === "succeeded") {{
+          applyGenerateResult(job.result || {{}}, buildResumePayload(lastWork), job.requestId || job.jobId || "-");
+          return;
+        }}
+      }}
+      if (lastWork && (lastWork.videoUrl || lastWork.videoId || lastWork.code)) {{
+        setStatus("已恢复上次的作品。", "success");
+      }} else {{
+        setStatus("上次的任务已结束或已失效，可以重新生成。", "warn");
+      }}
+    }});
+
+    (function autoResumeInProgressJob() {{
+      const lastJob = readStoredJson("aegis.lastJob");
+      if (!lastJob || !lastJob.jobId) return;
+      const age = Date.now() - Number(lastJob.startedAt || 0);
+      if (!Number.isFinite(age) || age < 0 || age >= RESUME_JOB_MAX_AGE_MS) return;
+      probeLastJob(lastJob.jobId).then((job) => {{
+        if (!job || (job.status !== "queued" && job.status !== "running")) return;
+        enterBenchView();
+        restoreLastWork(readStoredJson("aegis.lastWork"));
+        resumeWaitingJob(lastJob);
+      }});
+    }})();
+
+    refreshResumeEntry();
   </script>
   <script>
 
@@ -3830,7 +4070,13 @@ def make_index_html() -> str:
       var stagePrompt = document.getElementById("stagePrompt");
       function startFromStage() {{
         var text = stagePrompt.value.trim();
-        if (!text) {{ stagePrompt.focus(); return; }}
+        var warn = document.getElementById("stageWarn");
+        if (!text) {{
+          if (warn) warn.hidden = false;
+          stagePrompt.focus();
+          return;
+        }}
+        if (warn) warn.hidden = true;
         var promptBox = document.getElementById("prompt");
         promptBox.value = text;
         promptBox.dispatchEvent(new Event("input", {{ bubbles: true }}));
@@ -3868,13 +4114,6 @@ def make_index_html() -> str:
           if (pane) {{ pane.classList.add("active"); }}
         }});
       }});
-      var tcBtn = document.getElementById("toggleCodeBtn");
-      if (tcBtn) {{
-        tcBtn.addEventListener("click", function () {{
-          var worksTab = document.querySelector('.rtab[data-pane="pane-works"]');
-          if (worksTab) {{ worksTab.click(); }}
-        }});
-      }}
     }})();
   </script>
 </body>
@@ -3949,12 +4188,19 @@ def proxy_render_backend(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     timeout: int = 15,
+    extra_headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if not RENDER_BACKEND_URL:
         return HTTPStatus.SERVICE_UNAVAILABLE, {
             "ok": False,
             "error": "Local render backend is not configured.",
         }
+
+    def build_headers() -> dict[str, str]:
+        headers = render_backend_headers()
+        if extra_headers:
+            headers.update(extra_headers)
+        return headers
 
     def try_once() -> tuple[int, str] | None:
         url = f"{RENDER_BACKEND_URL}{path}"
@@ -3964,13 +4210,13 @@ def proxy_render_backend(
                 req = urllib_request.Request(
                     url,
                     data=body,
-                    headers=render_backend_headers(),
+                    headers=build_headers(),
                     method="POST",
                 )
             else:
                 req = urllib_request.Request(
                     url,
-                    headers=render_backend_headers(),
+                    headers=build_headers(),
                     method=method,
                 )
             with urllib_request.urlopen(req, timeout=timeout) as resp:
@@ -4029,19 +4275,52 @@ def proxy_render_backend_raw(path: str, timeout: int = 15) -> tuple[int, bytes, 
         }
 
 
+TOKEN_QUERY_PARAM_RE = re.compile(
+    r"(reviewToken|review_token|token|api_key|apikey|key)=([^&\s]*)",
+    re.IGNORECASE,
+)
+
+
+def redact_token_params(text: str) -> str:
+    """Mask token-like query parameter values before a string hits logs."""
+    return TOKEN_QUERY_PARAM_RE.sub(lambda m: f"{m.group(1)}=***", text)
+
+
+def strip_token_params_from_query(query: str) -> str:
+    """Remove token-like query params so secrets never travel in URLs."""
+    if not query:
+        return ""
+    kept = []
+    for pair in query.split("&"):
+        if not pair:
+            continue
+        key = pair.split("=", 1)[0].strip().lower()
+        if key in {"reviewtoken", "review_token", "token", "api_key", "apikey", "key"}:
+            continue
+        kept.append(pair)
+    return "&".join(kept)
+
+
 def proxy_community_request(
     route: str,
     *,
     query: str = "",
     method: str = "GET",
     payload: dict[str, Any] | None = None,
+    review_token: str = "",
 ) -> tuple[int, dict[str, Any]]:
     if route == "/api/community/search" and method == "GET":
         backend_path = "/community/search" + (f"?{query}" if query else "")
         return proxy_render_backend(backend_path, method="GET", timeout=15)
     if route == "/api/community/review/queue" and method == "GET":
         backend_path = "/community/review/queue" + (f"?{query}" if query else "")
-        return proxy_render_backend(backend_path, method="GET", timeout=20)
+        extra = {"X-Review-Token": review_token} if review_token else None
+        return proxy_render_backend(
+            backend_path,
+            method="GET",
+            timeout=20,
+            extra_headers=extra,
+        )
     if method != "POST":
         return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
     if route == "/api/community/works":
@@ -4083,14 +4362,98 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_bytes(self, status: int, body: bytes, headers: dict[str, str]) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", headers.get("Content-Type", "application/octet-stream"))
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", headers.get("Content-Type", "application/octet-stream"))
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            append_runtime_log("CLIENT_DISCONNECT", f"bytes_response status={status} error={exc}")
+
+    _VIDEO_CHUNK_SIZE = 64 * 1024
+
+    @staticmethod
+    def _parse_range_header(spec: str, file_size: int) -> tuple[int, int] | None:
+        """解析 Range 头（仅 bytes 单区间）：bytes=start-end / start- / -suffix。
+
+        返回 (start, end) 闭区间；无 Range、非法或不可满足时返回 None（回落 200 全量）。
+        """
+        if not spec:
+            return None
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", spec.strip())
+        if not match:
+            return None
+        start_text, end_text = match.groups()
+        if start_text == "" and end_text == "":
+            return None
+        if start_text == "":
+            # 后缀区间：bytes=-N 表示最后 N 字节
+            suffix = int(end_text)
+            if suffix <= 0 or file_size <= 0:
+                return None
+            length = min(suffix, file_size)
+            return (file_size - length, file_size - 1)
+        start = int(start_text)
+        if start >= file_size:
+            return None
+        if end_text == "":
+            return (start, file_size - 1)
+        end = int(end_text)
+        if end < start:
+            return None
+        return (start, min(end, file_size - 1))
+
+    def _send_video_file(self, video_path: Path, range_header: str) -> None:
+        """发送视频文件：带合法 Range 时 206 + Content-Range 分块发送，否则 200 全量。"""
+        try:
+            file_size = video_path.stat().st_size
+            if file_size <= 0:
+                self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Video file is empty."})
+                return
+            byte_range = self._parse_range_header(range_header, file_size)
+            if byte_range is not None:
+                start, end = byte_range
+                status = HTTPStatus.PARTIAL_CONTENT
+                content_range = f"bytes {start}-{end}/{file_size}"
+            else:
+                start = 0
+                end = max(file_size - 1, 0)
+                status = HTTPStatus.OK
+                content_range = ""
+            length = end - start + 1
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Cache-Control", "no-store")
+                if content_range:
+                    self.send_header("Content-Range", content_range)
+                self.end_headers()
+                remaining = length
+                with video_path.open("rb") as fh:
+                    fh.seek(start)
+                    while remaining > 0:
+                        chunk = fh.read(min(self._VIDEO_CHUNK_SIZE, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                append_runtime_log(
+                    "CLIENT_DISCONNECT",
+                    f"video_stream status={status} range={range_header!r} error={exc}",
+                )
+        except OSError as exc:
+            append_runtime_log("VIDEO_READ_ERROR", f"path={video_path} error={exc}")
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "Video read failed."})
 
     def _read_json_body(self, *, max_bytes: int | None = None) -> dict[str, Any]:
+        # 默认兜底到生成上限：新路由漏传 max_bytes 时也不至于回到无限制读取。
+        if max_bytes is None:
+            max_bytes = GENERATE_BODY_MAX_BYTES
         raw_len = self.headers.get("Content-Length", "0")
         try:
             body_len = int(raw_len)
@@ -4102,9 +4465,13 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             raise ValueError("请求体太大，请缩短问题后再试。")
         raw = self.rfile.read(body_len)
         try:
-            return json.loads(raw.decode("utf-8"))
+            payload = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as exc:
             raise ValueError("Body must be valid JSON.") from exc
+        # 非 dict payload（数组/字符串/标量）→ 400 中文错误，不得让后续线程异常
+        if not isinstance(payload, dict):
+            raise ValueError("请求体必须是 JSON 对象（{\"key\": value} 格式），不能是数组或字符串。")
+        return payload
 
     def _require_aegis_generate_token(self) -> bool:
         expected = aegis_generate_token()
@@ -4172,7 +4539,11 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/community/review/queue":
-            status, response = proxy_community_request(route, query=parsed.query)
+            status, response = proxy_community_request(
+                route,
+                query=strip_token_params_from_query(parsed.query),
+                review_token=(self.headers.get("X-Review-Token") or "").strip(),
+            )
             self._send_json(status, response)
             return
 
@@ -4214,19 +4585,13 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if route.startswith("/api/video/"):
             video_id = route.rsplit("/", 1)[-1]
-            with VIDEO_CACHE_LOCK:
-                video_path = VIDEO_CACHE.get(video_id)
+            video_path = touch_video_cache(video_id)
             if not video_path or not video_path.exists():
                 self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Video not found."})
                 return
 
-            content = video_path.read_bytes()
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "video/mp4")
-            self.send_header("Content-Length", str(len(content)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(content)
+            range_header = (self.headers.get("Range") or "").strip()
+            self._send_video_file(video_path, range_header)
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
@@ -4236,6 +4601,8 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         route = parsed.path
 
         if route == "/api/align":
+            if not self._require_aegis_generate_token():
+                return
             self._handle_align()
             return
 
@@ -4261,7 +4628,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if route == "/api/render":
             try:
-                payload = self._read_json_body()
+                payload = self._read_json_body(max_bytes=RENDER_BODY_MAX_BYTES)
             except ValueError as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
@@ -4282,7 +4649,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if route == "/api/community/works" or route.startswith("/api/community/works/"):
             try:
-                payload = self._read_json_body()
+                payload = self._read_json_body(max_bytes=GENERATE_BODY_MAX_BYTES)
             except ValueError as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
@@ -4299,7 +4666,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         if AEGIS_CLOUD_GENERATE_URL:
             try:
-                payload = self._read_json_body()
+                payload = self._read_json_body(max_bytes=GENERATE_BODY_MAX_BYTES)
             except ValueError as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
                 return
@@ -4309,7 +4676,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
         request_id = build_request_id()
         try:
-            payload = self._read_json_body()
+            payload = self._read_json_body(max_bytes=GENERATE_BODY_MAX_BYTES)
         except ValueError as exc:
             append_bug_log(
                 request_id=request_id,
@@ -4616,7 +4983,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
 
     def _handle_generate_start(self) -> None:
         try:
-            payload = self._read_json_body()
+            payload = self._read_json_body(max_bytes=GENERATE_BODY_MAX_BYTES)
         except ValueError as exc:
             request_id = build_request_id()
             append_bug_log(
@@ -4704,7 +5071,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
     def _handle_align(self) -> None:
         request_id = build_request_id()
         try:
-            payload = self._read_json_body()
+            payload = self._read_json_body(max_bytes=GENERATE_BODY_MAX_BYTES)
         except ValueError as exc:
             status, err = json_error(
                 str(exc),
@@ -4730,6 +5097,35 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             temperature = 0.2
         temperature = max(0.0, min(1.0, temperature))
+
+        # Resolve local trial plans (server-managed keys from env);
+        # mirrors the trial resolution in run_generate_job so「重新对齐讲稿」
+        # works under the trial entry. (G3)
+        trial_plan = LOCAL_TRIAL_PLANS.get(provider_id)
+        if trial_plan:
+            resolved_trial = None
+            for attempt in trial_plan["attempts"]:
+                env_key = os.getenv(str(attempt["env"]), "").strip()
+                if env_key:
+                    resolved_trial = attempt
+                    resolved_trial_api_key = env_key
+                    break
+            if resolved_trial:
+                provider_id = str(resolved_trial["provider_id"])
+                provider = resolve_provider(provider_id)
+                api_key = resolved_trial_api_key
+                model = str(resolved_trial["model"]) or provider.default_model or DEFAULT_MODEL
+                base_url = ""
+                endpoint = ""
+            else:
+                status, err = json_error(
+                    "Local trial model is not configured.",
+                    status=HTTPStatus.BAD_REQUEST,
+                    detail="本地试用模型未配置：请设置 MINIMAX_API_KEY 环境变量。",
+                    request_id=request_id,
+                )
+                self._send_json(status, err)
+                return
 
         if len(prompt) < 6 or not code:
             status, err = json_error(
@@ -4775,6 +5171,7 @@ class AegisWebHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         # Keep server logs concise and avoid accidentally printing user payloads.
         msg = fmt % args
+        msg = redact_token_params(msg)
         print(f"[web] {self.address_string()} - {msg}")
         append_runtime_log("HTTP", msg)
 
