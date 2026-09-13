@@ -231,10 +231,16 @@ Output ONLY the <svg>...</svg> code, nothing else.`;
     if (svgMatch) return svgMatch[0];
 
     const codeBlockMatch = text.match(/```(?:svg|xml)?\s*([\s\S]*?)```/i);
-    if (!codeBlockMatch) return null;
+    const source = codeBlockMatch ? codeBlockMatch[1] : text;
 
-    const innerSvgMatch = codeBlockMatch[1].match(/<svg[\s\S]*?<\/svg>/i);
-    return innerSvgMatch ? innerSvgMatch[0] : null;
+    const innerSvgMatch = source.match(/<svg[\s\S]*?<\/svg>/i);
+    if (innerSvgMatch) return innerSvgMatch[0];
+
+    // 截断救援：长 SVG 偶发被 max_tokens 截断（有 <svg 无 </svg>），补闭合标签让解析器可用。
+    const truncated = source.match(/<svg[\s\S]*/i);
+    if (truncated) return `${truncated[0].replace(/```[a-z]*\s*$/i, "").trimEnd()}\n</svg>`;
+
+    return null;
   }
 
   function hasDangerousUrl(value) {
