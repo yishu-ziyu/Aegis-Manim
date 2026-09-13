@@ -155,3 +155,6 @@ gui-test-screenshots/
 
 # 生成产物（manim_agent 默认输出，不入库）
 gen_scene.py
+
+# 本地双服务 pid 文件
+.aegis_render.pid
