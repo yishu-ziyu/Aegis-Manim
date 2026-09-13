@@ -67,6 +67,14 @@
     {
       "source": "/api/health",
       "destination": "/api/index"
+    },
+    {
+      "source": "/instant-svg",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/instant-svg/(.*)",
+      "destination": "/api/index"
     }
   ],
   "git": {

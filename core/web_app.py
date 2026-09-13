@@ -139,6 +139,41 @@ def aegis_generate_token() -> str:
     return os.getenv("AEGIS_GENERATE_TOKEN", "").strip()
 
 
+INSTANT_SVG_CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+}
+
+
+def load_instant_svg_asset(rel: str) -> tuple[bytes, str] | None:
+    """读取 Instant SVG 静态资产；index.html 注入 SVG 代理 token（本地/云端共用）。
+
+    返回 (body, content_type)；路径逃逸或文件不存在返回 None。
+    """
+    base_dir = (Path(__file__).resolve().parents[1] / "apps" / "instant-svg").resolve()
+    target = (base_dir / (rel or "index.html")).resolve()
+    if not str(target).startswith(str(base_dir)) or not target.is_file():
+        return None
+    content_type = INSTANT_SVG_CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
+    if target.suffix.lower() == ".html":
+        # 服务端注入 SVG 代理 token：页面由此零配置走 /api/svg/generate（与主页面同一门禁模型）。
+        body = target.read_text(encoding="utf-8")
+        inject = (
+            "<script>window.AEGIS_SVG_PROXY = {"
+            f"token: {json.dumps(aegis_generate_token())}"
+            "};</script>\n  </head>"
+        )
+        body = body.replace("</head>", inject, 1)
+        return body.encode("utf-8"), content_type
+    return target.read_bytes(), content_type
+
+
 def ensure_runtime_log_dir() -> None:
     RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -4507,35 +4542,13 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/instant-svg" or route.startswith("/instant-svg/"):
-            rel = route[len("/instant-svg"):].lstrip("/") or "index.html"
-            base_dir = (Path(__file__).resolve().parents[1] / "apps" / "instant-svg").resolve()
-            target = (base_dir / rel).resolve()
-            if not str(target).startswith(str(base_dir)) or not target.is_file():
+            rel = route[len("/instant-svg"):].lstrip("/")
+            asset = load_instant_svg_asset(rel)
+            if asset is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
                 return
-            content_types = {
-                ".html": "text/html; charset=utf-8",
-                ".js": "text/javascript; charset=utf-8",
-                ".mjs": "text/javascript; charset=utf-8",
-                ".css": "text/css; charset=utf-8",
-                ".json": "application/json; charset=utf-8",
-                ".svg": "image/svg+xml",
-                ".png": "image/png",
-                ".ico": "image/x-icon",
-            }
-            content_type = content_types.get(target.suffix.lower(), "application/octet-stream")
-            if target.suffix.lower() == ".html":
-                # 服务端注入 SVG 代理 token：页面由此零配置走 /api/svg/generate（与主页面同一门禁模型）。
-                body = target.read_text(encoding="utf-8")
-                inject = (
-                    "<script>window.AEGIS_SVG_PROXY = {"
-                    f"token: {json.dumps(aegis_generate_token())}"
-                    "};</script>\n  </head>"
-                )
-                body = body.replace("</head>", inject, 1)
-                self._send_bytes(HTTPStatus.OK, body.encode("utf-8"), {"Content-Type": content_type})
-                return
-            self._send_bytes(HTTPStatus.OK, target.read_bytes(), {"Content-Type": content_type})
+            body, content_type = asset
+            self._send_bytes(HTTPStatus.OK, body, {"Content-Type": content_type})
             return
 
         if route == "/api/health":

@@ -19,6 +19,7 @@ from api.index import (
     generate_manim_code_for_gateway,
     generate_alignment_for_gateway,
     generate_svg_for_gateway,
+    instant_svg_asset,
     is_vision_public_enabled,
     proxy_community_request,
 )
@@ -157,6 +158,17 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
         else:
             status, response = proxy_community_request(path, query=query)
         await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method in {"GET", "HEAD"} and (path == "/instant-svg" or path.startswith("/instant-svg/")):
+        # 云端 Instant SVG 页面伺服（此前从未上线，vercel.json rewrite 进来后由这里响应）。
+        rel = path[len("/instant-svg"):].strip("/")
+        asset = instant_svg_asset(rel)
+        if asset is None:
+            await send_json(send, HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
+            return
+        body_bytes, content_type = asset
+        await send_response(send, HTTPStatus.OK, body_bytes, content_type)
         return
 
     if method == "GET" and path == "/api/render/health":

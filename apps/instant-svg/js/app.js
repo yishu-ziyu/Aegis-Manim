@@ -401,7 +401,8 @@ Output ONLY the <svg>...</svg> code, nothing else.`;
     const proxy = window.AEGIS_SVG_PROXY;
 
     // 主项目服务端托管模式：零配置走 /api/svg/generate，用户已配的手动 Key 仅作回落。
-    if (proxy && proxy.token) {
+    // 注入本身（而非 token 非空）即代表"由主项目服务端伺服"——门禁状态由服务端决定。
+    if (proxy) {
       try {
         return await callProxyAPI(prompt);
       } catch (error) {

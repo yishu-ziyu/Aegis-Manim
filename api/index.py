@@ -1465,6 +1465,11 @@ def proxy_community_request(
 
 
 
+def instant_svg_asset(rel: str) -> tuple[bytes, str] | None:
+    """云端 /instant-svg 静态资产伺服（复用本地注入逻辑，含 AEGIS_SVG_PROXY token）。"""
+    return local_web_app.load_instant_svg_asset(rel)
+
+
 def generate_svg_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
     """云端 /api/svg/generate：跟随服务端可用 key 生成教学 SVG（与本地 _handle_svg_generate 对齐）。
 
@@ -1516,7 +1521,7 @@ def generate_svg_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str,
     except Exception as exc:  # noqa: BLE001
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": f"模型服务暂不可用（{type(exc).__name__}），请稍后重试或改用手动 Key。",
+            "error": f"模型服务暂不可用（{type(exc).__name__}: {str(exc)[:140]}），请稍后重试或改用手动 Key。",
             "requestId": request_id,
         }
 
