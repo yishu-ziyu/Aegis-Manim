@@ -73,8 +73,11 @@ class AegisWebUiTest(unittest.TestCase):
     def test_cloud_generate_mode_uses_direct_generate_flow(self) -> None:
         old_url = web_app.AEGIS_CLOUD_GENERATE_URL
         old_trial = os.environ.get("AEGIS_ALLOW_TRIAL")
+        old_key = os.environ.get("MINIMAX_API_KEY")
         web_app.AEGIS_CLOUD_GENERATE_URL = "https://manim-main.vercel.app/api/generate"
         os.environ["AEGIS_ALLOW_TRIAL"] = "1"
+        # 试用入口仅在实际存在本地 key 时展示（G9 收紧后），显式注入使测试不依赖本地 .env
+        os.environ["MINIMAX_API_KEY"] = "test-key-for-trial-config"
         try:
             html = web_app.make_index_html()
             config = web_app.build_local_trial_config()
@@ -84,6 +87,10 @@ class AegisWebUiTest(unittest.TestCase):
                 os.environ.pop("AEGIS_ALLOW_TRIAL", None)
             else:
                 os.environ["AEGIS_ALLOW_TRIAL"] = old_trial
+            if old_key is None:
+                os.environ.pop("MINIMAX_API_KEY", None)
+            else:
+                os.environ["MINIMAX_API_KEY"] = old_key
 
         assert 'fetch("/api/generate"' in html
         assert 'fetch("/api/generate/start"' not in html

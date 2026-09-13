@@ -4,29 +4,43 @@ import logging
 import sys
 from pathlib import Path
 
-import cairo
-import moderngl
 import pytest
+
+try:
+    import cairo
+except ImportError:  # 视觉依赖缺失时仍允许纯逻辑测试（如 test_aegis_*）收集运行
+    cairo = None
+
+try:
+    import moderngl
+except ImportError:
+    moderngl = None
 
 import manim
 
 
 def pytest_report_header(config):
-    try:
-        ctx = moderngl.create_standalone_context()
-        info = ctx.info
-        ctx.release()
-    except Exception as e:
-        raise Exception("Error while creating moderngl context") from e
-
-    return (
-        f"\nCairo Version: {cairo.cairo_version()}",
-        "\nOpenGL information",
-        "------------------",
-        f"vendor: {info['GL_VENDOR'].strip()}",
-        f"renderer: {info['GL_RENDERER'].strip()}",
-        f"version: {info['GL_VERSION'].strip()}\n",
-    )
+    lines = []
+    if cairo is not None:
+        lines.append(f"\nCairo Version: {cairo.cairo_version()}")
+    if moderngl is not None:
+        try:
+            ctx = moderngl.create_standalone_context()
+            info = ctx.info
+            ctx.release()
+        except Exception:
+            # 无可用 GL 上下文的环境只降级 header，不阻断测试收集
+            return "\nOpenGL: standalone context unavailable, skipping GL info"
+        lines.extend(
+            (
+                "\nOpenGL information",
+                "------------------",
+                f"vendor: {info['GL_VENDOR'].strip()}",
+                f"renderer: {info['GL_RENDERER'].strip()}",
+                f"version: {info['GL_VERSION'].strip()}\n",
+            )
+        )
+    return lines if lines else ""
 
 
 def pytest_addoption(parser):
