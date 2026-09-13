@@ -83,9 +83,9 @@ GENERATE_BODY_MAX_BYTES = 64 * 1024
 RENDER_BODY_MAX_BYTES = 256 * 1024
 # SVG 请求体更小（一条教学图 prompt）；64KB 足够且与 generate 对齐。
 SVG_BODY_MAX_BYTES = 64 * 1024
-# Instant SVG 服务端代理（方案：与主项目共用 .env key，前端零配置）。
-SVG_PROXY_PROVIDER = os.getenv("SVG_PROXY_PROVIDER", "zhipu")
-SVG_PROXY_MODEL = os.getenv("SVG_PROXY_MODEL", "glm-4.7-flash")
+# Instant SVG 服务端代理（方案：与主项目共用 key，前端零配置）。
+# SVG_PROXY_PROVIDER/SVG_PROXY_MODEL 可显式指定；默认自动跟随 .env 中实际有 key 的 provider。
+SVG_BODY_MAX_BYTES = 64 * 1024
 
 # Local trial plans (auto-detect env keys)
 LOCAL_TRIAL_PLANS = {
@@ -4525,13 +4525,11 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             }
             content_type = content_types.get(target.suffix.lower(), "application/octet-stream")
             if target.suffix.lower() == ".html":
-                # 服务端注入 SVG 代理配置：页面由此零配置走 /api/svg/generate（与主页面同一 token 门禁模型）。
+                # 服务端注入 SVG 代理 token：页面由此零配置走 /api/svg/generate（与主页面同一门禁模型）。
                 body = target.read_text(encoding="utf-8")
                 inject = (
                     "<script>window.AEGIS_SVG_PROXY = {"
-                    f"token: {json.dumps(aegis_generate_token())}, "
-                    f"provider: {json.dumps(SVG_PROXY_PROVIDER)}, "
-                    f"model: {json.dumps(SVG_PROXY_MODEL)}"
+                    f"token: {json.dumps(aegis_generate_token())}"
                     "};</script>\n  </head>"
                 )
                 body = body.replace("</head>", inject, 1)
@@ -5097,8 +5095,29 @@ class AegisWebHandler(BaseHTTPRequestHandler):
         )
         return alignment
 
+    def _resolve_svg_provider(self) -> tuple[str, str, str] | None:
+        """跟随主项目当前可用的 key：env 显式指定优先，否则按 .env 实际有 key 的 provider 自动选。
+
+        返回 (provider_id, api_key, model)；主项目没配任何 key 时返回 None。
+        """
+        explicit = os.getenv("SVG_PROXY_PROVIDER", "").strip()
+        if explicit:
+            provider = resolve_provider(explicit)
+            api_key = os.getenv(provider.api_key_placeholder, "").strip()
+            if api_key:
+                model = os.getenv("SVG_PROXY_MODEL", "").strip() or provider.default_model
+                return provider.id, api_key, model
+            return None
+        # 自动探测：与主项目生成主力的优先级一致（MiniMax 是默认试用 provider）
+        for candidate in ("minimax-token-cn", "zhipu", "kimi-code", "deepseek"):
+            provider = resolve_provider(candidate)
+            api_key = os.getenv(provider.api_key_placeholder, "").strip()
+            if api_key and not is_placeholder_api_key(api_key):
+                return provider.id, api_key, provider.default_model
+        return None
+
     def _handle_svg_generate(self) -> None:
-        """Instant SVG 服务端代理：用 .env 的智谱 key 生成教学 SVG，前端零配置。"""
+        """Instant SVG 服务端代理：跟随主项目当前可用的 key 生成教学 SVG，前端零配置。"""
         request_id = build_request_id()
         try:
             payload = self._read_json_body(max_bytes=SVG_BODY_MAX_BYTES)
@@ -5120,57 +5139,50 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             )
             return
 
-        api_key = os.getenv("BIGMODEL_API_KEY", "").strip()
-        if not api_key:
+        resolved = self._resolve_svg_provider()
+        if resolved is None:
             self._send_json(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 {
                     "ok": False,
-                    "error": "服务端未配置智谱 API Key（BIGMODEL_API_KEY），请在高级设置中手动填写。",
+                    "error": "服务端没有可用的模型 Key（请参考主项目 .env 的 MINIMAX_API_KEY / BIGMODEL_API_KEY 配置），或在页面设置中手动填写。",
                     "requestId": request_id,
                 },
             )
             return
+        provider_id, api_key, model = resolved
 
-        body = json.dumps(
-            {
-                "model": SVG_PROXY_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": 8192,
-                "temperature": 0.7,
-            }
-        ).encode("utf-8")
-        req = urllib_request.Request(
-            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-            data=body,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
-        )
         try:
-            with urllib_request.urlopen(req, timeout=180) as resp:
-                raw = resp.read().decode("utf-8")
-            data = json.loads(raw) if raw else {}
-            content = data.get("choices", [{}])[0].get("message", {}).get("content")
-            if not isinstance(content, str) or not content.strip():
-                raise RuntimeError("模型返回内容为空")
-            append_runtime_log("SVG_PROXY_OK", f"requestId={request_id} chars={len(content)}")
-            self._send_json(HTTPStatus.OK, {"ok": True, "content": content, "requestId": request_id})
-        except urllib_error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:300]
-            append_runtime_log("SVG_PROXY_FAIL", f"requestId={request_id} upstream={exc.code} {detail}")
-            self._send_json(
-                HTTPStatus.BAD_GATEWAY,
-                {"ok": False, "error": f"模型服务返回错误（{exc.code}），请稍后重试或改用手动 Key。", "requestId": request_id},
+            content, provider_name, _endpoint = generate_code_with_llm(
+                provider_id=provider_id,
+                api_key=api_key,
+                base_url=None,
+                endpoint=None,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=prompt,
+                temperature=0.7,
+                timeout=180,
             )
-        except (urllib_error.URLError, socket.error, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as exc:
-            append_runtime_log("SVG_PROXY_FAIL", f"requestId={request_id} error={type(exc).__name__}")
+        except Exception as exc:  # noqa: BLE001 - 统一转成前端可读的中文错误
+            append_runtime_log(
+                "SVG_PROXY_FAIL",
+                f"requestId={request_id} provider={provider_id} error={type(exc).__name__}: {str(exc)[:160]}",
+            )
             self._send_json(
                 HTTPStatus.BAD_GATEWAY,
                 {"ok": False, "error": "模型服务暂不可用，请稍后重试或改用手动 Key。", "requestId": request_id},
             )
+            return
+
+        if not content.strip():
+            self._send_json(
+                HTTPStatus.BAD_GATEWAY,
+                {"ok": False, "error": "模型返回内容为空，请重试。", "requestId": request_id},
+            )
+            return
+        append_runtime_log("SVG_PROXY_OK", f"requestId={request_id} provider={provider_id} chars={len(content)}")
+        self._send_json(HTTPStatus.OK, {"ok": True, "content": content, "provider": provider_name, "requestId": request_id})
 
     def _handle_align(self) -> None:
         request_id = build_request_id()

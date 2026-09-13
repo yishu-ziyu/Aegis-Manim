@@ -1466,9 +1466,10 @@ def proxy_community_request(
 
 
 def generate_svg_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
-    """云端 /api/svg/generate：用服务端智谱 key 生成教学 SVG（与本地 _handle_svg_generate 对齐）。
+    """云端 /api/svg/generate：跟随服务端可用 key 生成教学 SVG（与本地 _handle_svg_generate 对齐）。
 
-    云端环境需配置 BIGMODEL_API_KEY；未配置时返回 503，前端回落手动 Key 模式。
+    自动探测顺序与主项目生成主力一致（MiniMax 优先，Zhipu 兜底），
+    也可用 SVG_PROXY_PROVIDER 环境变量显式指定 provider id。
     """
     request_id = build_request_id()
     prompt = str(payload.get("prompt", "")).strip()
@@ -1479,52 +1480,53 @@ def generate_svg_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str,
             "error": "Missing prompt or systemPrompt.",
             "requestId": request_id,
         }
-    api_key = read_server_key("BIGMODEL_API_KEY")
-    if not api_key:
+
+    explicit = os.getenv("SVG_PROXY_PROVIDER", "").strip()
+    candidates = (
+        [explicit] if explicit else ["minimax-token-cn", "zhipu", "kimi-code", "deepseek"]
+    )
+    resolved: tuple[str, str, str] | None = None
+    for candidate in candidates:
+        provider = resolve_provider(candidate)
+        api_key = read_server_key(provider.api_key_placeholder)
+        if api_key:
+            model = os.getenv("SVG_PROXY_MODEL", "").strip() or provider.default_model
+            resolved = (provider.id, api_key, model)
+            break
+    if resolved is None:
         return HTTPStatus.SERVICE_UNAVAILABLE, {
             "ok": False,
-            "error": "服务端未配置智谱 API Key（BIGMODEL_API_KEY），请在页面设置中手动填写。",
+            "error": "服务端没有可用的模型 Key（需配置 MINIMAX_API_KEY 或 BIGMODEL_API_KEY），或在页面设置中手动填写。",
             "requestId": request_id,
         }
-    model = str(payload.get("model", "")).strip() or "glm-4.7-flash"
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            "max_tokens": 8192,
-            "temperature": 0.7,
-        }
-    ).encode("utf-8")
-    req = urllib_request.Request(
-        "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
+    provider_id, api_key, model = resolved
+
     try:
-        with urllib_request.urlopen(req, timeout=180) as resp:
-            raw = resp.read().decode("utf-8")
-        data = json.loads(raw) if raw else {}
-        content = data.get("choices", [{}])[0].get("message", {}).get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("empty content")
-        return HTTPStatus.OK, {"ok": True, "content": content, "requestId": request_id}
-    except urllib_error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:200]
+        content, _provider_name, _endpoint = generate_code_with_llm(
+            provider_id=provider_id,
+            api_key=api_key,
+            base_url=None,
+            endpoint=None,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            temperature=0.7,
+            timeout=180,
+        )
+    except Exception as exc:  # noqa: BLE001
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": f"模型服务返回错误（{exc.code}）：{detail}",
+            "error": f"模型服务暂不可用（{type(exc).__name__}），请稍后重试或改用手动 Key。",
             "requestId": request_id,
         }
-    except (urllib_error.URLError, socket.error, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as exc:
+
+    if not content.strip():
         return HTTPStatus.BAD_GATEWAY, {
             "ok": False,
-            "error": f"模型服务暂不可用：{type(exc).__name__}",
+            "error": "模型返回内容为空，请重试。",
             "requestId": request_id,
         }
+    return HTTPStatus.OK, {"ok": True, "content": content, "requestId": request_id}
 
 
 # Vercel Python Runtime 在本模块寻找 ASGI 入口变量 `app`（历史上是文件末尾的 handler 类，
