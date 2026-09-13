@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 APP_VERSION = "vercel_gateway_v20260506_1"
@@ -1462,6 +1463,68 @@ def proxy_community_request(
             )
     return HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."}
 
+
+
+def generate_svg_for_gateway(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    """云端 /api/svg/generate：用服务端智谱 key 生成教学 SVG（与本地 _handle_svg_generate 对齐）。
+
+    云端环境需配置 BIGMODEL_API_KEY；未配置时返回 503，前端回落手动 Key 模式。
+    """
+    request_id = build_request_id()
+    prompt = str(payload.get("prompt", "")).strip()
+    system_prompt = str(payload.get("systemPrompt", "")).strip()
+    if not prompt or not system_prompt:
+        return HTTPStatus.BAD_REQUEST, {
+            "ok": False,
+            "error": "Missing prompt or systemPrompt.",
+            "requestId": request_id,
+        }
+    api_key = read_server_key("BIGMODEL_API_KEY")
+    if not api_key:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": False,
+            "error": "服务端未配置智谱 API Key（BIGMODEL_API_KEY），请在页面设置中手动填写。",
+            "requestId": request_id,
+        }
+    model = str(payload.get("model", "")).strip() or "glm-4.7-flash"
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 8192,
+            "temperature": 0.7,
+        }
+    ).encode("utf-8")
+    req = urllib_request.Request(
+        "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw) if raw else {}
+        content = data.get("choices", [{}])[0].get("message", {}).get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("empty content")
+        return HTTPStatus.OK, {"ok": True, "content": content, "requestId": request_id}
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:200]
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": f"模型服务返回错误（{exc.code}）：{detail}",
+            "requestId": request_id,
+        }
+    except (urllib_error.URLError, socket.error, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as exc:
+        return HTTPStatus.BAD_GATEWAY, {
+            "ok": False,
+            "error": f"模型服务暂不可用：{type(exc).__name__}",
+            "requestId": request_id,
+        }
 
 
 # Vercel Python Runtime 在本模块寻找 ASGI 入口变量 `app`（历史上是文件末尾的 handler 类，

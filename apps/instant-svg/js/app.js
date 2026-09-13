@@ -376,8 +376,41 @@ Output ONLY the <svg>...</svg> code, nothing else.`;
     return content;
   }
 
+  async function callProxyAPI(prompt) {
+    const proxy = window.AEGIS_SVG_PROXY;
+    const response = await fetchWithTimeout('/api/svg/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Aegis-Token': proxy.token,
+      },
+      body: JSON.stringify({ prompt, systemPrompt: SYSTEM_PROMPT }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `代理请求错误: ${response.status}`);
+    }
+
+    return data.content;
+  }
+
   async function callAPI(prompt) {
     const settings = getSettings();
+    const proxy = window.AEGIS_SVG_PROXY;
+
+    // 主项目服务端托管模式：零配置走 /api/svg/generate，用户已配的手动 Key 仅作回落。
+    if (proxy && proxy.token) {
+      try {
+        return await callProxyAPI(prompt);
+      } catch (error) {
+        if (!getActiveApiKey(settings)) {
+          throw new Error(`${error.message}（也可在“API 设置”中手动填写 Key 直连）`);
+        }
+        // 服务端不可用且有手动 Key：回落直连，不打断用户
+      }
+    }
 
     if (!getActiveApiKey(settings)) {
       throw new Error('请先在“API 设置”中配置当前提供商的 Key');

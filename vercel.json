@@ -21,6 +21,10 @@
       "destination": "/api/index"
     },
     {
+      "source": "/api/svg/generate",
+      "destination": "/api/index"
+    },
+    {
       "source": "/api/render/health",
       "destination": "/api/index"
     },

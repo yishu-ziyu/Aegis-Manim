@@ -18,6 +18,7 @@ from api.index import (
     disabled_vision_response,
     generate_manim_code_for_gateway,
     generate_alignment_for_gateway,
+    generate_svg_for_gateway,
     is_vision_public_enabled,
     proxy_community_request,
 )
@@ -86,7 +87,7 @@ async def read_json_body(
 CLOUD_REQUIRE_TOKEN = os.environ.get("AEGIS_CLOUD_REQUIRE_TOKEN") == "1"
 CLOUD_GENERATE_TOKEN = os.environ.get("AEGIS_GENERATE_TOKEN", "").strip()
 CLOUD_TOKEN_GATED_PATHS = frozenset(
-    {"/api/generate", "/api/align", "/api/render", "/api/vision/analyze"}
+    {"/api/generate", "/api/align", "/api/render", "/api/vision/analyze", "/api/svg/generate"}
 )
 
 
@@ -196,6 +197,16 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             return
 
         status, response = generate_alignment_for_gateway(payload)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method == "POST" and path == "/api/svg/generate":
+        # Instant SVG 服务端代理（与本地 _handle_svg_generate 对齐）。
+        payload = await read_json_body(send, receive)
+        if payload is None:
+            return
+
+        status, response = generate_svg_for_gateway(payload)
         await send_json(send, HTTPStatus(status), response)
         return
 
