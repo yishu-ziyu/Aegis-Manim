@@ -2599,7 +2599,7 @@ def make_index_html() -> str:
     // G2: 失败后指数退避（首败 30s，逐次翻倍，封顶 5 分钟）；成功后重置退避，
     // 并以 5 分钟健康间隔保活，避免固定间隔刷新 502。
     (function warmUpRenderBackend() {{
-      const WARMUP_URL = "/api/render/status/health";
+      const WARMUP_URL = "/api/render/health";
       const FIRST_FAILURE_BACKOFF_MS = 30000;
       const MAX_BACKOFF_MS = 300000;
       const HEALTHY_PING_INTERVAL_MS = 300000;
@@ -2834,7 +2834,7 @@ def make_index_html() -> str:
         const imageData = await fileToDataUrl(file);
         const response = await fetch("/api/vision/analyze", {{
           method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
+          headers: {{ "Content-Type": "application/json", "X-Aegis-Token": AEGIS_GENERATE_TOKEN }},
           body: JSON.stringify({{
             imageData,
             mimeType: file.type,
@@ -3329,7 +3329,7 @@ def make_index_html() -> str:
       try {{
         renderResponse = await fetch("/api/render", {{
           method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
+          headers: {{ "Content-Type": "application/json", "X-Aegis-Token": AEGIS_GENERATE_TOKEN }},
           body: JSON.stringify({{ code, sceneName, renderMode: "auto" }})
         }});
         renderData = await renderResponse.json();
@@ -4569,6 +4569,11 @@ class AegisWebHandler(BaseHTTPRequestHandler):
             limit = max(1, min(200, limit))
             items = read_recent_bug_entries(limit, request_id=request_id or None)
             self._send_json(HTTPStatus.OK, {"ok": True, "count": len(items), "items": items})
+            return
+
+        if route == "/api/render/health":
+            status, response = proxy_render_backend("/health")
+            self._send_json(status, response)
             return
 
         if route.startswith("/api/render/status/"):

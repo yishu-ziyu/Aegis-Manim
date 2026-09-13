@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hmac
 import json
+import os
 from http import HTTPStatus
 from typing import Any
 
@@ -79,6 +81,33 @@ async def read_json_body(
     return payload
 
 
+# 可选云端门禁：默认关闭（与既有开放透传模型一致）。在部署环境设
+# AEGIS_CLOUD_REQUIRE_TOKEN=1 后，昂贵路由统一要求 X-Aegis-Token。
+CLOUD_REQUIRE_TOKEN = os.environ.get("AEGIS_CLOUD_REQUIRE_TOKEN") == "1"
+CLOUD_GENERATE_TOKEN = os.environ.get("AEGIS_GENERATE_TOKEN", "").strip()
+CLOUD_TOKEN_GATED_PATHS = frozenset(
+    {"/api/generate", "/api/align", "/api/render", "/api/vision/analyze"}
+)
+
+
+async def require_cloud_token(send: Any, scope: dict[str, Any]) -> bool:
+    if not CLOUD_REQUIRE_TOKEN:
+        return True
+    provided = ""
+    for header_name, header_value in scope.get("headers") or []:
+        if header_name.decode("latin-1").lower() == "x-aegis-token":
+            provided = header_value.decode("latin-1").strip()
+            break
+    if CLOUD_GENERATE_TOKEN and provided and hmac.compare_digest(provided, CLOUD_GENERATE_TOKEN):
+        return True
+    await send_json(
+        send,
+        HTTPStatus.UNAUTHORIZED,
+        {"ok": False, "error": "Missing or invalid X-Aegis-Token header."},
+    )
+    return False
+
+
 async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
     if scope.get("type") != "http":
         await send_json(send, HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
@@ -86,6 +115,10 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
 
     method = scope.get("method", "GET")
     path = scope.get("path", "/")
+    if method == "POST" and path in CLOUD_TOKEN_GATED_PATHS:
+        if not await require_cloud_token(send, scope):
+            return
+
     if method in {"GET", "HEAD"} and path == "/favicon.ico":
         await send_response(send, HTTPStatus.NO_CONTENT, b"", "image/x-icon")
         return
@@ -122,6 +155,11 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             status, response = proxy_community_request(path, query=query, review_token=review_token)
         else:
             status, response = proxy_community_request(path, query=query)
+        await send_json(send, HTTPStatus(status), response)
+        return
+
+    if method == "GET" and path == "/api/render/health":
+        status, response = _proxy_to_render_backend("/health")
         await send_json(send, HTTPStatus(status), response)
         return
 

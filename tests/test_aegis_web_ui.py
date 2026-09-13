@@ -151,7 +151,9 @@ class AegisWebUiTest(unittest.TestCase):
 
         assert "const RENDER_BACKEND_API_KEY" not in html
         assert '"X-API-Key": RENDER_BACKEND_API_KEY' not in html
-        assert '"/api/render/status/' in html
+        # warmup 健康检查走 /api/render/health；任务轮询走 /api/render/status/<jobId>（模板串）
+        assert '"/api/render/health"' in html
+        assert "api/render/status/" in html
         assert "/api/render/download/${jobId}" in html
         assert "retryCount < 1" in html
         assert "渲染实例刚重启，正在自动重提一次" in html
