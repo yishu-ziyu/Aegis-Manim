@@ -15,11 +15,18 @@ on:
   schedule:
     - cron: '0 0 * * *' # schedule daily check
 
+# Deny all token permissions unless the job explicitly needs them.
+permissions: {}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write # Manage dependency labels and comments.
+      pull-requests: read # Read the PR head commit.
+      statuses: write # Publish the dependency commit status.
     steps:
-      - uses: z0al/dependent-issues@v1
+      - uses: z0al/dependent-issues@950226e7ca8fc43dc209a7febf67c655af3bdb43 # v1
         env:
           # (Required) The token to use to make API calls to GitHub.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -29,7 +36,7 @@ jobs:
 
           # (Optional) Enable checking for dependencies in issues. Enable by
           # setting the value to "on". Default "off"
-          check_issues: on
+          check_issues: 'on'
 
           # (Optional) A comma-separated list of keywords. Default
           # "depends on, blocked by"
